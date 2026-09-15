@@ -1,5 +1,7 @@
 # T002 — Pre-push git hook guardrail installer
-Status: pending
+Status: completed
+Completed: 2026-09-15T08:08:09Z
+Commit: 88e667a66bc0ccb33bc2cde9bb047515b16c7dad
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements
