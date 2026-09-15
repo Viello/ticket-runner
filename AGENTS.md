@@ -10,7 +10,8 @@ plan's target layout (§18). Do not invent test/lint commands — none are defin
 tooling arrives via an explicit ticket.
 
 ## Read before designing
-- `ticket-runner-plan.md` — the spec (§17 `config.yaml` schema, §18 directory layout).
+- `ARCHITECTURE.md` — target Clean Architecture directory tree.
+- `ticket-runner-plan.md` — the spec (§17 `config.yaml` schema).
 - `CONTEXT.md` — domain language; use these exact terms (Runner, Worker, Ticket, Queue, Gatekeeper,
   Checkpoint, Context Handoff, Signal, Presence Mode, Circuit Breaker, Gotchas, Isolation Layer,
   Doctor) and avoid the listed synonyms.

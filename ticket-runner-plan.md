@@ -429,65 +429,7 @@ git:
 
 ## 18. Project Directory Structure
 
-```text
-ticket-runner/
-├── ticket_runner.py              # CLI entry point (start, status, pause, doctor)
-├── config.yaml                   # Runner configuration
-├── requirements.txt              # Python dependencies (discord.py, rich, pyyaml)
-├── tickets.md                    # Active queue, gotchas, completed tickets
-│
-├── runner/
-│   ├── __init__.py
-│   ├── queue.py                  # Markdown AST queue parser & updater
-│   ├── state.py                  # State persistence (.agent/state.json)
-│   ├── opencode.py               # Subprocess JSON stream executor & telemetry
-│   ├── handoff.py                # Checkpoint manager & handoff triggers
-│   ├── gatekeeper.py             # Independent test/build verification & circuit breaker
-│   ├── presence.py               # Nearby vs Away mode coordinator
-│   ├── git_ops.py                # Branch management, commits, pre-push hook
-│   └── doctor.py                 # Pre-flight environment & dependency validator
-│
-├── discord/
-│   ├── __init__.py
-│   ├── bot.py                    # Async Discord client & event loop
-│   ├── threads.py                # Thread-per-ticket lifecycle manager
-│   └── notifications.py          # Formatted Discord embed alerts
-│
-├── ui/
-│   ├── __init__.py
-│   └── terminal.py               # Rich terminal dashboard with interactive hotkeys
-│
-├── .agent/                       # Runtime directory (git-ignored)
-│   ├── state.json                # Live execution state
-│   ├── checkpoints/              # Checkpoint handoff documents
-│   │   └── T001/
-│   │       └── handoff.md
-│   ├── signals/                  # Worker-to-Runner completion signals
-│   │   └── T001_ready.json
-│   ├── questions/                # Worker-to-Runner clarification questions
-│   │   └── T001.json
-│   └── logs/                     # JSON stream telemetry logs
-│
-├── .agents/                      # Shared agent skills
-│   └── skills/
-│       ├── implement/
-│       │   └── SKILL.md          # Execution skill (TDD, typecheck, review)
-│       ├── to-tickets/
-│       │   └── SKILL.md          # Ticket breakdown and queue generator
-│       └── handoff/
-│           └── SKILL.md          # Standardized handoff skill
-│
-└── docs/
-    └── adr/
-        ├── 0001-opencode-json-streaming.md
-        ├── 0002-independent-gatekeeper-verification.md
-        ├── 0003-hybrid-presence-mode.md
-        ├── 0004-explicit-signal-files.md
-        ├── 0005-local-pre-push-git-hook.md
-        ├── 0006-injectable-subprocess-and-gateway-seam.md
-        ├── 0007-queue-file-locking-and-pause.md
-        └── 0008-configurable-worker-execution-skill.md
-```
+The authoritative Clean Architecture directory tree is defined in [ARCHITECTURE.md](ARCHITECTURE.md) (and recorded in [ADR 0009: Clean Architecture and Concentric Layering for Runner File Structure](docs/adr/0009-clean-architecture-file-structuring.md)). All source code and test doubles strictly adhere to that layout.
 
 ---
 
