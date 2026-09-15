@@ -1,5 +1,6 @@
 # T004 — Configuration domain models and YAML schema loader
-Status: pending
+Status: completed
+Completed: 2026-09-15T15:24:00Z
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements
@@ -12,6 +13,7 @@ Spec: docs/specs/01-doctor-and-git-ops.md
   - Token threshold invariants: `warn < handoff < ceiling`.
   - Verification commands are strings; timeout is a positive integer.
   - Presence mode is either `nearby` or `away`.
+  - Lifecycle `clean_slate` is either `interactive`, `always`, or `never` (defaults to `interactive`).
   - Discord configuration stores environment variable name in `token_env`, never raw credentials.
 - Raise informative `ConfigError` with exact field error details upon schema violation.
 - Provide default `config.yaml` in repository root adhering to Spec 01 §16 and plan §17.

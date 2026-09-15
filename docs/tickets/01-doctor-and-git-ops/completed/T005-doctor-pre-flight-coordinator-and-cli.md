@@ -1,5 +1,6 @@
 # T005 — Doctor pre-flight verification coordinator and CLI entry point
-Status: pending
+Status: completed
+Completed: 2026-09-15T16:01:00Z
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements

@@ -175,7 +175,7 @@ Only **one** ticket is executed at a time. The loop follows strict transitions:
    READY SIGNAL (.agent/signals/{ticket_id}_ready.json)
           ↓
       GATEKEEPER (Runs independent test_cmd & build_cmd)
-       ├── PASS → Commit (feat(T001): Title) → Archive ticket → Next ticket
+       ├── PASS → Commit (<type>(<scope>): <Title>) → Archive ticket → Next ticket
        └── FAIL (Attempts < 3) → Feed errors to Worker → Retry WORKING
                 (Attempts = 3) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
@@ -205,7 +205,7 @@ To ground the Worker in overarching architectural goals without exhausting conte
 ### Git Safety & Push Guardrails
 
 - All automated work occurs on `agent/ticket-runner`.
-- The Runner commits verified code using conventional commit messages (e.g., `feat(T001): Fix admin loading state`).
+- The Runner commits verified code using conventional commit messages with subsystem scope and bulleted changes, never including ticket numbers (e.g., `feat(admin): Fix admin loading state`).
 - An installed pre-push hook (`.git/hooks/pre-push`) rejects all pushes from the agent branch to remote origins, guaranteeing zero unintended upstream pushes.
 
 ---
@@ -278,7 +278,7 @@ Spec: docs/specs/01-admin-panel.md
 | `discord.channel_id` | `string` | `""` | Discord channel ID where ticket threads are posted. |
 | `lifecycle.queue_completion` | `string` | `"standby"` | Behavior when queue empties (`standby` to watch for new tickets, or `terminate` to exit). |
 | `git.auto_push` | `bool` | `false` | Always `false`. Never push automated work upstream. |
-| `git.commit_prefix` | `string` | `"feat"` | Commit message convention prefix (e.g. `feat(T001): Title`). |
+| `git.commit_prefix` | `string` | `"feat"` | Commit message convention prefix (e.g. `feat(scope): Title`). |
 | `git.enforce_pre_push_hook` | `bool` | `true` | Ensure `.git/hooks/pre-push` guardrail is installed. |
 
 ---

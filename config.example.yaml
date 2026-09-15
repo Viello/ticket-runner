@@ -50,11 +50,16 @@ lifecycle:
   #   "standby"   - Keep running and watch docs/tickets/ for new tickets
   #   "terminate" - Print summary and cleanly exit process
   queue_completion: "standby"
+  # Clean slate behavior when spec queue finishes:
+  #   "interactive" - Prompt user [Y/n] to archive and wipe completed tickets/spec
+  #   "always"      - Automatically archive and clean slate
+  #   "never"       - Keep completed tickets and spec in working tree
+  clean_slate: "interactive"
 
 git:
   # Never push automatically (pre-push hook blocks remote pushes on the agent branch)
   auto_push: false
-  # Prefix for conventional commit messages, e.g. feat(T001): Title
+  # Prefix for conventional commit messages, e.g. feat(scope): Title
   commit_prefix: "feat"
   # Enforce pre-push hook verification during Doctor pre-flight checks
   enforce_pre_push_hook: true

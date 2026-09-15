@@ -18,8 +18,8 @@ Provide a pre-flight Doctor verification routine that validates the developer en
 6. As a developer, I want the Runner to verify Discord bot credentials on startup unless `--local-only` is specified, so that I am alerted immediately if remote notifications cannot be delivered.
 7. As a developer, I want the Runner to support a `--local-only` CLI flag that bypasses Discord connectivity checks, so that I can run tickets entirely offline at my terminal.
 8. As a developer, I want the Runner to automatically switch to or create the dedicated `agent/ticket-runner` branch on startup, so that `main` is never directly modified.
-9. As a developer, I want the Runner to author authoritative conventional commits (`feat(T001): Title`) containing acceptance details upon Gatekeeper approval, so that the git history reflects cleanly verified units of work.
-10. As a developer, I want the Runner to extract the commit SHA after each commit and record it in persistent state and the completed ticket file, so that completed work is fully auditable.
+9. As a developer, I want the Runner to author authoritative conventional commits (`<type>(<scope>): <Title>` with bulleted changes and no ticket numbers) upon Gatekeeper approval, so that the git history reflects cleanly verified units of work.
+10. As a developer, I want the Runner to extract the commit SHA after each commit and record it in runtime state (`.agent/state.json`) and notifications, so that completed work is fully auditable without modifying git-tracked ticket files (ADR 0012).
 11. As a developer, I want the Runner to cleanly reset and clean the working tree (`git reset --hard HEAD` and `git clean -fd`) when a Ticket is skipped, so that Ticket $N+1$ always starts from a pristine tree.
 12. As a developer, I want Doctor failures to display clear, actionable remediation messages in the terminal, so that I know exactly which prerequisite must be resolved before retrying.
 

@@ -65,8 +65,8 @@ Spec: docs/specs/01-admin-panel.md
 
 ### Queue Dynamics & Non-Destructive Parser
 - **Alphanumeric Ordering:** The Runner scans `docs/tickets/<spec-slug>/` and picks the first file with `Status: pending` sorted by ticket identifier (`T001`, `T002`, ...).
-- **Live Re-Reading & Sentinel Lock (ADR 0007, ADR 0010):** The Runner holds an exclusive OS file lock on `docs/tickets/.queue.lock` during active execution. On pause `[p]`, question alerts, or Circuit Breaker trips, the lock is released so developers can add, edit, or reorder ticket files. Upon resuming, the Runner re-scans the directory.
-- **Completed Relocation:** When a ticket passes Gatekeeper verification and is committed, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`, `Commit: <sha>`) and moves the file to `docs/tickets/<spec-slug>/completed/`, keeping the active queue directory clean.
+- **Completed Relocation & Single Atomic Commit (ADR 0012):** When a ticket passes Gatekeeper verification, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`), moves the file to `docs/tickets/<spec-slug>/completed/`, and stages code, tests, gotchas, and the ticket in a single feature commit without embedding `Commit: <sha>` in frontmatter.
+- **Ephemeral Queue Clean Slate (ADR 0012):** When all tickets under `docs/tickets/<spec-slug>/` are finished, the Runner pauses and interactively prompts the user (`[Y/n]`) to clean slate. On confirmation, it copies the completed tickets and spec to `.agent/archive/<spec-slug>/`, then authors a `chore(queue): Clean up <spec-slug> tickets, gotchas, and spec` commit removing them from Git.
 - **Global Gotchas Aggregation:** New gotchas emitted in completion signals are automatically appended to `docs/tickets/gotchas.md`.
 
 ---
@@ -89,10 +89,12 @@ Only one ticket is active at any time. The runner never starts ticket $N+1$ unti
               ↓
        SIGNAL: .agent/signals/{ticket_id}_ready.json
               ↓
-           GATEKEEPER (Independent Python test & build)
-              ├── PASS → COMMIT → UPDATE TICKETS.MD → ARCHIVE THREAD → NEXT TICKET
-              └── FAIL → Attempt < 3 → Send error log to Worker → Re-enter WORKING
-                       → Attempt = 3 → CIRCUIT_BREAKER_TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
+            GATEKEEPER (Independent Python test & build)
+               ├── PASS → RELOCATE TICKET & GOTCHAS → ATOMIC COMMIT → ARCHIVE THREAD
+               │         ├── Pending tickets remain → NEXT TICKET
+               │         └── Queue exhausted → PROMPT CLEAN SLATE [Y/n] → ARCHIVE & CLEANUP COMMIT → STANDBY/EXIT
+               └── FAIL → Attempt < 3 → Send error log to Worker → Re-enter WORKING
+                        → Attempt = 3 → CIRCUIT_BREAKER_TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
 
 ---
@@ -297,16 +299,16 @@ All automated work occurs on `agent/ticket-runner`. The runner checks this branc
 ### Authoritative Python Commits
 When Gatekeeper verification passes:
 1. Python checks `git status --porcelain` to verify the modified files match expectations.
-2. Python stages files: `git add .`
-3. Python commits with a standardized message:
+2. The Runner updates ticket metadata (`Status: completed`, `Completed: <iso_time>`) and relocates the file to `docs/tickets/<spec-slug>/completed/` (without recording commit SHA in frontmatter).
+3. Python stages code, tests, newly logged gotchas, and the relocated ticket: `git add .`
+4. Python commits with a standardized message (`<type>(<scope>): <Title>` with bulleted changes and no ticket numbers):
    ```text
-   feat(T001): Fix admin loading state
+   feat(admin): Fix admin loading state
 
-   - Loading spinner displays during async fetch
-   - Verified via Gatekeeper (tests: PASS, build: PASS)
-   - Completed by OpenCode Worker
+   - Add loading spinner during async fetch
+   - Prevent duplicate loading indicators on refetch
    ```
-4. Commit SHA is extracted and written to the completed ticket file and `state.json`.
+5. Commit SHA is extracted and written to untracked `.agent/state.json` and broadcasted to Discord/terminal without modifying git-tracked ticket files (ADR 0012).
 
 ### Pre-Push Git Hook Guardrail (ADR 0005)
 To physically prevent accidental `git push` operations by LLM tool calls:
@@ -413,6 +415,7 @@ discord:
 
 lifecycle:
   queue_completion: "standby"  # standby | terminate
+  clean_slate: "interactive"   # interactive | always | never
 
 git:
   auto_push: false
@@ -451,7 +454,7 @@ $ python ticket_runner.py start
 [Worker] Emitted signal: .agent/signals/T001_ready.json
 [Gatekeeper] Running build_cmd: npm run build (PASS)
 [Gatekeeper] Running test_cmd: npm test (PASS)
-[Git] Committed feat(T001): Fix admin loading state (sha: 7a82c19)
+[Git] Committed feat(admin): Fix admin loading state (sha: 7a82c19)
 [Queue] T001 moved to Completed Tickets in tickets.md
 
 Starting T002...

@@ -1,0 +1,29 @@
+"""Domain exception hierarchy for Ticket Runner."""
+
+
+class TicketRunnerError(Exception):
+    """Base exception for all Ticket Runner domain errors."""
+    pass
+
+
+class DoctorError(TicketRunnerError):
+    """Raised when pre-flight health checks fail."""
+    pass
+
+
+class GitError(TicketRunnerError):
+    """Raised when a Git operation fails."""
+    pass
+
+
+class ConfigError(TicketRunnerError):
+    """Raised when configuration validation or loading fails."""
+    pass
+
+
+class CommandNotFoundError(TicketRunnerError):
+    """Raised when an executable command cannot be resolved or found."""
+
+    def __init__(self, command: str, message: str | None = None) -> None:
+        self.command = command
+        super().__init__(message or f"Command not found: '{command}'")

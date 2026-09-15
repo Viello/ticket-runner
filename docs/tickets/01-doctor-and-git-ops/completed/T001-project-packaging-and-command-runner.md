@@ -1,5 +1,7 @@
 # T001 — Project packaging, domain exceptions, and CommandRunner seam
-Status: pending
+Status: completed
+Completed: 2026-09-15T07:38:11Z
+Commit: 41c2d23748562a0b26cef051f347c1d52a4c33da
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements
