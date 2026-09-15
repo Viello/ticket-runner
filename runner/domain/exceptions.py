@@ -21,6 +21,11 @@ class ConfigError(TicketRunnerError):
     pass
 
 
+class TicketFormatError(TicketRunnerError):
+    """Raised when a ticket file cannot be parsed, validated, or safely updated."""
+    pass
+
+
 class CommandNotFoundError(TicketRunnerError):
     """Raised when an executable command cannot be resolved or found."""
 

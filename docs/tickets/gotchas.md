@@ -40,3 +40,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Automated pre-flight health checks that attempt auto-remediation (such as auto-stashing, auto-committing, or modifying files) risk destroying uncommitted developer work or violating user trust.
 - **Solution**: Enforce strict read-only execution in pre-flight checks: inspect prerequisites, halt immediately on failure, and output actionable remediation instructions without altering workspace state.
 
+### Preserving Ticket Line Endings During Rewrites
+- **Problem**: `Path.read_text()` and `Path.write_text()` normalize CRLF to LF, silently rewriting CRLF-authored ticket files; the `newline` parameter only exists on `Path.read_text()` from Python 3.13 while the project targets 3.11+.
+- **Solution**: Read and write ticket markdown through `path.open(..., encoding="utf-8", newline="")` and rebuild files from `splitlines(keepends=True)` so only the targeted header metadata lines change and every other byte round-trips unchanged.
+
+### Atomic Writes Must Clean Up on Every Failure Path
+- **Problem**: The sibling `.tmp` + `os.replace` pattern fails on Windows with `PermissionError` when an editor holds the target open; narrowing cleanup to `OSError` leaves stray `.tmp` files behind on encoding or programming failures.
+- **Solution**: In `atomic_write_text`, catch any exception, delete the sibling `.tmp` best-effort, then re-raise; the ticket serializer wraps the failure in `TicketFormatError` with editor-closed guidance, and `*.tmp` is git-ignored so `git add .` can never stage a leftover.
+
+### Spec Linkage Inference for Archived Tickets
+- **Problem**: Inferring `docs/specs/<parent-directory-slug>.md` breaks for relocated tickets under `completed/`, resolving to the nonsensical `docs/specs/completed.md`.
+- **Solution**: When the `Spec:` header is omitted and the parent directory is the archive folder (`completed/`), infer the spec slug from the grandparent directory instead.
+
