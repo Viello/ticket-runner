@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 import yaml
 
@@ -38,6 +39,9 @@ FORBIDDEN_DISCORD_CREDENTIAL_KEYS = (
     "api_key",
     "password",
 )
+
+ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+DISCORD_CHANNEL_ID_PATTERN = re.compile(r"^\d+$")
 
 
 class YamlConfigLoader(ConfigLoader):
@@ -173,10 +177,31 @@ class YamlConfigLoader(ConfigLoader):
                 )
         if "token_env" not in discord_dict:
             raise ConfigError("Missing required field 'token_env' in section 'discord'")
+
+        token_env_val = discord_dict["token_env"]
+        if (
+            not isinstance(token_env_val, str)
+            or not ENV_VAR_PATTERN.match(token_env_val)
+            or len(token_env_val) > 64
+        ):
+            raise ConfigError(
+                f"Discord token_env must be a valid environment variable name "
+                f"(matching '^[A-Z_][A-Z0-9_]*$', max 64 characters), got: {token_env_val!r}. "
+                "Never store raw credentials or tokens in the configuration file."
+            )
+
+        channel_id_raw = discord_dict.get("channel_id", "")
+        channel_id_val = str(channel_id_raw).strip() if channel_id_raw is not None else ""
+        if channel_id_val and not DISCORD_CHANNEL_ID_PATTERN.match(channel_id_val):
+            raise ConfigError(
+                f"Field 'channel_id' in section 'discord' must be empty or a valid numeric Discord channel ID, "
+                f"got: {channel_id_raw!r}"
+            )
+
         discord = DiscordConfig(
             enabled=discord_dict.get("enabled", True),
-            token_env=discord_dict["token_env"],
-            channel_id=str(discord_dict.get("channel_id", "")),
+            token_env=token_env_val,
+            channel_id=channel_id_val,
         )
 
         # 7. Lifecycle section

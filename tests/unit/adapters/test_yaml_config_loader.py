@@ -265,8 +265,11 @@ def test_load_config_example_yaml() -> None:
 
 
 def test_load_root_config_yaml() -> None:
-    loader = YamlConfigLoader()
     root_config_path = Path("config.yaml")
+    if not root_config_path.is_file():
+        pytest.skip("config.yaml is untracked and not present; skipping local config test.")
+
+    loader = YamlConfigLoader()
     config = loader.load(root_config_path)
 
     assert isinstance(config, RunnerConfig)
@@ -277,4 +280,28 @@ def test_load_root_config_yaml() -> None:
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
     assert config.tokens.ceiling == 150000
+
+
+@pytest.mark.parametrize(
+    "invalid_channel_id",
+    ["letters_only", "12345-channel", "token.secret.value", "channel#1"],
+)
+def test_load_discord_invalid_channel_id(invalid_channel_id: str) -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["channel_id"] = invalid_channel_id
+
+    with pytest.raises(ConfigError, match="Field 'channel_id' in section 'discord' must be empty or a valid numeric Discord channel ID"):
+        loader.load_from_dict(data)
+
+
+def test_load_discord_numeric_channel_id_as_int() -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["channel_id"] = 123456789012345678
+
+    config = loader.load_from_dict(data)
+    assert config.discord.channel_id == "123456789012345678"
 

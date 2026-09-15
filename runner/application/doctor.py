@@ -245,11 +245,18 @@ class Doctor:
             )
         except (ConfigError, OSError, Exception) as exc:
             self._loaded_config = None
+            remediation = f"Verify that '{self._config_path}' exists and satisfies the RunnerConfig schema."
+            if "Configuration file not found" in str(exc):
+                remediation = (
+                    f"Configuration file '{self._config_path}' not found. "
+                    "Copy the template configuration using 'cp config.example.yaml config.yaml' "
+                    "(or PowerShell: 'Copy-Item config.example.yaml config.yaml') and customize your settings."
+                )
             return CheckResult(
                 name=CHECK_CONFIG,
                 passed=False,
                 message=f"Configuration validation failed: {exc}",
-                remediation=f"Verify that '{self._config_path}' exists and satisfies the RunnerConfig schema.",
+                remediation=remediation,
             )
 
     async def check_hook(self) -> CheckResult:

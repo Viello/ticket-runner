@@ -278,6 +278,17 @@ async def test_check_config_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_check_config_missing_file_remediation(tmp_path: Path) -> None:
+    """Verify check_config provides explicit copy template remediation when file is missing."""
+    doctor = Doctor(config_path=tmp_path / "non_existent_config.yaml")
+    result = await doctor.check_config()
+
+    assert result.passed is False
+    assert result.name == CHECK_CONFIG
+    assert "Copy the template configuration using 'cp config.example.yaml config.yaml'" in (result.remediation or "")
+
+
+@pytest.mark.anyio
 async def test_check_hook_installed() -> None:
     """Verify check_hook passes when hook is installed."""
     class InstalledHook(FakeHookInstaller):
