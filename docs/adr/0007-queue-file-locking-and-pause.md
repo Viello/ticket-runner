@@ -1,0 +1,3 @@
+# Queue File Locking with Pause Release
+
+We chose to place an exclusive OS file lock on `tickets.md` during active Ticket execution and release that lock only when human interaction is required (such as an explicit pause, an unanswered question, or a Circuit Breaker trip). On Windows, concurrent uncoordinated writes between external text editors and the Runner cause process sharing violations and partial-write corruption; acquiring the lock during active runs and releasing it on pause guarantees deterministic queue state transitions while preserving the developer's ability to edit and reorder tickets when the Runner is paused.

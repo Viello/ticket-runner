@@ -1,0 +1,3 @@
+# Injectable Subprocess and Gateway Seam for Deterministic Testing
+
+We decided that all external boundary calls—specifically OpenCode CLI invocations, Git operations, Gatekeeper verification commands, and the Discord client gateway—must be mediated through injectable command runner and transport protocols rather than direct system calls or global monkeypatching. This provides a single, high-level testing seam where the Runner executes against real temporary filesystems on disk while simulating subprocess streaming events, command exit codes, and remote Discord interactions with full determinism.
