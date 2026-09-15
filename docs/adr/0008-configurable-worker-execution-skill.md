@@ -1,0 +1,3 @@
+# Configurable Worker Execution Skill via Context Pointer
+
+We decided that the Ticket Runner must direct the OpenCode Worker to an external, configurable execution skill file (`execution_skill` in `config.yaml`, defaulting to `.agents/skills/implement/SKILL.md`) via a scoped prompt pointer rather than hardcoding implementation rules in Python or inlining full skill bodies into the prompt. This establishes a single source of truth for the project's implementation discipline (TDD at seams, regular test runs, pre-signal code reviews), allows teams to adapt their execution methodology without altering Runner code, and injects runtime guardrails that explicitly override the skill's commit instruction in favor of `.agent/signals/{ticket_id}_ready.json`.

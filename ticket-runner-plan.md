@@ -120,12 +120,17 @@ opencode run --format json --session <session_id> --auto "<prompt>"
 To avoid context bloat and history pollution, the Runner injects a strictly scoped prompt for each ticket:
 1. **Ticket Slice:** Current ticket ID, title, requirements, acceptance criteria, and ticket-specific gotchas.
 2. **Global Gotchas:** The current `## Global Gotchas & Lessons Learned` block from `tickets.md`.
-3. **Operational Rules:**
+3. **Execution Skill Pointer (ADR 0008):** Path to the configured execution skill (`config.yaml: worker.execution_skill`, defaulting to `.agents/skills/implement/SKILL.md`). The prompt instructs the Worker to adopt the discipline of this skill: work at pre-agreed seams using `/tdd`, and run typechecking and tests regularly.
+4. **Operational Rules & Guardrails:**
    - Modify only files required for this ticket.
    - Run tests and builds locally during implementation to verify your own changes.
    - If clarification is needed, write `.agent/questions/{ticket_id}.json` and exit; do not guess.
+   - **Do NOT commit:** Guardrail overrides any commit step in the execution skill; only the Runner Gatekeeper stages and commits.
+   - **Pre-Signal Quality Review:** Run a `/code-review` self-check against the ticket requirements and capture findings in the `self_review_notes` field of `.agent/signals/{ticket_id}_ready.json`.
+   - **Advisory Debugging:** `.agents/skills/diagnosing-bugs/SKILL.md` is available on disk if investigating hard test breaks or non-trivial errors.
    - When verified, write `.agent/signals/{ticket_id}_ready.json` and exit.
    - If context limit warning is received, run `.agents/skills/handoff/SKILL.md` to save `.agent/checkpoints/{ticket_id}/handoff.md`.
+
 
 ---
 
@@ -388,6 +393,9 @@ project:
   branch: "agent/ticket-runner"
   base_branch: "main"
 
+worker:
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
 verification:
   test_cmd: "pytest"
   build_cmd: ""
@@ -462,6 +470,10 @@ ticket-runner/
 │
 ├── .agents/                      # Shared agent skills
 │   └── skills/
+│       ├── implement/
+│       │   └── SKILL.md          # Execution skill (TDD, typecheck, review)
+│       ├── to-tickets/
+│       │   └── SKILL.md          # Ticket breakdown and queue generator
 │       └── handoff/
 │           └── SKILL.md          # Standardized handoff skill
 │
@@ -471,7 +483,10 @@ ticket-runner/
         ├── 0002-independent-gatekeeper-verification.md
         ├── 0003-hybrid-presence-mode.md
         ├── 0004-explicit-signal-files.md
-        └── 0005-local-pre-push-git-hook.md
+        ├── 0005-local-pre-push-git-hook.md
+        ├── 0006-injectable-subprocess-and-gateway-seam.md
+        ├── 0007-queue-file-locking-and-pause.md
+        └── 0008-configurable-worker-execution-skill.md
 ```
 
 ---
