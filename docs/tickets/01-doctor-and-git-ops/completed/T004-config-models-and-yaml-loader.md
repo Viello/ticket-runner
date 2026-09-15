@@ -1,5 +1,6 @@
 # T004 — Configuration domain models and YAML schema loader
-Status: pending
+Status: completed
+Completed: 2026-09-15T15:24:00Z
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements
