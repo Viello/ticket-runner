@@ -1,48 +1,49 @@
-# Spec 02: Queue Management and Tickets Queue File
+# Spec 02: Directory-Based Ticket Queue and Gotchas Management
 
 ## Problem Statement
 
-Autonomous orchestrators require an unambiguous source of truth for work items, cross-session learnings, and completion history. If the queue parser destroys markdown comments, reformats user text, permits race conditions with external text editors, or fails to propagate lessons learned across runs, the orchestrator becomes destructive to human planning and repeats past mistakes.
+Autonomous orchestrators require an unambiguous source of truth for work items, cross-session learnings, and completion history. If the queue parser permits race conditions with external text editors, creates git merge conflicts across branches, clutters active directories with historical tickets, or fails to propagate lessons learned across runs, the orchestrator becomes destructive to human planning and repeats past mistakes.
 
 ## Solution
 
-Provide a non-destructive Markdown parser and state manager for `tickets.md` that maintains strict sequential execution, enforces OS file locking during active execution with pause releases, automatically relocates completed or skipped tickets to an archive section, and continuously updates global Gotchas from verified Worker runs.
+Provide a directory-based Markdown queue manager rooted at `docs/tickets/<spec-slug>/` that maintains strict sequential execution, protects the queue directory via a sentinel OS file lock (`docs/tickets/.queue.lock`) with pause releases, automatically relocates completed or skipped ticket files to a `completed/` subfolder, and continuously aggregates global Gotchas into `docs/tickets/gotchas.md` from verified Worker runs.
 
 ## User Stories
 
-1. As a developer, I want to define a list of sequential Tickets in `tickets.md` with requirements, acceptance criteria, and specific Gotchas, so that the Runner has a clear specification for each unit of work.
-2. As a developer, I want the Runner to maintain an active OS file lock on `tickets.md` while a Ticket is executing, so that external editors cannot trigger conflicting writes or corrupt queue state.
-3. As a developer, I want the Runner to release the file lock on `tickets.md` whenever the process is paused via `[p]`, waiting on a question, or halted by the Circuit Breaker, so that I can freely insert, reorder, or edit pending tickets.
-4. As a developer, I want the Runner to re-acquire the file lock and re-parse `tickets.md` upon resuming from pause, so that my queue edits are immediately reflected in execution order.
-5. As a developer, I want the Runner to execute Tickets strictly one at a time from top to bottom, selecting the first item with `Status: pending`, so that dependencies between tickets are naturally respected.
-6. As a developer, I want the Runner to preserve all custom markdown formatting, comments, and spacing in `tickets.md` during updates, so that my notes and queue structure remain intact.
-7. As a developer, I want the Runner to relocate a completed Ticket block from the active queue to `## Completed Tickets` at the bottom of `tickets.md`, so that the active queue remains concise and focused.
-8. As a developer, I want completed Ticket blocks to be stamped with completion timestamp and git commit SHA, so that every completed item is traceable to source control.
-9. As a developer, I want the Runner to extract `new_gotchas` emitted in completion signals and append them directly to `## Global Gotchas & Lessons Learned` in `tickets.md`, so that subsequent Tickets automatically benefit from newly discovered runtime pitfalls.
-10. As a developer, I want the Runner to re-read `tickets.md` immediately before writing completion updates, so that edits I made while the Worker was running are never lost.
-11. As a developer, I want skipped Tickets (resulting from Circuit Breaker escalation) to be relocated to `## Completed Tickets` with `Status: skipped` and failure details, so that the Queue continues forward without stalling.
-12. As a developer, I want an empty pending Queue to trigger a graceful transition to standby or process termination per configuration, so that the Runner lifecycle behaves predictably when all work is done.
+1. As a developer, I want to define sequential Tickets as individual Markdown files in `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` containing requirements, acceptance criteria, and specific Gotchas, so that each unit of work has an isolated, merge-friendly specification.
+2. As a developer, I want the Runner to maintain an exclusive OS file lock on a sentinel file (`docs/tickets/.queue.lock`) while a Ticket is executing, so that external editors cannot trigger conflicting writes or corrupt queue directory state.
+3. As a developer, I want the Runner to release the sentinel lock whenever the process is paused via `[p]`, waiting on a question, or halted by the Circuit Breaker, so that I can freely insert, reorder, or edit pending ticket files.
+4. As a developer, I want the Runner to re-acquire the sentinel lock and re-scan `docs/tickets/<spec-slug>/` upon resuming from pause, so that newly added or modified ticket files are immediately reflected in execution order.
+5. As a developer, I want the Runner to execute Tickets strictly one at a time sorted by ticket identifier (`T001`, `T002`, etc.), selecting the first file with `Status: pending`, so that dependencies between tickets are naturally respected.
+6. As a developer, I want the Runner to preserve all custom markdown formatting, comments, and spacing within each ticket file during status updates.
+7. As a developer, I want the Runner to relocate a completed Ticket file from `docs/tickets/<spec-slug>/` to `docs/tickets/<spec-slug>/completed/`, so that the active queue directory remains concise and contains only unfinished work.
+8. As a developer, I want completed Ticket files to be stamped with completion timestamp and git commit SHA in their header metadata, so that every completed item is traceable to source control.
+9. As a developer, I want the Runner to extract `new_gotchas` emitted in completion signals and append them directly to `docs/tickets/gotchas.md`, so that subsequent Tickets automatically benefit from newly discovered runtime pitfalls.
+10. As a developer, I want skipped Tickets (resulting from Circuit Breaker escalation) to be relocated to `docs/tickets/<spec-slug>/completed/` with `Status: skipped` and failure details, so that the Queue continues forward without stalling.
+11. As a developer, I want an empty pending Queue across all spec directories to trigger a graceful transition to standby or process termination per configuration, so that the Runner lifecycle behaves predictably when all work is done.
+12. As a developer, I want each Ticket file to optionally declare a `Spec: docs/specs/<spec-slug>.md` header linking to its originating spec (with fallback to the parent directory name), so that the Runner can ground the Worker in overarching architectural context.
 
 ## Implementation Decisions
 
-- **Markdown AST Parsing**: The queue manager uses a structured markdown parser to parse `tickets.md` into discrete document sections: Global Gotchas header, Active Ticket nodes, and Completed Ticket nodes. Unrecognized sections and comments are preserved verbatim.
-- **Exclusive File Locking**: During active execution of any Ticket, the Runner holds an exclusive OS file handle on `tickets.md` using platform-specific locking (`msvcrt.locking` on Windows). On pause events, question prompts, or circuit breaker trips, the lock handle is closed to allow external text editor writes.
-- **Atomic File Updates**: Any disk write to `tickets.md` writes to a sibling temporary file (`tickets.md.tmp`) and atomically replaces the original file, preventing partial file corruption on process termination.
-- **Gotchas Injection Model**: Each Ticket prompt is composed by joining the `## Global Gotchas & Lessons Learned` section with the Ticket's own `### Gotchas` block before invoking the Worker.
+- **Directory-Based Queue Layout & Spec Linkage (ADR 0011)**: Active tickets live as individual Markdown files under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md`. The parser reads ticket metadata (`Status:`, optional `Spec:`) and requirements. If `Spec:` is omitted, the parser auto-infers the spec path from `docs/specs/<spec-slug>.md` matching the ticket's parent directory.
+- **Sentinel File Locking**: During active execution of any Ticket, the Runner holds an exclusive OS file handle on `docs/tickets/.queue.lock` using platform-specific locking (`msvcrt.locking` on Windows). On pause events, question prompts, or circuit breaker trips, the lock handle is closed to allow external text editor writes.
+- **Completed Archive Directory**: When a ticket passes Gatekeeper verification and is committed, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`, `Commit: <sha>`) and moves the file to `docs/tickets/<spec-slug>/completed/T<NNN>-<slug>.md`.
+- **Global Gotchas Aggregation**: Cross-ticket lessons learned are maintained in `docs/tickets/gotchas.md`. Each Worker prompt is composed by joining `docs/tickets/gotchas.md` with the active Ticket's own `### Gotchas` block before invocation.
+- **Atomic File Writes**: Status and metadata updates to any ticket file or `gotchas.md` write to a sibling temporary file (`.tmp`) and atomically replace the target file.
 - **Status Enumeration**: Ticket status values are strictly: `pending`, `running`, `completed`, and `skipped`.
 
 ## Testing Decisions
 
-- **Testing External Behavior Only**: Tests verify that parsing extracts the expected pending Tickets in sequence, that updates correctly move sections to the completed list, that file locking blocks concurrent opens during runs, and that `new_gotchas` appear in global notes. Tests do not depend on internal AST node class types.
-- **Modules Tested**: Queue file parser, markdown serializer, file lock coordinator, and gotchas aggregation manager.
-- **Seams and Test Doubles**: Tests operate against real temporary markdown files on disk using `pytest` fixtures, verifying actual file locking and content preservation.
+- **Testing External Behavior Only**: Tests verify that directory scanning extracts expected pending Tickets in sequence, that completed tickets are cleanly moved to the `completed/` directory, that sentinel file locking blocks concurrent access during runs, and that `new_gotchas` append to `gotchas.md`.
+- **Modules Tested**: Queue directory scanner, ticket markdown parser/serializer, sentinel file lock coordinator, and gotchas aggregation manager.
+- **Seams and Test Doubles**: Tests operate against real temporary directory trees on disk using `pytest` fixtures, verifying actual file operations and sentinel locking.
 
 ## Out of Scope
 
-- Remote synchronization of `tickets.md` to GitHub Issues or Linear (handled by separate exporter tooling).
+- Remote synchronization of ticket files to GitHub Issues or Linear (handled by separate exporter tooling).
 - Multi-branch or multi-queue concurrent execution (Ticket Runner is strictly single-queue sequential).
 - Arbitrary markdown styling transformations.
 
 ## Further Notes
 
-- On Windows, holding an exclusive file handle prevents other applications from modifying the file. Releasing the lock on pause is a critical affordance that allows developers to maintain interactive control over their queue.
+- Grouping tickets by spec folder (`docs/tickets/<spec-slug>/`) mirrors `docs/specs/`, providing clear visual alignment between requirements specifications and executable ticket units.

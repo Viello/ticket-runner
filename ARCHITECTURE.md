@@ -8,7 +8,6 @@ ticket-runner/
 ├── config.yaml                       # Runner configuration
 ├── requirements.txt                  # Python dependencies (discord.py, rich, pyyaml)
 ├── pyproject.toml                    # Package metadata, Python 3.11+, pytest configuration
-├── tickets.md                        # Active queue, gotchas, completed tickets
 │
 ├── scripts/
 │   └── pre-push.sh                   # POSIX shell template for agent/ticket-runner guardrail
@@ -21,7 +20,7 @@ ticket-runner/
 │   ├── domain/                       # Pure Domain Entities & Invariants (zero I/O, zero deps)
 │   │   ├── __init__.py
 │   │   ├── ticket.py                 # Ticket, TicketStatus, requirements, gotchas
-│   │   ├── queue.py                  # Queue, top-to-bottom ordering, completed relocation
+│   │   ├── queue.py                  # Queue, alphanumeric ordering, completed relocation
 │   │   ├── state.py                  # RunnerState, StateStatus, crash recovery state
 │   │   ├── signal.py                 # ReadySignal, QuestionSignal, SignalStatus
 │   │   ├── checkpoint.py             # Checkpoint entity, handoff metadata
@@ -43,7 +42,7 @@ ticket-runner/
 │   ├── ports/                        # Pure Abstract Protocols (ADR 0006 Seams)
 │   │   ├── __init__.py
 │   │   ├── command_runner.py         # Protocol for CLI execution (streaming stdout & exit codes)
-│   │   ├── ticket_repository.py      # Protocol for locked reading/updating tickets.md
+│   │   ├── ticket_repository.py      # Protocol for locked scanning/updating docs/tickets/ queue
 │   │   ├── state_store.py            # Protocol for atomic .agent/state.json persistence
 │   │   ├── signal_repository.py      # Protocol for watching/writing signals & questions
 │   │   ├── discord_gateway.py        # Protocol for Discord thread lifecycle & alerts
@@ -64,10 +63,10 @@ ticket-runner/
 │       │   └── pre_push_hook.py      # Installer/guardrail merger reading scripts/pre-push.sh
 │       ├── markdown/
 │       │   ├── __init__.py
-│       │   ├── file_lock.py          # Windows msvcrt file locking context manager
-│       │   ├── parser.py             # Non-destructive AST/block parser for tickets.md
-│       │   ├── serializer.py         # Non-destructive serializer & section relocator
-│       │   └── ticket_store.py       # Implements TicketRepository
+│       │   ├── file_lock.py          # Windows msvcrt sentinel file locking context manager (.queue.lock)
+│       │   ├── parser.py             # Parser for individual ticket files & gotchas.md
+│       │   ├── serializer.py         # Serializer, status updater, and completed/ archiver
+│       │   └── ticket_store.py       # Implements TicketRepository for docs/tickets/ directory
 │       ├── filesystem/
 │       │   ├── __init__.py
 │       │   ├── json_state_store.py   # Implements StateStore via atomic tempfile replacement
@@ -122,5 +121,12 @@ ticket-runner/
 │
 └── docs/
     ├── specs/                        # Specs 01 to 06
-    └── adr/                          # ADRs 0001 to 0009
+    ├── adr/                          # ADRs 0001 to 0010
+    └── tickets/                      # Active and completed ticket queue
+        ├── .queue.lock               # Sentinel lockfile during execution
+        ├── gotchas.md                # Cross-ticket global lessons learned
+        └── 01-doctor-and-git-ops/    # Spec 01 tickets
+            ├── T001-project-packaging.md
+            ├── ...
+            └── completed/            # Archived completed tickets
 ```

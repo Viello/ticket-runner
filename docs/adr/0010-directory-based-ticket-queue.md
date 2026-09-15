@@ -1,0 +1,3 @@
+# Directory-Based Ticket Queue with Sentinel Lock
+
+We decided to organize the Ticket Runner queue into individual files under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` with a `completed/` archive subfolder and a dedicated `docs/tickets/gotchas.md` file, rather than maintaining a monolithic root `tickets.md`. This mirrors the structure of `docs/specs/`, eliminates git merge conflicts when multiple tickets are authored concurrently, keeps active directories focused on pending work by moving completed tickets to `completed/`, and protects the directory atomically against concurrent external writes using a sentinel `.queue.lock` file with pause release per ADR 0007.

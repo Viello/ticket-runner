@@ -12,14 +12,14 @@ Provide a pre-flight Doctor verification routine that validates the developer en
 
 1. As a developer, I want the Runner to verify that the OpenCode CLI is installed and executable before picking up tickets, so that the run does not fail midway through execution.
 2. As a developer, I want the Runner to inspect `git status --porcelain` on startup and fail immediately if uncommitted changes exist, so that my existing uncommitted work is never overwritten or accidentally committed.
-3. As a developer, I want the Runner to verify that `tickets.md` exists and contains at least one pending Ticket, so that the process does not idle without work.
+3. As a developer, I want the Runner to verify that `docs/tickets/` contains at least one pending Ticket file, so that the process does not idle without work.
 4. As a developer, I want the Runner to validate `config.yaml` against its required schema before launching, so that misconfigured test commands or thresholds fail fast.
 5. As a developer, I want the Runner to inspect `.git/hooks/pre-push` and non-destructively append a blocking guardrail for `agent/ticket-runner`, so that autonomous commands cannot push code to the remote repository while preserving any existing hooks I have installed.
 6. As a developer, I want the Runner to verify Discord bot credentials on startup unless `--local-only` is specified, so that I am alerted immediately if remote notifications cannot be delivered.
 7. As a developer, I want the Runner to support a `--local-only` CLI flag that bypasses Discord connectivity checks, so that I can run tickets entirely offline at my terminal.
 8. As a developer, I want the Runner to automatically switch to or create the dedicated `agent/ticket-runner` branch on startup, so that `main` is never directly modified.
 9. As a developer, I want the Runner to author authoritative conventional commits (`feat(T001): Title`) containing acceptance details upon Gatekeeper approval, so that the git history reflects cleanly verified units of work.
-10. As a developer, I want the Runner to extract the commit SHA after each commit and record it in persistent state and `tickets.md`, so that completed work is fully auditable.
+10. As a developer, I want the Runner to extract the commit SHA after each commit and record it in persistent state and the completed ticket file, so that completed work is fully auditable.
 11. As a developer, I want the Runner to cleanly reset and clean the working tree (`git reset --hard HEAD` and `git clean -fd`) when a Ticket is skipped, so that Ticket $N+1$ always starts from a pristine tree.
 12. As a developer, I want Doctor failures to display clear, actionable remediation messages in the terminal, so that I know exactly which prerequisite must be resolved before retrying.
 

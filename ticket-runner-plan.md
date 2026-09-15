@@ -15,7 +15,7 @@ The user starts the runner on their PC, works locally at the terminal in **Nearb
 - **Communication:**
   - *Nearby Mode:* Interactive rich terminal dashboard with hotkeys (`[p]` pause, `[m]` mode toggle, `[q]` graceful quit).
   - *Away Mode:* In-process `discord.py` bot using a **Thread-per-Ticket** lifecycle under a designated channel.
-- **Ticket Source:** `tickets.md` with active pending queue, global gotchas, and an auto-updated completed archive section at the bottom.
+- **Ticket Source:** Directory-based queue under `docs/tickets/<spec-slug>/` with active pending tickets, completed archive subfolder, and `docs/tickets/gotchas.md`.
 - **Execution Environment:** User's local PC (Windows PowerShell environment).
 - **Handoff Mechanism:** Project-local handoff skill (`.agents/skills/handoff/SKILL.md`) checkpointing to `.agent/checkpoints/{ticket_id}/handoff.md`.
 - **Gatekeeper:** Independent Python test/build execution with a 3-attempt circuit breaker before human escalation.
@@ -23,23 +23,31 @@ The user starts the runner on their PC, works locally at the terminal in **Nearb
 
 ---
 
-## 3. Ticket Queue (`tickets.md`)
+## 3. Ticket Queue (`docs/tickets/`)
 
-`tickets.md` serves as the single source of truth for work items and cross-session knowledge.
+The `docs/tickets/` directory hierarchy serves as the single source of truth for work items, cross-session knowledge, and completion history.
 
-### File Structure
+### Directory Structure
+
+```text
+docs/tickets/
+├── .queue.lock                       # Sentinel lockfile (held during execution, released on pause)
+├── gotchas.md                        # Global Gotchas & Lessons Learned across runs
+│
+└── 01-doctor-and-git-ops/            # Grouped by functional spec
+    ├── T001-project-packaging.md     # Active pending ticket
+    ├── T002-pre-push-hook.md         # Active pending ticket
+    │
+    └── completed/                    # Archived completed tickets
+        └── T000-init.md              # Stamped with completion timestamp & commit SHA
+```
+
+### Ticket File Template
 
 ```markdown
-# Ticket Queue
-
-## Global Gotchas & Lessons Learned
-- Gotchas discovered across ticket runs are recorded here.
-- Next tickets automatically ingest these lessons into their prompt context.
-
----
-
-## T001 — Fix admin loading state
+# T001 — Fix admin loading state
 Status: pending
+Spec: docs/specs/01-admin-panel.md
 
 ### Requirements
 - Add loading state to verified datasets table.
@@ -52,28 +60,14 @@ Status: pending
 - Existing CRUD operations remain green.
 
 ### Gotchas
-- Table component uses virtualized rendering; loading state must wrap the table body, not replace the container.
-
----
-
-## T002 — Add dataset search filter
-Status: pending
-...
-
----
-
-## Completed Tickets
-
-## T000 — Project initialization
-Status: completed
-Completed: 2026-09-15 12:00:00
-Commit: 8f31c2a
+- Table component uses virtualized rendering; loading state must wrap the table body.
 ```
 
 ### Queue Dynamics & Non-Destructive Parser
-- **Top-to-Bottom Execution:** The Runner picks the first ticket with `Status: pending`.
-- **Live Re-Reading:** Before starting any new ticket, the Runner re-parses `tickets.md`. The user can insert, re-order, or adjust pending tickets and gotchas while the Runner is working on an earlier ticket.
-- **Completed Relocation:** When a ticket passes Gatekeeper verification and is committed, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`, `Commit: <sha>`) and moves the entire block to the `## Completed Tickets` section at the bottom, keeping the active queue clean.
+- **Alphanumeric Ordering:** The Runner scans `docs/tickets/<spec-slug>/` and picks the first file with `Status: pending` sorted by ticket identifier (`T001`, `T002`, ...).
+- **Live Re-Reading & Sentinel Lock (ADR 0007, ADR 0010):** The Runner holds an exclusive OS file lock on `docs/tickets/.queue.lock` during active execution. On pause `[p]`, question alerts, or Circuit Breaker trips, the lock is released so developers can add, edit, or reorder ticket files. Upon resuming, the Runner re-scans the directory.
+- **Completed Relocation:** When a ticket passes Gatekeeper verification and is committed, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`, `Commit: <sha>`) and moves the file to `docs/tickets/<spec-slug>/completed/`, keeping the active queue directory clean.
+- **Global Gotchas Aggregation:** New gotchas emitted in completion signals are automatically appended to `docs/tickets/gotchas.md`.
 
 ---
 
@@ -119,9 +113,10 @@ opencode run --format json --session <session_id> --auto "<prompt>"
 ### Worker Prompt Context Injection
 To avoid context bloat and history pollution, the Runner injects a strictly scoped prompt for each ticket:
 1. **Ticket Slice:** Current ticket ID, title, requirements, acceptance criteria, and ticket-specific gotchas.
-2. **Global Gotchas:** The current `## Global Gotchas & Lessons Learned` block from `tickets.md`.
-3. **Execution Skill Pointer (ADR 0008):** Path to the configured execution skill (`config.yaml: worker.execution_skill`, defaulting to `.agents/skills/implement/SKILL.md`). The prompt instructs the Worker to adopt the discipline of this skill: work at pre-agreed seams using `/tdd`, and run typechecking and tests regularly.
-4. **Operational Rules & Guardrails:**
+2. **Spec Excerpt & Reference (ADR 0011):** Parsed `## Problem Statement` and `## Solution` sections (~300 tokens) from the originating Spec (`Spec:` header or auto-inferred from `docs/specs/<spec-slug>.md`), plus a path reference to the full spec file for optional deep exploration.
+3. **Global Gotchas:** The current `docs/tickets/gotchas.md` content.
+4. **Execution Skill Pointer (ADR 0008):** Path to the configured execution skill (`config.yaml: worker.execution_skill`, defaulting to `.agents/skills/implement/SKILL.md`). The prompt instructs the Worker to adopt the discipline of this skill: work at pre-agreed seams using `/tdd`, and run typechecking and tests regularly.
+5. **Operational Rules & Guardrails:**
    - Modify only files required for this ticket.
    - Run tests and builds locally during implementation to verify your own changes.
    - If clarification is needed, write `.agent/questions/{ticket_id}.json` and exit; do not guess.
@@ -311,7 +306,7 @@ When Gatekeeper verification passes:
    - Verified via Gatekeeper (tests: PASS, build: PASS)
    - Completed by OpenCode Worker
    ```
-4. Commit SHA is extracted and written to `tickets.md` and `state.json`.
+4. Commit SHA is extracted and written to the completed ticket file and `state.json`.
 
 ### Pre-Push Git Hook Guardrail (ADR 0005)
 To physically prevent accidental `git push` operations by LLM tool calls:
@@ -334,7 +329,7 @@ When `python ticket_runner.py start` executes, it runs a pre-flight Doctor check
 
 1. **CLI Availability:** Verifies `opencode` binary exists and runs.
 2. **Git Workspace Cleanliness:** Ensures git repository is initialized and the working tree is clean.
-3. **Queue Validation:** Validates `tickets.md` exists and contains at least one pending ticket.
+3. **Queue Validation:** Validates `docs/tickets/` exists and contains at least one pending ticket file.
 4. **Config Verification:** Validates `config.yaml` syntax and verification commands.
 5. **Guardrail Hook:** Verifies `.git/hooks/pre-push` is installed and executable.
 6. **Discord Connectivity:** If `discord.enabled: true`, verifies bot credentials and channel accessibility.
@@ -376,11 +371,11 @@ The Runner state is continuously persisted to survive unexpected reboots or powe
 
 ## 16. Queue Completion & Lifecycle
 
-When all pending tickets in `tickets.md` are marked completed:
+When all pending tickets in `docs/tickets/` are marked completed:
 - The runner emits a completion notification to Discord and terminal:
-  > 🎉 **Queue Completed! 12/12 tickets verified and committed.**
+  > 🎉 **Queue Completed! All tickets verified and committed.**
 - Depending on the configured `queue_completion` setting:
-  - **`standby` (Default):** The Runner remains running in an idle watch loop, monitoring `tickets.md` for newly appended pending tickets. If the user appends a ticket, the Runner resumes automatically.
+  - **`standby` (Default):** The Runner remains running in an idle watch loop, monitoring `docs/tickets/` for newly added pending tickets. If the user adds a ticket, the Runner resumes automatically.
   - **`terminate`:** The Runner prints a summary and cleanly exits the process.
 
 ---

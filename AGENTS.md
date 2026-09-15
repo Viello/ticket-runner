@@ -1,10 +1,10 @@
 # AGENTS.md
 
 Ticket Runner: a planned local Python orchestrator that drives OpenCode through a sequential
-`tickets.md` queue with independent verification, context handoffs, and Discord/terminal interaction.
+directory queue under `docs/tickets/` with independent verification, context handoffs, and Discord/terminal interaction.
 
 ## Repo status: specification only
-No implementation exists yet — no `runner/`, `ticket_runner.py`, `config.yaml`, `tickets.md`,
+No implementation exists yet — no `runner/`, `ticket_runner.py`, `config.yaml`,
 `requirements.txt`, tests, lint, or CI. Don't search for code that isn't there; build against the
 plan's target layout (§18). Do not invent test/lint commands — none are defined yet; verification
 tooling arrives via an explicit ticket.
@@ -42,7 +42,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 
 ### 2. Specification & Queueing
 - **Synthesize** aligned requirements into a formal spec without interviewing: `/to-spec`.
-- **Decompose** a spec or conversation into tracer-bullet tickets directly in `tickets.md`: `/to-tickets`.
+- **Decompose** a spec or conversation into tracer-bullet tickets under `docs/tickets/<spec-slug>/`: `/to-tickets`.
 
 ### 3. Execution (Interactive or Ticket Runner)
 - **Implement** tickets using TDD at pre-agreed seams with frequent typechecks and test runs: `/implement`.

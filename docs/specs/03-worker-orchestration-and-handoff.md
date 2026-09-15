@@ -11,7 +11,7 @@ Manage the OpenCode Worker as an isolated CLI subprocess with real-time JSON eve
 ## User Stories
 
 1. As a developer, I want the Runner to invoke OpenCode as a managed CLI subprocess with `--format json --auto`, so that execution lifecycle and telemetry are directly supervised without persistent daemon state.
-2. As a developer, I want the Runner to inject a scoped prompt containing the active Ticket slice, global Gotchas, the configured `execution_skill` pointer, and operational rules, so that the Worker's context is focused on the immediate task.
+2. As a developer, I want the Runner to inject a scoped prompt containing the active Ticket slice, an automated Spec Excerpt from the parent Spec, global Gotchas, the configured `execution_skill` pointer, and operational rules, so that the Worker's context is grounded in architectural intent while focused on the immediate task.
 3. As a developer, I want the Runner's prompt to instruct the Worker to follow the discipline of `.agents/skills/implement/SKILL.md` (TDD at seams, regular test/typecheck runs), so that implementation quality remains consistent.
 4. As a developer, I want the Runner's prompt to strictly forbid Worker git commits, requiring instead that the Worker emit `.agent/signals/{ticket_id}_ready.json` upon completion, so that git history authority remains solely with the Gatekeeper.
 5. As a developer, I want the Worker to conduct a `/code-review` self-check against the ticket acceptance criteria and record the findings in the `self_review_notes` of the ready signal, so that Gatekeeper has visibility into implementation verification.
@@ -31,13 +31,16 @@ Manage the OpenCode Worker as an isolated CLI subprocess with real-time JSON eve
 - **Subprocess Invocation Contract**: The Worker is executed using:
   `opencode run --format json --session <session_id> --auto "<prompt>"`.
   Output is read line-by-line from standard output, with each line parsed as an independent JSON event.
-- **Worker Skill Integration & Prompt Composition (ADR 0008)**:
-  The prompt builder in `runner/opencode.py` reads `worker.execution_skill` from `config.yaml` (default: `.agents/skills/implement/SKILL.md`). The prompt explicitly directs the Worker to:
-  1. Follow the implementation pattern in `execution_skill` (TDD at pre-agreed seams, frequent tests/typechecks).
-  2. Perform a pre-signal `/code-review` self-check against the ticket's acceptance criteria.
-  3. Override any commit instruction: the Worker must never stage or commit.
-  4. Write `.agent/signals/{ticket_id}_ready.json` with `self_review_notes` when complete.
-  5. Note that `.agents/skills/diagnosing-bugs/SKILL.md` is available on disk if investigating failures.
+- **Worker Skill Integration & Prompt Composition (ADR 0008, ADR 0011)**:
+  The prompt builder in `runner/opencode.py` reads `worker.execution_skill` from `config.yaml` (default: `.agents/skills/implement/SKILL.md`). The prompt explicitly injects:
+  1. Active Ticket slice (ID, title, requirements, acceptance criteria, ticket gotchas).
+  2. Spec Excerpt (ADR 0011): `## Problem Statement` and `## Solution` extracted from the parent Spec (`Spec:` header or inferred from `docs/specs/<spec-slug>.md`), along with a link to the full spec file.
+  3. Global Gotchas from `docs/tickets/gotchas.md`.
+  4. Execution discipline from `worker.execution_skill` (TDD at seams, frequent tests/typechecks).
+  5. Pre-signal `/code-review` self-check against acceptance criteria.
+  6. Direct override forbidding git staging or commits.
+  7. Instruction to write `.agent/signals/{ticket_id}_ready.json` with `self_review_notes` upon completion.
+  8. Pointer to `.agents/skills/diagnosing-bugs/SKILL.md` on disk for non-trivial test failures.
 - **Token Telemetry Extraction**: The runner extracts cumulative input and output token counts from streaming JSON payload metadata. The effective context limit is calculated as $\min(\text{configured\_ceiling}, \text{model\_context\_limit})$.
 - **Handoff Protocol Execution**:
   1. Token count $\ge 135,000$: Runner sends high-priority message:

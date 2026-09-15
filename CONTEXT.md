@@ -13,11 +13,11 @@ The OpenCode agent process invoked by the Runner to implement changes for a sing
 _Avoid_: Engineer, bot, subagent
 
 **Ticket**:
-A discrete, scoped task defined in `tickets.md` containing requirements, acceptance criteria, notes, and execution status.
+A discrete, scoped task defined in an individual markdown file under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` containing requirements, acceptance criteria, notes, and execution status.
 _Avoid_: Task, issue, work item
 
 **Queue**:
-The ordered list of pending tickets sequentially executed one at a time.
+The ordered directory of pending tickets under `docs/tickets/<spec-slug>/` sequentially executed one at a time.
 _Avoid_: Backlog, pipeline
 
 **Gatekeeper**:
@@ -45,7 +45,7 @@ A safety mechanism that halts automatic retry loops after a maximum threshold of
 _Avoid_: Retry counter, fail-safe
 
 **Gotchas**:
-Documented quirks, pitfalls, and runtime constraints captured per ticket or globally in `tickets.md` to prevent repeated errors across sessions.
+Documented quirks, pitfalls, and runtime constraints captured per ticket or globally in `docs/tickets/gotchas.md` to prevent repeated errors across sessions.
 _Avoid_: Bugs, tips, notes
 
 **Isolation Layer**:
@@ -55,5 +55,13 @@ _Avoid_: Sandbox, silo, container
 **Doctor**:
 The pre-flight verification routine run on startup that validates the local environment (CLI binaries, git working tree purity, hook installation, configuration syntax) before queue execution begins.
 _Avoid_: Linter, pre-check, validator
+
+**Spec**:
+The parent functional specification file under `docs/specs/<spec-slug>.md` from which tickets are decomposed, defining the problem statement, architectural boundaries, and target solution.
+_Avoid_: Requirement doc, PRD, epic, design doc
+
+**Spec Excerpt**:
+The concise summary (`## Problem Statement` and `## Solution`) extracted from a Spec and injected into the Worker prompt to ground ticket implementation in high-level intent without context bloat.
+_Avoid_: Summary, abstract, snippet
 
 
