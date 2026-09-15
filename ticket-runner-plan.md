@@ -298,13 +298,12 @@ All automated work occurs on `agent/ticket-runner`. The runner checks this branc
 When Gatekeeper verification passes:
 1. Python checks `git status --porcelain` to verify the modified files match expectations.
 2. Python stages files: `git add .`
-3. Python commits with a standardized message:
+3. Python commits with a standardized message (`<type>(<scope>): <Title>` with bulleted changes and no ticket numbers):
    ```text
-   feat(T001): Fix admin loading state
+   feat(admin): Fix admin loading state
 
-   - Loading spinner displays during async fetch
-   - Verified via Gatekeeper (tests: PASS, build: PASS)
-   - Completed by OpenCode Worker
+   - Add loading spinner during async fetch
+   - Prevent duplicate loading indicators on refetch
    ```
 4. Commit SHA is extracted and written to the completed ticket file and `state.json`.
 
@@ -451,7 +450,7 @@ $ python ticket_runner.py start
 [Worker] Emitted signal: .agent/signals/T001_ready.json
 [Gatekeeper] Running build_cmd: npm run build (PASS)
 [Gatekeeper] Running test_cmd: npm test (PASS)
-[Git] Committed feat(T001): Fix admin loading state (sha: 7a82c19)
+[Git] Committed feat(admin): Fix admin loading state (sha: 7a82c19)
 [Queue] T001 moved to Completed Tickets in tickets.md
 
 Starting T002...

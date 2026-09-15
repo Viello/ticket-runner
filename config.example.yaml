@@ -54,7 +54,7 @@ lifecycle:
 git:
   # Never push automatically (pre-push hook blocks remote pushes on the agent branch)
   auto_push: false
-  # Prefix for conventional commit messages, e.g. feat(T001): Title
+  # Prefix for conventional commit messages, e.g. feat(scope): Title
   commit_prefix: "feat"
   # Enforce pre-push hook verification during Doctor pre-flight checks
   enforce_pre_push_hook: true
