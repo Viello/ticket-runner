@@ -1,5 +1,6 @@
 # T003 — Git operations adapter and working tree isolation interactor
-Status: pending
+Status: completed
+Completed: 2026-09-15T13:57:00Z
 Spec: docs/specs/01-doctor-and-git-ops.md
 
 ### Requirements
