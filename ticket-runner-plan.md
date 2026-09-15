@@ -2,664 +2,508 @@
 
 ## 1. Goal
 
-Build a **local Python ticket runner** that orchestrates OpenCode to work through a predefined `tickets.md` queue **strictly one ticket at a time**.
+Build a **local Python ticket runner** that orchestrates OpenCode to execute tasks from a predefined `tickets.md` queue **strictly one ticket at a time**.
 
-The user should be able to start the runner on their PC, leave it running, and return later to review completed work or answer questions through Discord.
-
-Core workflow:
-
-```text
-tickets.md
-    ↓
-Python Ticket Runner
-    ↓
-Ticket N
-    ↓
-OpenCode implementation
-    ↓
-Tests → Build → Self-review → Verification
-    ↓
-Commit
-    ↓
-Mark ticket complete
-    ↓
-Next ticket
-```
-
-The runner must never begin the next ticket until the current ticket is complete.
+The user starts the runner on their PC, works locally at the terminal in **Nearby** mode (silencing remote alerts), and can walk away at any time. When the user is away, the runner detects idle prompts, escalates to **Away** mode, and routes questions and milestone notifications to **Discord**. The runner ensures complete working tree isolation, verifies all implementations through an independent Python gatekeeper, and commits each completed ticket sequentially.
 
 ---
 
-## 2. Technology
+## 2. Technology & Architecture
 
-- **Orchestrator:** Python
-- **Coding agent:** OpenCode
-- **Communication:** Discord bot
-- **Ticket source:** `tickets.md`
-- **Execution environment:** User's local PC
-- **Initial secondary agent:** None
-- **Git strategy:** One dedicated agent branch
-- **Persistence:** Local state, checkpoints, logs, and question files
-
-Antigravity is intentionally excluded from v1. It may later be added as an independent code reviewer without changing the queue architecture.
+- **Orchestrator:** Python (asyncio runner managing subprocesses, file watchers, terminal UI, and Discord bot).
+- **Coding Worker:** OpenCode CLI invoked as a managed subprocess (`opencode run --format json --session <id>`).
+- **Communication:**
+  - *Nearby Mode:* Interactive rich terminal dashboard with hotkeys (`[p]` pause, `[m]` mode toggle, `[q]` graceful quit).
+  - *Away Mode:* In-process `discord.py` bot using a **Thread-per-Ticket** lifecycle under a designated channel.
+- **Ticket Source:** `tickets.md` with active pending queue, global gotchas, and an auto-updated completed archive section at the bottom.
+- **Execution Environment:** User's local PC (Windows PowerShell environment).
+- **Handoff Mechanism:** Project-local handoff skill (`.agents/skills/handoff/SKILL.md`) checkpointing to `.agent/checkpoints/{ticket_id}/handoff.md`.
+- **Gatekeeper:** Independent Python test/build execution with a 3-attempt circuit breaker before human escalation.
+- **Git Strategy:** Dedicated `agent/ticket-runner` branch; Python stages and writes conventional commits; `.git/hooks/pre-push` blocks unauthorized pushes.
 
 ---
 
-## 3. Ticket Queue
+## 3. Ticket Queue (`tickets.md`)
 
-Tickets are maintained in a human-readable `tickets.md`.
+`tickets.md` serves as the single source of truth for work items and cross-session knowledge.
 
-Example:
+### File Structure
 
 ```markdown
 # Ticket Queue
 
+## Global Gotchas & Lessons Learned
+- Gotchas discovered across ticket runs are recorded here.
+- Next tickets automatically ingest these lessons into their prompt context.
+
+---
+
 ## T001 — Fix admin loading state
-
 Status: pending
 
 ### Requirements
-- Add loading state to verified datasets
-- Prevent duplicate loading indicators
-- Preserve existing table behavior
+- Add loading state to verified datasets table.
+- Prevent duplicate loading indicators on refetch.
+- Preserve existing pagination and sorting behavior.
 
 ### Acceptance Criteria
-- Loading state appears while fetching
-- No double scrollbar
-- Existing CRUD still works
+- Loading spinner displays during async fetch.
+- No layout shift or double scrollbars.
+- Existing CRUD operations remain green.
+
+### Gotchas
+- Table component uses virtualized rendering; loading state must wrap the table body, not replace the container.
 
 ---
 
-## T002 — Add dataset search
-
+## T002 — Add dataset search filter
 Status: pending
-
-### Requirements
 ...
 
-### Acceptance Criteria
-...
+---
+
+## Completed Tickets
+
+## T000 — Project initialization
+Status: completed
+Completed: 2026-09-15 12:00:00
+Commit: 8f31c2a
 ```
 
-The runner automatically updates ticket status and relevant execution metadata.
-
-The user does not need to manually maintain execution state.
+### Queue Dynamics & Non-Destructive Parser
+- **Top-to-Bottom Execution:** The Runner picks the first ticket with `Status: pending`.
+- **Live Re-Reading:** Before starting any new ticket, the Runner re-parses `tickets.md`. The user can insert, re-order, or adjust pending tickets and gotchas while the Runner is working on an earlier ticket.
+- **Completed Relocation:** When a ticket passes Gatekeeper verification and is committed, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`, `Commit: <sha>`) and moves the entire block to the `## Completed Tickets` section at the bottom, keeping the active queue clean.
 
 ---
 
-## 4. Strict Sequential Execution
+## 4. Strict Sequential Execution & State Machine
 
-Only one ticket may be active at any time.
-
-Possible states:
+Only one ticket is active at any time. The runner never starts ticket $N+1$ until ticket $N$ is verified and committed.
 
 ```text
-PENDING
-  ↓
-PLANNING
-  ↓
-WORKING
-  ├── WAITING_FOR_USER
-  ├── HANDOFF_REQUIRED
-  └── PAUSE_REQUESTED
-  ↓
-TESTING
-  ↓
-SELF_REVIEW
-  ↓
-VERIFICATION
-  ↓
-COMPLETED
-  ↓
-NEXT TICKET
-```
-
-If the current ticket requires clarification, the entire queue pauses.
-
-The runner must not work on later tickets while waiting for the user's response.
-
----
-
-## 5. OpenCode Worker
-
-Python is the orchestrator; OpenCode is the engineer.
-
-OpenCode is responsible for:
-
-- Inspecting the repository
-- Understanding the ticket
-- Planning the implementation
-- Editing code
-- Running tests
-- Running builds
-- Debugging failures
-- Reviewing its own changes
-- Checking acceptance criteria
-- Requesting clarification when requirements are ambiguous
-
-The OpenCode worker must be explicitly instructed:
-
-- Work only on the assigned ticket.
-- Do not start another ticket.
-- Do not guess ambiguous requirements.
-- Ask the user when clarification is required.
-- Do not mark work complete prematurely.
-- Test and verify changes before completion.
-- Use the ticket handoff skill when a context handoff is required.
-
----
-
-## 6. Context Management
-
-The runner enforces a **150,000-token maximum working context budget**.
-
-Thresholds:
-
-```text
-120,000 tokens → warning
-135,000 tokens → automatic handoff
-150,000 tokens → hard ceiling
-```
-
-The configured limit is a runner-level maximum, not an assumption that every OpenCode model supports 150k context.
-
-The effective limit should be:
-
-```text
-min(configured_runner_limit, model_context_limit)
-```
-
-The runner should initiate handoff before reaching the hard limit so the agent has enough context to create a checkpoint safely.
-
----
-
-## 7. Ticket Handoff Skill
-
-Create a project-local OpenCode skill:
-
-```text
-.opencode/
-└── skills/
-    └── ticket-handoff/
-        └── SKILL.md
-```
-
-The skill creates a durable checkpoint when a ticket requires a fresh session.
-
-Checkpoint location:
-
-```text
-.agent/
-└── checkpoints/
-    └── T001/
-        ├── checkpoint.md
-        └── state.json
-```
-
-The checkpoint must contain:
-
-- Current ticket
-- Requirements
-- Acceptance criteria
-- Completed work
-- Files modified
-- Important implementation details
-- Architectural decisions
-- User decisions
-- Tests performed
-- Test results
-- Known failures
-- Known constraints
-- Remaining work
-- Exact next steps for the next session
-
-The handoff must not mark the ticket complete.
-
----
-
-## 8. Automatic Context Handoff
-
-When the runner detects the handoff threshold:
-
-```text
-OpenCode Session A
-        ↓
-~135k tokens
-        ↓
-Ticket Handoff Skill
-        ↓
-Checkpoint
-        ↓
-New OpenCode Session
-        ↓
-Load checkpoint
-        ↓
-Continue same ticket
-```
-
-A ticket may span multiple OpenCode sessions.
-
-The new session must inspect the checkpoint and current repository state before continuing.
-
-The user does not need to intervene for an automatic context handoff.
-
-Discord should receive a notification such as:
-
-```text
-T015 context handoff
-
-Session reached approximately 135k tokens.
-Checkpoint created.
-Starting a fresh OpenCode session and continuing T015.
+       [START / RESUME]
+              ↓
+           DOCTOR (Pre-flight health checks)
+              ↓
+           PENDING (Select top pending ticket)
+              ↓
+           PLANNING & WORKING (opencode run --format json)
+              ├── Token usage >= 135k → HANDOFF_REQUIRED → Checkpoint → Resume in Session B
+              ├── Worker needs input  → WAITING_FOR_USER → Terminal / Discord prompt
+              └── Worker requests pause → PAUSE_REQUESTED → Terminal / Discord alert
+              ↓
+       SIGNAL: .agent/signals/{ticket_id}_ready.json
+              ↓
+           GATEKEEPER (Independent Python test & build)
+              ├── PASS → COMMIT → UPDATE TICKETS.MD → ARCHIVE THREAD → NEXT TICKET
+              └── FAIL → Attempt < 3 → Send error log to Worker → Re-enter WORKING
+                       → Attempt = 3 → CIRCUIT_BREAKER_TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
 
 ---
 
-## 9. User-Initiated Pause / Agent Pause
+## 5. OpenCode Worker & Invocation Model
 
-The agent can request a pause when continuing safely requires user input.
+Python orchestrates OpenCode via CLI subprocesses with JSON event streaming:
 
-State:
-
-```text
-PAUSE_REQUESTED
+```bash
+opencode run --format json --session <session_id> --auto "<prompt>"
 ```
 
-Example reasons:
+### Advantages of Subprocess JSON Streaming (ADR 0001)
+1. **Precise Telemetry:** Captures every token metric, tool call (`read_file`, `edit_file`, `run_command`), and text chunk in real time.
+2. **Crash Resilience:** Subprocesses have distinct lifecycles; if a session crashes or needs termination, no orphaned background HTTP daemon state remains.
+3. **Deterministic Resumption:** Resuming an active ticket simply re-invokes `opencode run` with the existing `--session <session_id>`.
 
-- Manual verification is required
-- A potentially destructive operation needs approval
-- The agent cannot safely determine the intended behavior
-- A significant architectural decision is required
-
-The runner pauses and notifies the user through Discord.
+### Worker Prompt Context Injection
+To avoid context bloat and history pollution, the Runner injects a strictly scoped prompt for each ticket:
+1. **Ticket Slice:** Current ticket ID, title, requirements, acceptance criteria, and ticket-specific gotchas.
+2. **Global Gotchas:** The current `## Global Gotchas & Lessons Learned` block from `tickets.md`.
+3. **Operational Rules:**
+   - Modify only files required for this ticket.
+   - Run tests and builds locally during implementation to verify your own changes.
+   - If clarification is needed, write `.agent/questions/{ticket_id}.json` and exit; do not guess.
+   - When verified, write `.agent/signals/{ticket_id}_ready.json` and exit.
+   - If context limit warning is received, run `.agents/skills/handoff/SKILL.md` to save `.agent/checkpoints/{ticket_id}/handoff.md`.
 
 ---
 
-## 10. Clarification Workflow
+## 6. Context Management & Token Budgets
 
-When requirements are ambiguous, the agent must stop rather than guess.
-
-State:
+The runner supervises working memory using a 150,000-token budget:
 
 ```text
-WAITING_FOR_USER
+120,000 tokens → WARNING (Log notice; notify Discord thread if in Away mode)
+135,000 tokens → AUTOMATIC HANDOFF TRIGGER
+150,000 tokens → HARD CEILING (Subprocess terminated if handoff ignored)
 ```
 
-Discord message example:
+Effective limit formula:
+$$\text{effective\_limit} = \min(\text{configured\_runner\_limit}, \text{model\_context\_limit})$$
 
-```text
-T015 needs your decision.
+---
 
-I found two valid approaches:
+## 7. Context Handoff Protocol
 
-A. Reuse the existing dataset endpoint
-B. Create a new admin-specific endpoint
+When the 135k threshold is reached:
+1. **Prompted Handoff:** The Runner issues a high-priority prompt to the active session:
+   ```text
+   Context budget threshold reached (135k tokens).
+   Execute the handoff skill at .agents/skills/handoff/SKILL.md.
+   Save the handoff document directly to .agent/checkpoints/{ticket_id}/handoff.md.
+   Include modified files, architectural decisions, test status, and immediate next steps.
+   Then exit.
+   ```
+2. **Session Rollover:** The Runner verifies that `.agent/checkpoints/{ticket_id}/handoff.md` was created, closes Session A, and generates Session B.
+3. **Session B Resumption:**
+   ```bash
+   opencode run --format json --session <session_b_id> --auto \
+     "Resume Ticket {ticket_id}. First read your previous handoff at .agent/checkpoints/{ticket_id}/handoff.md and inspect git status, then continue implementation."
+   ```
+4. **Zero User Disruption:** The handoff occurs transparently in the background without user intervention.
 
-I will not continue until you choose.
+---
 
-Reply A or B.
+## 8. Isolation Layers: Preventing History & File Confusion
+
+To prevent confusion when dozens of tickets and files have been processed in earlier runs:
+
+1. **Working Tree Cleanliness:** Python verifies `git status --porcelain` is empty before starting any ticket, and commits all changes immediately after verification. Ticket $N+1$ always starts with a pristine working tree.
+2. **Context Isolation:** The Runner never feeds entire historical logs or past checkpoints to OpenCode. OpenCode only sees the active ticket slice and current global gotchas.
+3. **Thread Auto-Archiving:** Discord threads are automatically archived and locked upon ticket completion, keeping the active Discord channel focused on current work.
+4. **Scoped Runtime Files:** Checkpoints, signals, questions, and logs are segregated by ticket ID (`.agent/checkpoints/T001/`, `.agent/signals/T001_ready.json`).
+
+---
+
+## 9. Signal Protocol (Worker-to-Runner Communication)
+
+Rather than relying on brittle parsing of freeform LLM chat logs, the Runner listens for structured filesystem signals (ADR 0004).
+
+### Ready for Gatekeeper Signal: `.agent/signals/{ticket_id}_ready.json`
+```json
+{
+  "ticket_id": "T001",
+  "status": "ready_for_verification",
+  "modified_files": ["src/admin/Table.tsx", "src/admin/Table.test.tsx"],
+  "self_review_notes": "Added loading spinner; all 14 unit tests passed locally.",
+  "new_gotchas": [
+    "Table refetch event fires twice if query key is not memoized."
+  ],
+  "timestamp": "2026-09-15T14:30:00Z"
+}
 ```
 
-The user's Discord response resumes the same ticket.
+### Clarification Question Signal: `.agent/questions/{ticket_id}.json`
+```json
+{
+  "ticket_id": "T001",
+  "question": "Should the verified datasets table display a skeleton placeholder or a centered spinner during fetch?",
+  "type": "choice",
+  "options": [
+    "A: Skeleton placeholder rows",
+    "B: Centered loading spinner"
+  ],
+  "status": "pending",
+  "answer": null,
+  "created_at": "2026-09-15T14:15:00Z"
+}
+```
 
-The runner must preserve the question and answer in persistent state.
+When an answer is supplied (via terminal or Discord), the Runner writes `"status": "answered"` and `"answer": "A"`, then prompts OpenCode:
+```bash
+opencode run --format json --session <id> --auto "User answered: A: Skeleton placeholder rows. Proceed with implementation."
+```
+
+---
+
+## 10. Hybrid Presence Modes (`nearby` vs `away`)
+
+The Runner eliminates alert fatigue through a dual presence model (ADR 0003):
+
+| Feature | Nearby Mode (At Desk) | Away Mode (Remote) |
+| :--- | :--- | :--- |
+| **Notification Target** | Local Terminal Console | Discord Channel & Threads |
+| **Question Prompts** | Interactive Terminal CLI | Interactive Discord Thread Message |
+| **Discord Notifications** | Silenced (Milestones only) | Full alerts (warnings, handoffs, questions) |
+| **Idle Escalation** | Escalates to Away after 3m | N/A (Already in Away mode) |
+
+### Mode Controls
+- **CLI Startup:** `python ticket_runner.py start --mode nearby` (default) or `--mode away`.
+- **Terminal Hotkeys:** Press `[m]` to toggle immediately between Nearby and Away.
+- **Discord Commands:** Type `/mode away` or `/mode nearby` in Discord to switch remote state.
+- **Inactivity Escalation:** If a question sits unanswered at the terminal for 3 minutes in Nearby mode, the Runner automatically switches to Away mode and notifies Discord with a high-priority ping.
 
 ---
 
 ## 11. Discord Integration
 
-Discord serves as the remote communication interface.
+The Discord bot runs directly in-process using `discord.py` within the asyncio event loop.
 
-It must support:
-
-### Notifications
-
-- Ticket started
-- Ticket completed
-- Context handoff
-- Agent pause
-- Question requiring user input
-- Runner errors
-- Queue paused
-- Queue completed
-
-### User responses
-
-The user can answer agent questions directly in Discord.
-
-Example:
-
-```text
-Runner:
-T005 needs clarification.
-Should this use the existing endpoint or a new endpoint?
-
-User:
-existing
-```
-
-The runner associates the response with the active ticket and resumes execution.
+### Thread-per-Ticket Lifecycle
+1. **Thread Creation:** When `T001` starts, the bot posts in `#ticket-runner`:
+   > 🚀 **Starting T001 — Fix admin loading state**
+   and opens a thread `T001-fix-admin-loading-state`.
+2. **Scoped Thread Stream:** Token warnings (120k), context handoff notices, and Gatekeeper diagnostic logs are posted directly inside the thread.
+3. **Q&A Interaction:** When OpenCode writes a question signal, the bot posts the question and choices in the thread:
+   > ❓ **T001 requires clarification:**
+   > A: Skeleton placeholder rows
+   > B: Centered loading spinner
+   > *Reply with `A` or `B` to resume.*
+4. **Resolution & Archiving:** Upon ticket completion, the bot posts the final commit SHA and summary, then archives and locks the thread.
 
 ---
 
-## 12. Testing and Verification
+## 12. Independent Gatekeeper Verification & Circuit Breaker
 
-A ticket cannot be considered complete merely because the agent believes implementation is finished.
+OpenCode cannot mark a ticket completed. The Python Runner acts as an authoritative Gatekeeper (ADR 0002).
 
-Required process:
-
+### Verification Workflow
 ```text
-Implementation
-    ↓
-Run tests
-    ↓
-Run build
-    ↓
-Investigate failures
-    ↓
-Fix failures
-    ↓
-Run tests/build again
-    ↓
-Inspect git diff
-    ↓
-Self-review
-    ↓
-Check acceptance criteria
-    ↓
-Final verification
+Worker emits {ticket_id}_ready.json
+                 ↓
+Gatekeeper executes configured build_cmd (e.g. npm run build)
+                 ↓
+Gatekeeper executes configured test_cmd (e.g. npm test)
+                 ↓
+        Did all commands exit 0?
+             /            \
+          YES              NO
+          /                  \
+Pass Gatekeeper        Attempt < 3?
+       ↓                /          \
+Stage & Commit       YES            NO (Circuit Breaker Tripped)
+Update tickets.md     ↓                      ↓
+Proceed to next   Send error log       Pause Queue (PAUSE_REQUESTED)
+                  to Worker session    Alert Terminal & Discord
+                  Retry implementation Offer: [R]etry, [S]kip, [A]bort
 ```
 
-If verification fails:
-
-```text
-FAIL
- ↓
-Diagnose
- ↓
-Fix
- ↓
-Verify again
-```
-
-Only a successful verification allows the ticket to proceed to completion.
+### Circuit Breaker Actions
+When Attempt 3 fails, the user can respond via Terminal or Discord:
+- `[R]etry [hint]`: Reset the circuit breaker and pass an optional human hint to the agent.
+- `[S]kip`: Stash/abandon uncommitted edits, record the failure in `tickets.md`, and advance to the next ticket.
+- `[A]bort`: Gracefully shut down the runner to permit manual debugging on the PC.
 
 ---
 
-## 13. Git Strategy
+## 13. Git Strategy & Safety Guardrails
 
-The runner works on one dedicated agent branch:
+Autonomous development requires strict git safety bounds:
 
-```text
-main
-  │
-  └── agent/ticket-runner
-```
+### Dedicated Branch
+All automated work occurs on `agent/ticket-runner`. The runner checks this branch out on startup (creating it from `main` or the current HEAD if it does not exist). `main` is never modified directly.
 
-All tickets are processed sequentially on this branch.
+### Authoritative Python Commits
+When Gatekeeper verification passes:
+1. Python checks `git status --porcelain` to verify the modified files match expectations.
+2. Python stages files: `git add .`
+3. Python commits with a standardized message:
+   ```text
+   feat(T001): Fix admin loading state
 
-`main` is never directly modified by the autonomous runner.
+   - Loading spinner displays during async fetch
+   - Verified via Gatekeeper (tests: PASS, build: PASS)
+   - Completed by OpenCode Worker
+   ```
+4. Commit SHA is extracted and written to `tickets.md` and `state.json`.
 
-After a ticket passes verification, OpenCode automatically creates a commit.
-
-Recommended commit flow:
-
-```text
-Implement
-    ↓
-Test
-    ↓
-Self-review
-    ↓
-Verification
-    ↓
-Commit
-    ↓
-Update ticket status
-```
-
-The runner should not automatically push to the remote repository in v1.
-
----
-
-## 14. Git and System Safety
-
-Normal development operations can run automatically.
-
-Recommended permissions:
-
-```text
-Read files              ALLOW
-Edit project files      ALLOW
-Run tests               ALLOW
-Run builds              ALLOW
-Git status              ALLOW
-Git diff                ALLOW
-Normal commits          ALLOW
-
-Git push                DENY
-Force push              DENY
-Database reset          ASK
-Destructive DB actions  ASK
-Dangerous migrations    ASK
-Security/auth changes   ASK
-Other destructive ops  ASK
-```
-
-The goal is unattended development without unrestricted destructive access.
+### Pre-Push Git Hook Guardrail (ADR 0005)
+To physically prevent accidental `git push` operations by LLM tool calls:
+- The Runner installs `.git/hooks/pre-push` during startup if not present:
+  ```bash
+  #!/bin/sh
+  current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+  if [ "$current_branch" = "agent/ticket-runner" ]; then
+    echo "ERROR: Direct git push is blocked on agent/ticket-runner branch." >&2
+    exit 1
+  fi
+  exit 0
+  ```
 
 ---
 
-## 15. Persistent Runner State
+## 14. Pre-Flight Health Check ("Doctor")
 
-The runner must survive interruptions and resume safely.
+When `python ticket_runner.py start` executes, it runs a pre-flight Doctor check before beginning queue operations:
 
-Suggested structure:
+1. **CLI Availability:** Verifies `opencode` binary exists and runs.
+2. **Git Workspace Cleanliness:** Ensures git repository is initialized and the working tree is clean.
+3. **Queue Validation:** Validates `tickets.md` exists and contains at least one pending ticket.
+4. **Config Verification:** Validates `config.yaml` syntax and verification commands.
+5. **Guardrail Hook:** Verifies `.git/hooks/pre-push` is installed and executable.
+6. **Discord Connectivity:** If `discord.enabled: true`, verifies bot credentials and channel accessibility.
 
-```text
-.agent/
-├── state.json
-├── checkpoints/
-│   ├── T001/
-│   │   ├── checkpoint.md
-│   │   └── state.json
-│   └── T002/
-├── questions/
-│   └── T003.md
-└── logs/
-    ├── T001.jsonl
-    └── T002.jsonl
-```
-
-`state.json` should record at minimum:
-
-- Active ticket
-- Ticket status
-- OpenCode session ID
-- Current branch
-- Context/token state
-- Current checkpoint
-- Pending question
-- Last successful operation
-- Runner state
-
-If the PC crashes or the runner stops unexpectedly, restarting the runner should recover the active ticket instead of restarting the entire queue.
+If any check fails, the Doctor prints clear diagnostic feedback and exits without modifying workspace state.
 
 ---
 
-## 16. Automatic Ticket Updates
+## 15. Persistent Runner State (`.agent/state.json`)
 
-The runner automatically updates `tickets.md`.
+The Runner state is continuously persisted to survive unexpected reboots or power outages:
 
-For example:
-
-```markdown
-## T001 — Fix admin loading state
-
-Status: completed
-
-Completed:
-2026-09-15 14:32
-
-Commit:
-8f31c2a
+```json
+{
+  "active_ticket_id": "T001",
+  "status": "WORKING",
+  "opencode_session_id": "ses_01J8ABC123...",
+  "presence_mode": "nearby",
+  "verification_attempts": 0,
+  "tokens": {
+    "current": 64200,
+    "warning_sent": false
+  },
+  "branch": "agent/ticket-runner",
+  "started_at": "2026-09-15T14:00:00Z",
+  "last_checkpoint": ".agent/checkpoints/T001/handoff.md",
+  "last_updated": "2026-09-15T14:32:10Z"
+}
 ```
 
-The runner should preserve the original ticket requirements and acceptance criteria while updating execution metadata.
+### Crash Recovery Flow
+1. On startup, Runner inspects `.agent/state.json`.
+2. If an unfinished ticket was in `WORKING` or `PLANNING`:
+   - Inspects `git status` for uncommitted edits.
+   - Attempts to reconnect to `opencode_session_id`.
+   - If the session is invalid or cannot be resumed, inspects the latest checkpoint in `.agent/checkpoints/{ticket_id}/` and resumes in a fresh session.
 
 ---
 
-## 17. Runner Commands
+## 16. Queue Completion & Lifecycle
 
-The initial interface should be simple.
-
-Primary command:
-
-```bash
-python ticket_runner.py start
-```
-
-Useful future commands:
-
-```bash
-python ticket_runner.py status
-python ticket_runner.py pause
-python ticket_runner.py resume
-python ticket_runner.py stop
-python ticket_runner.py recover
-```
-
-The runner should display its current state locally while also reporting important events to Discord.
+When all pending tickets in `tickets.md` are marked completed:
+- The runner emits a completion notification to Discord and terminal:
+  > 🎉 **Queue Completed! 12/12 tickets verified and committed.**
+- Depending on the configured `queue_completion` setting:
+  - **`standby` (Default):** The Runner remains running in an idle watch loop, monitoring `tickets.md` for newly appended pending tickets. If the user appends a ticket, the Runner resumes automatically.
+  - **`terminate`:** The Runner prints a summary and cleanly exits the process.
 
 ---
 
-## 18. Initial Project Structure
+## 17. Configuration Specification (`config.yaml`)
 
-Recommended structure:
+```yaml
+project:
+  name: "ticket-runner"
+  branch: "agent/ticket-runner"
+  base_branch: "main"
+
+verification:
+  test_cmd: "pytest"
+  build_cmd: ""
+  max_retries: 3
+  timeout_seconds: 300
+
+tokens:
+  warn: 120000
+  handoff: 135000
+  ceiling: 150000
+
+presence:
+  default_mode: "nearby"       # nearby | away
+  idle_escalation_minutes: 3   # escalate prompt to Discord if unprompted
+
+discord:
+  enabled: true
+  token_env: "DISCORD_BOT_TOKEN"
+  channel_id: ""               # Target channel ID for ticket threads
+
+lifecycle:
+  queue_completion: "standby"  # standby | terminate
+
+git:
+  auto_push: false
+  commit_prefix: "feat"
+  enforce_pre_push_hook: true
+```
+
+---
+
+## 18. Project Directory Structure
 
 ```text
 ticket-runner/
-├── ticket_runner.py
-├── config.yaml
-├── requirements.txt
+├── ticket_runner.py              # CLI entry point (start, status, pause, doctor)
+├── config.yaml                   # Runner configuration
+├── requirements.txt              # Python dependencies (discord.py, rich, pyyaml)
+├── tickets.md                    # Active queue, gotchas, completed tickets
 │
 ├── runner/
-│   ├── queue.py
-│   ├── state.py
-│   ├── opencode.py
-│   ├── context.py
-│   ├── handoff.py
-│   ├── git.py
-│   ├── verification.py
-│   └── recovery.py
+│   ├── __init__.py
+│   ├── queue.py                  # Markdown AST queue parser & updater
+│   ├── state.py                  # State persistence (.agent/state.json)
+│   ├── opencode.py               # Subprocess JSON stream executor & telemetry
+│   ├── handoff.py                # Checkpoint manager & handoff triggers
+│   ├── gatekeeper.py             # Independent test/build verification & circuit breaker
+│   ├── presence.py               # Nearby vs Away mode coordinator
+│   ├── git_ops.py                # Branch management, commits, pre-push hook
+│   └── doctor.py                 # Pre-flight environment & dependency validator
 │
 ├── discord/
-│   ├── bot.py
-│   ├── questions.py
-│   └── notifications.py
+│   ├── __init__.py
+│   ├── bot.py                    # Async Discord client & event loop
+│   ├── threads.py                # Thread-per-ticket lifecycle manager
+│   └── notifications.py          # Formatted Discord embed alerts
 │
-├── .agent/
-│   ├── state.json
-│   ├── checkpoints/
-│   ├── questions/
-│   └── logs/
+├── ui/
+│   ├── __init__.py
+│   └── terminal.py               # Rich terminal dashboard with interactive hotkeys
 │
-└── .opencode/
-    └── skills/
-        └── ticket-handoff/
-            └── SKILL.md
+├── .agent/                       # Runtime directory (git-ignored)
+│   ├── state.json                # Live execution state
+│   ├── checkpoints/              # Checkpoint handoff documents
+│   │   └── T001/
+│   │       └── handoff.md
+│   ├── signals/                  # Worker-to-Runner completion signals
+│   │   └── T001_ready.json
+│   ├── questions/                # Worker-to-Runner clarification questions
+│   │   └── T001.json
+│   └── logs/                     # JSON stream telemetry logs
+│
+├── .agents/                      # Shared agent skills
+│   └── skills/
+│       └── handoff/
+│           └── SKILL.md          # Standardized handoff skill
+│
+└── docs/
+    └── adr/
+        ├── 0001-opencode-json-streaming.md
+        ├── 0002-independent-gatekeeper-verification.md
+        ├── 0003-hybrid-presence-mode.md
+        ├── 0004-explicit-signal-files.md
+        └── 0005-local-pre-push-git-hook.md
 ```
-
-The exact module boundaries can be adjusted during implementation, but the responsibilities should remain separated.
 
 ---
 
-## 19. V1 Scope
-
-V1 should focus exclusively on making the sequential autonomous workflow reliable.
-
-### Included
-
-- Python ticket runner
-- `tickets.md` queue
-- Strict sequential execution
-- OpenCode integration
-- 150k context policy
-- Automatic context handoff
-- Handoff skill
-- Persistent checkpoints
-- Discord notifications
-- Discord question/answer flow
-- Agent pause functionality
-- Testing/build verification
-- Self-review
-- Automatic commits
-- Automatic ticket status updates
-- Crash recovery
-- Git safety controls
-- Local logs
-
-### Not included initially
-
-- Multiple simultaneous agents
-- Antigravity integration
-- Automatic PR creation
-- Automatic merging
-- Cloud execution
-- Web dashboard
-- Multiple repositories
-- Parallel ticket queues
-- Automatic modification of ticket requirements
-- Automatic push to `main`
-
-These can be added after the core runner is reliable.
-
----
-
-## 20. Target User Experience
-
-The final v1 experience should be:
+## 19. Target User Experience
 
 ```text
-User:
-python ticket_runner.py start
+$ python ticket_runner.py start
 
-Runner:
-Queue loaded: 12 tickets
-Starting T001...
+[Doctor] Verifying environment...
+  ✓ opencode CLI found
+  ✓ git repository clean on agent/ticket-runner
+  ✓ pre-push hook active
+  ✓ tickets.md parsed: 3 pending tickets
+  ✓ Discord bot connected (standby in Nearby mode)
 
-        [User leaves PC]
+╔════════════════════════════════════════════════════════════════════╗
+║ TICKET RUNNER — NEARBY MODE                                        ║
+║ Active Ticket: T001 — Fix admin loading state                      ║
+║ State: WORKING  |  Tokens: [████░░░░░░] 48,200 / 135,000           ║
+║ Hotkeys: [p] Pause  [m] Toggle Away  [q] Quit                      ║
+╚════════════════════════════════════════════════════════════════════╝
 
-Runner:
-✓ T001 completed
-✓ T002 completed
-✓ T003 completed
-↻ T004 handoff completed
-✓ T004 completed
-⚠ T005 requires your decision
-⏸ Queue paused
+[Worker] Modifying src/admin/Table.tsx...
+[Worker] Emitted signal: .agent/signals/T001_ready.json
+[Gatekeeper] Running build_cmd: npm run build (PASS)
+[Gatekeeper] Running test_cmd: npm test (PASS)
+[Git] Committed feat(T001): Fix admin loading state (sha: 7a82c19)
+[Queue] T001 moved to Completed Tickets in tickets.md
+
+Starting T002...
+[User steps away from PC]
+[Runner] 3 minutes idle on question -> Switched to AWAY mode -> Pinged Discord thread
+[User answers via Discord on phone] -> Resuming T002...
 ```
-
-The user answers from Discord:
-
-```text
-A
-```
-
-Runner:
-
-```text
-✓ Answer received
-▶ Resuming T005
-```
-
-The runner continues:
-
-```text
-✓ T005 completed
-✓ T006 completed
-...
-```
-
-The user ultimately returns to a dedicated agent branch containing sequentially implemented, tested, self-reviewed, and committed tickets, with any decisions or unresolved issues clearly surfaced through Discord.
