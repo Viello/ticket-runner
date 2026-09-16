@@ -1,5 +1,6 @@
 # T021 — Handoff coordinator A: threshold reaction and single handoff cycle
-Status: pending
+Status: completed
+Completed: 2026-09-16T13:38:59Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 

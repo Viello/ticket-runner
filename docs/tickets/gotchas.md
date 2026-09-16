@@ -198,3 +198,14 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 
 
+### Checkpoint Validation After Process Termination
+- **Problem**: The worker process may write or flush the checkpoint document only as the instruction run terminates; inspecting the file while the process is still running risks validating partial writes or triggering false missing/stale failures.
+- **Solution**: Await full process exit via supervisor.run() before checking checkpoint existence or testing filesystem timestamps.
+
+### Filesystem Timestamp Resolution Slack for Context Handoff
+- **Problem**: Filesystem mtime precision can round to the nearest whole second depending on the underlying OS and volume format, which can cause a checkpoint created in the same second as the handoff request to appear timestamped prior to handoff_requested_at.
+- **Solution**: Apply a module-scoped 2.0-second clock slack window (CLOCK_SLACK_SECONDS = 2.0) in freshness checks (mtime >= handoff_requested_at - 2.0) and compare strictly using wall-clock epoch timestamps (time.time()).
+
+### Stream-Learned Session IDs for Resumed Invocations
+- **Problem**: Invoking opencode run --session with an unlearned or synthetic session ID immediately exits with code 1 (Session not found); inventing synthetic session IDs for resumed handoff runs causes hard process failures.
+- **Solution**: Only pass session IDs that were actively decoded from the preceding stream sessionID events and strictly validated against the ^ses_[A-Za-z0-9]+$ allowlist.

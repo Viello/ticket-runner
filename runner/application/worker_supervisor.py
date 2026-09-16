@@ -129,6 +129,22 @@ class WorkerSupervisor:
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
 
+    @property
+    def runtime_paths(self) -> RuntimePaths:
+        """Runtime paths value object used by this supervisor."""
+        return self._runtime_paths
+
+    @property
+    def on_budget_action(self) -> Callable[[BudgetAction, int], None] | None:
+        """Callback invoked when BudgetMonitor observes a budget threshold action."""
+        return self._on_budget_action
+
+    @on_budget_action.setter
+    def on_budget_action(
+        self, callback: Callable[[BudgetAction, int], None] | None
+    ) -> None:
+        self._on_budget_action = callback
+
     def request_kill(self, reason: RunTerminationReason | str) -> _AwaitableNone:
         """External interrupt API to stop stream reading and run the termination ladder."""
         if isinstance(reason, str) and not isinstance(reason, RunTerminationReason):
