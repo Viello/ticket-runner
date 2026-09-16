@@ -52,3 +52,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Inferring `docs/specs/<parent-directory-slug>.md` breaks for relocated tickets under `completed/`, resolving to the nonsensical `docs/specs/completed.md`.
 - **Solution**: When the `Spec:` header is omitted and the parent directory is the archive folder (`completed/`), infer the spec slug from the grandparent directory instead.
 
+### Numeric Sorting of Ticket Identifiers
+- **Problem**: Lexicographical string sorting of ticket identifiers causes higher-numbered tickets like `T010` to order before `T002` or `T009` when padding or digit counts vary, violating queue sequentiality.
+- **Solution**: Extract the numeric sequence from the ticket identifier (`int(re.search(r"\d+", id).group())`) and sort numerically so that `T009` strictly precedes `T010`.
+
+### Archive Folder Pruning During Queue Scans
+- **Problem**: Recursive scans (`rglob`) inadvertently traverse into `completed/` subfolders and resurrect archived tickets as pending.
+- **Solution**: Restrict scans to direct children of spec directories (`f.is_file()`), prune any folder named `completed` or starting with `.`, and skip runtime artifacts (`.queue.lock`, `*.tmp`, `gotchas.md`).
+
+### Ticket Header Tolerance for Concise Format
+- **Problem**: Minimal ticket headers such as `# T001` authored during pre-flight checks fail strict `# T<NNN> — <Title>` regex patterns.
+- **Solution**: Make the title separator and text optional in the header pattern (`HEADER_PATTERN`), falling back to the ticket ID as the title when omitted.
+

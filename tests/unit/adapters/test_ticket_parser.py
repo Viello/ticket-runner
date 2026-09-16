@@ -178,3 +178,11 @@ def test_parse_reports_file_path_on_format_error(tmp_path: Path) -> None:
 
     with pytest.raises(TicketFormatError, match="T006-ticket-entity-parser-and-serializer.md"):
         TicketMarkdownParser().parse(path)
+
+
+def test_parse_concise_header_without_title_separator(tmp_path: Path) -> None:
+    path = _write_ticket(tmp_path, "# T001\nStatus: pending\n", filename="T001-test.md")
+    ticket = TicketMarkdownParser().parse(path)
+    assert ticket.id == "T001"
+    assert ticket.title == "T001"
+    assert ticket.status is TicketStatus.PENDING

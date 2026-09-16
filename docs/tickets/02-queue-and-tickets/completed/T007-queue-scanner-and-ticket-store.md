@@ -1,5 +1,6 @@
 # T007 — Queue directory scanner and TicketRepository store
-Status: pending
+Status: completed
+Completed: 2026-09-16T05:55:00Z
 Spec: docs/specs/02-queue-and-tickets.md
 
 ### Requirements

@@ -10,7 +10,7 @@ from runner.domain.ticket import Ticket, TicketStatus, parse_ticket_status
 
 ARCHIVED_DIRECTORY_NAME = "completed"
 
-HEADER_PATTERN = re.compile(r"^#\s*(?P<id>T\d{3,})\s*[—–-]\s*(?P<title>\S.*?)\s*$")
+HEADER_PATTERN = re.compile(r"^#\s*(?P<id>T\d{3,})(?:\s*[—–-]\s*(?P<title>\S.*?))?\s*$")
 METADATA_PATTERN = re.compile(r"^(?P<key>[A-Za-z][A-Za-z0-9 _-]*):\s*(?P<value>.*?)\s*$")
 SECTION_PATTERN = re.compile(r"^###\s+(?P<name>.+?)\s*$")
 BULLET_PATTERN = re.compile(r"^\s*-\s+(?P<text>\S.*?)\s*$")
@@ -74,7 +74,9 @@ class TicketMarkdownParser:
                 f"Malformed ticket header in '{path}': expected '# T<NNN> — <Title>', "
                 f"got: {line.strip()!r}"
             )
-        return match.group("id"), match.group("title")
+        ticket_id = match.group("id")
+        title = match.group("title") or ticket_id
+        return ticket_id, title
 
     def _parse_metadata(self, lines: list[str], title_index: int) -> tuple[dict[str, str], int]:
         metadata: dict[str, str] = {}
