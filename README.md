@@ -218,10 +218,9 @@ Tickets live under `docs/tickets/<spec-slug>/` as individual markdown files.
 docs/tickets/
 ├── .queue.lock                       # Lockfile held during execution
 ├── gotchas.md                        # Global Gotchas accumulated across runs
-└── 01-doctor-and-git-ops/            # Grouped by functional spec
-    ├── T001-project-packaging.md     # Active pending ticket
-    ├── T002-pre-push-hook.md         # Active pending ticket
-    └── completed/                    # Verified & committed tickets
+└── 04-signal-protocol-and-gatekeeper/ # Grouped by functional spec
+    ├── T025-example-ticket.md           # Active pending ticket
+    └── completed/                        # Verified & committed tickets
         └── T000-setup.md
 ```
 
@@ -252,7 +251,7 @@ Spec: docs/specs/01-admin-panel.md
 
 - **Alphanumeric Ordering:** Tickets are evaluated in alphanumeric order (`T001`, `T002`, ...).
 - **Lockfile & Live Editing:** When running, the Runner holds `.queue.lock`. Pressing `[p]` (Pause) releases the lock, allowing you to edit requirements, add new tickets, or reprioritize the queue before resuming.
-- **Completed Relocation:** When a ticket passes Gatekeeper checks and is committed, the Runner updates the ticket header (`Status: completed`, `Commit: <sha>`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`.
+- **Completed Relocation:** When a ticket passes Gatekeeper checks and is committed, the Runner updates the ticket header (`Status: completed`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`. The commit SHA is written to untracked `.agent/state.json` only — never embedded in git-tracked ticket frontmatter (ADR 0012).
 
 ---
 
@@ -288,8 +287,8 @@ Spec: docs/specs/01-admin-panel.md
 For deeper architectural and design details, consult the following documentation:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Concentric Clean Architecture layers, ports, adapters, and module responsibilities.
-- [ticket-runner-plan.md](ticket-runner-plan.md) — Comprehensive design specification and requirements.
+- [ticket-runner-plan.md](ticket-runner-plan.md) — Historical design specification; remaining sections cover Signals, Presence, Discord, State, and TUI (specs 4–6).
 - [CONTEXT.md](CONTEXT.md) — Domain vocabulary, concepts, and canonical terminology.
 - [AGENTS.md](AGENTS.md) — Operating rules, invariants, and agent pair-programming instructions.
-- [docs/specs/](docs/specs/) — Functional specifications covering Doctor & Git Ops, Queue & Tickets, Worker Orchestration, Signal Protocols, Presence & Discord, and State Persistence & UI.
-- [docs/adr/](docs/adr/) — Architectural Decision Records.
+- [docs/specs/](docs/specs/) — Active functional specifications: Signal Protocol (04), Presence & Discord (05), State Persistence & UI (06). Specs 01–03 archived to `.agent/archive/`.
+- [docs/adr/](docs/adr/) — Architectural Decision Records (ADRs 0001–0015).
