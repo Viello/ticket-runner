@@ -242,3 +242,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Clean-slate archival removes completed specs (e.g. `docs/specs/03-worker-orchestration-and-handoff.md`), but unit tests that hard-code a real spec path (`test_extract_excerpt_from_real_spec_03`) then fail `assert SPEC_03_PATH.is_file()`, leaving the full suite red on an otherwise untouched branch and blocking tickets whose acceptance criteria require a green suite.
 - **Solution**: Repoint such tests at the active spec under `docs/specs/` and assert only on stable opening sentences of its `## Problem Statement` / `## Solution` sections so prose rewrites do not break the oracle.
 
+### Trailing Z Timestamp Normalization
+- **Problem**: `datetime.fromisoformat` rejects trailing `Z` UTC timestamps before Python 3.11 and accepts them natively from 3.11 onward, so whether `value.replace("Z", "+00:00")` is required depends on the interpreter and tests can silently pass on either side of the floor.
+- **Solution**: Normalize `Z` to `+00:00` before `fromisoformat` in signal parsing as the version-independent idiom, and pin the UTC offset with an explicit test assertion.
+
+### RecursionError from Deeply Nested Untrusted JSON
+- **Problem**: `json.loads` raises `RecursionError`, not `JSONDecodeError`, when untrusted payloads nest arrays or objects beyond the interpreter recursion limit (verified at 20,000 levels on Python 3.14, while 5,000 parsed fine), so a strict parser catching only `JSONDecodeError` leaks a non-domain exception from Worker-authored input.
+- **Solution**: Catch `RecursionError` alongside `json.JSONDecodeError` in the signal decoder and re-raise it as `SignalFormatError` with a bounded "payload nesting is too deep" diagnostic.

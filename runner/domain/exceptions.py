@@ -31,6 +31,11 @@ class SpecFormatError(TicketFormatError):
     pass
 
 
+class SignalFormatError(TicketRunnerError):
+    """Raised when a signal file cannot be parsed or fails strict validation."""
+    pass
+
+
 class CommandNotFoundError(TicketRunnerError):
     """Raised when an executable command cannot be resolved or found."""
 
