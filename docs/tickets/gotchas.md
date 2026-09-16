@@ -217,3 +217,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Deterministic Checkpoint Generation in Async Subprocess Fakes
 - **Problem**: Using `asyncio.sleep(0.01)` to pause execution between concurrent tasks to allow mock checkpoint authoring causes test suite race conditions and flaky failures under high CPU load.
 - **Solution**: Hook process completion deterministically in `FakeProcessHandle.wait()`, authoring test artifacts synchronously upon process exit before returning the mock exit code.
+
+### Supervisor Budget Monitor State Across Chained Sessions
+- **Problem**: In multi-session handoff chains, reusing a `WorkerSupervisor` without resetting its internal `BudgetMonitor` leaves internal latch flags (`_handoff_sent = True`) active from the first session, preventing budget threshold crossings and handoff requests from triggering in subsequent chained sessions.
+- **Solution**: Explicitly reset the supervisor's budget monitor (`supervisor.reset_budget_monitor()`) between chained sessions while preserving its configured thresholds and model limits.
+
+### Sequential Process Handle Registration in Subprocess Fakes
+- **Problem**: In multi-cycle test suites where consecutive sessions execute the exact same command line (e.g. `opencode run --format json --auto <resume_prompt>`), registering mock spawn handles in a standard dictionary keys by command arguments, causing later cycles to overwrite earlier cycle handles or re-execute the same exhausted handle.
+- **Solution**: Enhance command runner test fakes to support sequential queue registration (`register_spawn_sequence`), popping and yielding distinct process handles for each successive spawn matching the command.
+

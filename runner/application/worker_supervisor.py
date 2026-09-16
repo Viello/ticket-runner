@@ -161,6 +161,13 @@ class WorkerSupervisor:
     ) -> None:
         self._on_budget_action = callback
 
+    def reset_budget_monitor(self) -> None:
+        """Reset the budget monitor for a fresh worker session."""
+        self._budget_monitor = BudgetMonitor(
+            config=self._budget_monitor.config,
+            model_limit=getattr(self._budget_monitor, "_model_limit", None),
+        )
+
     def request_kill(self, reason: RunTerminationReason | str) -> _AwaitableNone:
         """External interrupt API to stop stream reading and run the termination ladder."""
         if isinstance(reason, str) and not isinstance(reason, RunTerminationReason):

@@ -1,5 +1,6 @@
 # T023 — Handoff coordinator B: chain loop and cap
-Status: pending
+Status: completed
+Completed: 2026-09-16T14:03:00Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 

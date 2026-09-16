@@ -14,6 +14,7 @@ from runner.application.handoff_coordinator import (
     ESCALATED,
     EscalationNotice,
     HandoffCoordinator,
+    MAX_CONSECUTIVE_HANDOFFS,
     SingleCycleResult,
     SingleCycleStatus,
     WorkerRunResult,
@@ -1054,3 +1055,637 @@ def test_security_default_recovery_confirmation_safe_on_closed_stdin(monkeypatch
 
     monkeypatch.setattr("builtins.input", _raise_interrupt)
     assert default_recovery_confirmation("T022") is False
+
+
+# ==============================================================================
+# --- T023: Handoff Chain Loop, Cap, Notices, and Public Result Contract ---
+# ==============================================================================
+
+
+def test_handoff_chain_loop_a_to_b_to_c_finishes_ready(tmp_path: Path) -> None:
+    """A scripted A->B->C chain validates a fresh checkpoint per cycle and finishes READY.
+
+    Supervisor records the exact spawn sequence and session_ids has 3 entries.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T023")
+    checkpoint_file = runtime_paths.checkpoint_path("T023")
+
+    session_a_id = "ses_chainA"
+    session_b_id = "ses_chainB"
+    session_c_id = "ses_chainC"
+
+    simulated_time = [1000.0]
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        clock=lambda: simulated_time[0],
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    # Session A: runs, crosses 135k
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_a_id,
+            "part": {"tokens": {"total": 135000}},
+        }) + "\n",
+    ]
+
+    # Handoff A: writes checkpoint at t=1001.0
+    class _HandoffAHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_a_id,
+                        "part": {"tokens": {"total": 136000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T023")
+            checkpoint_file.write_text("# Checkpoint Cycle 1\n- Handing off from A", encoding="utf-8")
+            os.utime(checkpoint_file, (1001.0, 1001.0))
+            return 0
+
+    # Session B: runs, crosses 135k at simulated time 1010.0
+    session_b_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_b_id,
+            "part": {"tokens": {"total": 135200}},
+        }) + "\n",
+    ]
+
+    # Handoff B: writes fresh checkpoint at t=1011.0
+    class _HandoffBHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_b_id,
+                        "part": {"tokens": {"total": 137000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T023")
+            checkpoint_file.write_text("# Checkpoint Cycle 2\n- Handing off from B", encoding="utf-8")
+            os.utime(checkpoint_file, (1011.0, 1011.0))
+            return 0
+
+    # Session C: runs, writes ready signal and finishes
+    class _SessionCHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_c_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_c_id,
+                        "part": {"tokens": {"total": 25000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path("T023")
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt],
+        _HandoffAHandle(),
+    )
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        stdout_lines=session_b_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_b_id, "--auto", handoff_prompt],
+        _HandoffBHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _SessionCHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert result == "READY"
+    assert result.is_ready is True
+    assert result.session_id == session_a_id
+    assert result.resumed_session_id == session_c_id
+    assert result.session_ids == (session_a_id, session_b_id, session_c_id)
+    assert len(result.session_ids) == 3
+    assert result.handoffs == 2
+    assert result.ready_signal_present is True
+    assert result.occupancy == 137000
+    assert len(result.run_results) == 5
+
+    # Check fake runner recorded exactly 5 spawns in order
+    assert len(fake_runner.spawns) == 5
+    assert fake_runner.spawns[0] == ["opencode", "run", "--format", "json", "--auto", initial_prompt]
+    assert fake_runner.spawns[1] == ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt]
+    assert fake_runner.spawns[2] == ["opencode", "run", "--format", "json", "--auto", resume_prompt]
+    assert fake_runner.spawns[3] == ["opencode", "run", "--format", "json", "--session", session_b_id, "--auto", handoff_prompt]
+    assert fake_runner.spawns[4] == ["opencode", "run", "--format", "json", "--auto", resume_prompt]
+
+    # Verify log paths are distinct across sessions
+    assert len(result.jsonl_paths) == 3
+    assert len(set(result.jsonl_paths)) == 3
+    assert result.jsonl_path_for(session_a_id) is not None
+    assert result.jsonl_path_for(session_b_id) is not None
+    assert result.jsonl_path_for(session_c_id) is not None
+
+
+def test_handoff_chain_reaches_cap_and_escalates_without_sixth_session(tmp_path: Path) -> None:
+    """A chain reaching MAX_CONSECUTIVE_HANDOFFS (5) escalates without a sixth session spawn,
+
+    and the escalation payload names '5 handoffs without completion'.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T023")
+    checkpoint_file = runtime_paths.checkpoint_path("T023")
+
+    simulated_time = [1000.0]
+    notices: list[str | EscalationNotice] = []
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        clock=lambda: simulated_time[0],
+        notify=notices.append,
+        confirm_recovery=lambda esc: False,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    session_ids = [f"ses_cap{i}" for i in range(1, 6)]
+
+    # Register 5 cycles of session run + handoff run
+    for i, sid in enumerate(session_ids):
+        t_base = 1000.0 + (i * 20.0)
+
+        # Worker session crossing 135k
+        session_lines = [
+            json.dumps({"type": "step_start", "sessionID": sid}) + "\n",
+            json.dumps({
+                "type": "step_finish",
+                "sessionID": sid,
+                "part": {"tokens": {"total": 135100}},
+            }) + "\n",
+        ]
+
+        # Handoff handle writing fresh checkpoint
+        current_t = t_base + 2.0
+        class _CycleHandoffHandle(FakeProcessHandle):
+            def __init__(self, target_time: float, cycle_idx: int) -> None:
+                super().__init__(
+                    stdout_lines=[
+                        json.dumps({"type": "step_start", "sessionID": sid}) + "\n",
+                        json.dumps({
+                            "type": "step_finish",
+                            "sessionID": sid,
+                            "part": {"tokens": {"total": 136000}},
+                        }) + "\n",
+                    ]
+                )
+                self._target_time = target_time
+                self._cycle_idx = cycle_idx
+
+            async def wait(self) -> int:
+                runtime_paths.ensure_checkpoint_dir("T023")
+                checkpoint_file.write_text(f"# Checkpoint cycle {self._cycle_idx}", encoding="utf-8")
+                os.utime(checkpoint_file, (self._target_time, self._target_time))
+                return 0
+
+        if i == 0:
+            fake_runner.register_spawn(
+                ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+                stdout_lines=session_lines,
+            )
+        else:
+            fake_runner.register_spawn(
+                ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+                stdout_lines=session_lines,
+            )
+
+        fake_runner.register_spawn_handle(
+            ["opencode", "run", "--format", "json", "--session", sid, "--auto", handoff_prompt],
+            _CycleHandoffHandle(current_t, i + 1),
+        )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "ESCALATED"
+    assert result.is_escalated is True
+    assert result.is_ready is False
+    assert result.handoffs == 5
+    assert result.session_ids == tuple(session_ids)
+    assert len(result.session_ids) == 5
+
+    # Exactly 5 worker sessions + 5 handoffs = 10 spawns. Absolutely NO 6th session (11th spawn)!
+    assert len(fake_runner.spawns) == 10
+
+    # Escalation payload names '5 handoffs without completion'
+    assert result.escalation is not None
+    assert result.escalation.reason == "5 handoffs without completion"
+    assert "5 handoffs without completion" in str(result.escalation)
+    assert result.escalation_details == "5 handoffs without completion"
+
+
+def test_handoff_chain_stale_checkpoint_in_cycle_two_fails_freshness_and_escalates(tmp_path: Path) -> None:
+    """Cycle 2 handoff does not update checkpoint; fails freshness check against cycle 2 request time and escalates."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T023")
+    checkpoint_file = runtime_paths.checkpoint_path("T023")
+
+    session_a_id = "ses_staleA"
+    session_b_id = "ses_staleB"
+
+    simulated_time = [1000.0]
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        clock=lambda: simulated_time[0],
+        confirm_recovery=lambda esc: False,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    # Session A: hits 135k
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_a_id,
+            "part": {"tokens": {"total": 135000}},
+        }) + "\n",
+    ]
+
+    # Handoff A: writes checkpoint at t=1001.0
+    class _HandoffAHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_a_id,
+                        "part": {"tokens": {"total": 136000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T023")
+            checkpoint_file.write_text("# Checkpoint Cycle 1", encoding="utf-8")
+            os.utime(checkpoint_file, (1001.0, 1001.0))
+            return 0
+
+    # Session B: hits 135k at simulated time 1050.0
+    session_b_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_b_id,
+            "part": {"tokens": {"total": 135500}},
+        }) + "\n",
+    ]
+
+    class _SessionBHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(stdout_lines=session_b_lines)
+
+        async def stdout_lines(self):
+            simulated_time[0] = 1050.0
+            for line in session_b_lines:
+                yield line.rstrip("\r\n")
+
+    # Handoff B: runs at t=1050.0 but DOES NOT update checkpoint file (mtime remains 1001.0)
+    class _HandoffBHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_b_id,
+                        "part": {"tokens": {"total": 136500}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            return 0
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt],
+        _HandoffAHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _SessionBHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_b_id, "--auto", handoff_prompt],
+        _HandoffBHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "CHECKPOINT_STALE"
+    assert result.is_ready is False
+    assert result.is_escalated is True
+    assert result.handoffs == 2
+    assert len(fake_runner.spawns) == 4  # Session A, Handoff A, Session B, Handoff B; NO Session C!
+
+
+def test_handoff_chain_emits_cycle_notices_through_t019_seam(tmp_path: Path) -> None:
+    """Coordinator emits notices per handoff cycle: threshold crossed, checkpoint validated, session N+1 started."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T023")
+    checkpoint_file = runtime_paths.checkpoint_path("T023")
+
+    session_a_id = "ses_noticesA"
+    session_b_id = "ses_noticesB"
+
+    notices: list[str | EscalationNotice] = []
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        notify=notices.append,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_a_id,
+            "part": {"tokens": {"total": 135000}},
+        }) + "\n",
+    ]
+
+    class _HandoffHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_a_id,
+                        "part": {"tokens": {"total": 136000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T023")
+            checkpoint_file.write_text("# Checkpoint", encoding="utf-8")
+            return 0
+
+    class _SessionBHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
+                    json.dumps({
+                        "type": "step_finish",
+                        "sessionID": session_b_id,
+                        "part": {"tokens": {"total": 20000}},
+                    }) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path("T023")
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt],
+        _HandoffHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _SessionBHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+    assert result.status == SingleCycleStatus.READY
+
+    notice_texts = [str(n) for n in notices]
+
+    # Verify notice for threshold crossed
+    assert any("threshold crossed" in text.lower() for text in notice_texts)
+    # Verify notice for checkpoint validated
+    assert any("checkpoint validated" in text.lower() for text in notice_texts)
+    # Verify notice for session N+1 started
+    assert any("session 2 started" in text.lower() or "session n+1 started" in text.lower() for text in notice_texts)
+
+
+def test_worker_run_result_public_contract_and_session_paths(tmp_path: Path) -> None:
+    """Complete WorkerRunResult public type satisfies Spec 04 contract with log paths and escalation details."""
+    p_jsonl_1 = tmp_path / "T023_ses1.jsonl"
+    p_stderr_1 = tmp_path / "T023_ses1.stderr"
+    p_jsonl_2 = tmp_path / "T023_ses2.jsonl"
+    p_stderr_2 = tmp_path / "T023_ses2.stderr"
+
+    from runner.application.worker_supervisor import SessionRunResult
+
+    run1 = SessionRunResult(
+        session_id="ses_1",
+        occupancy=135000,
+        jsonl_path=p_jsonl_1,
+        stderr_path=p_stderr_1,
+    )
+    run2 = SessionRunResult(
+        session_id="ses_2",
+        occupancy=50000,
+        ready_signal_present=True,
+        jsonl_path=p_jsonl_2,
+        stderr_path=p_stderr_2,
+    )
+
+    result = WorkerRunResult(
+        status=SingleCycleStatus.READY,
+        session_id="ses_1",
+        resumed_session_id="ses_2",
+        session_ids=("ses_1", "ses_2"),
+        handoffs=1,
+        occupancy=135000,
+        ready_signal_present=True,
+        run_results=(run1, run2),
+    )
+
+    assert result.status == SingleCycleStatus.READY
+    assert result.is_ready is True
+    assert result.is_escalated is False
+    assert result.session_ids == ("ses_1", "ses_2")
+    assert result.handoffs == 1
+    assert result.occupancy == 135000
+    assert result.ready_signal_present is True
+    assert result.jsonl_paths == (p_jsonl_1, p_jsonl_2)
+    assert result.stderr_paths == (p_stderr_1, p_stderr_2)
+    assert result.jsonl_path_for("ses_1") == p_jsonl_1
+    assert result.jsonl_path_for("ses_2") == p_jsonl_2
+    assert result.stderr_path_for("ses_1") == p_stderr_1
+    assert result.stderr_path_for("ses_2") == p_stderr_2
+    assert result.jsonl_paths_by_session == {"ses_1": p_jsonl_1, "ses_2": p_jsonl_2}
+    assert result.stderr_paths_by_session == {"ses_1": p_stderr_1, "ses_2": p_stderr_2}
+    assert result.escalation_details is None
+
+    # Test escalated WorkerRunResult with details
+    escalation = EscalationNotice(
+        ticket_id="T023",
+        reason="5 handoffs without completion",
+        session_id="ses_2",
+        occupancy=135000,
+    )
+    esc_result = WorkerRunResult(
+        status=SingleCycleStatus.ESCALATED,
+        session_ids=("ses_1", "ses_2"),
+        handoffs=5,
+        occupancy=135000,
+        escalation=escalation,
+    )
+    assert esc_result.is_escalated is True
+    assert esc_result.is_ready is False
+    assert esc_result.escalation_details == "5 handoffs without completion"
+    assert esc_result == "5 handoffs without completion"
+    assert esc_result == "ESCALATED"
+
+
+def test_security_loop_termination_is_guaranteed_and_bounded(tmp_path: Path) -> None:
+    """Security: verify no unbounded spawn loop is reachable from repeated handoffs; loop unconditionally halts at cap."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T023", security_required=True)
+    checkpoint_file = runtime_paths.checkpoint_path("T023")
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        confirm_recovery=lambda esc: False,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    # Configure fake runner to endlessly trigger handoffs
+    for i in range(1, 10):
+        sid = f"ses_endless{i}"
+        session_lines = [
+            json.dumps({"type": "step_start", "sessionID": sid}) + "\n",
+            json.dumps({
+                "type": "step_finish",
+                "sessionID": sid,
+                "part": {"tokens": {"total": 135000}},
+            }) + "\n",
+        ]
+
+        class _EndlessHandoffHandle(FakeProcessHandle):
+            def __init__(self, s_id: str) -> None:
+                super().__init__(
+                    stdout_lines=[
+                        json.dumps({"type": "step_start", "sessionID": s_id}) + "\n",
+                        json.dumps({
+                            "type": "step_finish",
+                            "sessionID": s_id,
+                            "part": {"tokens": {"total": 136000}},
+                        }) + "\n",
+                    ]
+                )
+
+            async def wait(self) -> int:
+                runtime_paths.ensure_checkpoint_dir("T023")
+                checkpoint_file.write_text("# Checkpoint", encoding="utf-8")
+                return 0
+
+        if i == 1:
+            fake_runner.register_spawn(
+                ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+                stdout_lines=session_lines,
+            )
+        else:
+            fake_runner.register_spawn(
+                ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+                stdout_lines=session_lines,
+            )
+
+        fake_runner.register_spawn_handle(
+            ["opencode", "run", "--format", "json", "--session", sid, "--auto", handoff_prompt],
+            _EndlessHandoffHandle(sid),
+        )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result.handoffs == MAX_CONSECUTIVE_HANDOFFS  # 5
+    assert len(result.session_ids) == 5
+    # Strict bound: no more than 10 spawns (5 sessions + 5 handoffs)
+    assert len(fake_runner.spawns) == 10
+

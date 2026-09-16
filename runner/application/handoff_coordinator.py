@@ -39,6 +39,9 @@ Filesystem timestamps can round to one second depending on filesystem precision
 when the handoff request and checkpoint write happen within the same second.
 """
 
+MAX_CONSECUTIVE_HANDOFFS: int = 5
+"""Maximum consecutive context handoffs permitted within a single ticket before tripping escalation."""
+
 HANDOFF_PROMPT_TEMPLATE: str = (
     "Context budget threshold reached (135k tokens). Execute the handoff skill at "
     ".agents/skills/handoff/SKILL.md. Save the handoff document directly to "
@@ -123,23 +126,52 @@ def default_recovery_confirmation(escalation: EscalationNotice | Any) -> bool:
 
 
 @dataclass(frozen=True)
-class SingleCycleResult:
-    """Outcome of a single worker execution and handoff cycle."""
+class WorkerRunResult:
+    """Outcome of worker execution with context handoff, recovery, and escalation (Spec 03/04)."""
 
     status: SingleCycleStatus
     session_id: str | None = None
     resumed_session_id: str | None = None
     session_ids: tuple[str, ...] = ()
+    handoffs: int = 0
     occupancy: int = 0
     ready_signal_present: bool = False
     handoff_requested_at: float | None = None
     checkpoint_path: Path | None = None
     run_results: tuple[SessionRunResult, ...] = ()
     escalation: EscalationNotice | None = None
+    jsonl_paths: tuple[Path, ...] = ()
+    stderr_paths: tuple[Path, ...] = ()
+    escalation_details: str | None = None
 
     # Module-level enum member convenience on class
     ESCALATED: SingleCycleStatus = SingleCycleStatus.ESCALATED
     READY: SingleCycleStatus = SingleCycleStatus.READY
+
+    def __post_init__(self) -> None:
+        if self.handoffs == 0 and self.handoff_requested_at is not None:
+            object.__setattr__(self, "handoffs", 1)
+
+        if not self.jsonl_paths and self.run_results:
+            computed_jsonl: list[Path] = []
+            for r in self.run_results:
+                if r.jsonl_path and r.jsonl_path not in computed_jsonl:
+                    computed_jsonl.append(r.jsonl_path)
+            object.__setattr__(self, "jsonl_paths", tuple(computed_jsonl))
+
+        if not self.stderr_paths and self.run_results:
+            computed_stderr: list[Path] = []
+            for r in self.run_results:
+                if r.stderr_path and r.stderr_path not in computed_stderr:
+                    computed_stderr.append(r.stderr_path)
+            object.__setattr__(self, "stderr_paths", tuple(computed_stderr))
+
+        if self.escalation_details is None and self.escalation is not None:
+            object.__setattr__(
+                self,
+                "escalation_details",
+                self.escalation.reason or str(self.escalation),
+            )
 
     @property
     def is_ready(self) -> bool:
@@ -152,14 +184,35 @@ class SingleCycleResult:
         return self.status == SingleCycleStatus.ESCALATED
 
     @property
-    def handoffs(self) -> int:
-        """Number of handoff instruction runs dispatched in this cycle."""
-        return 1 if self.handoff_requested_at is not None else 0
-
-    @property
     def last_run(self) -> SessionRunResult | None:
         """The most recent SessionRunResult in this cycle."""
         return self.run_results[-1] if self.run_results else None
+
+    @property
+    def jsonl_paths_by_session(self) -> dict[str, Path]:
+        """Mapping from session ID to its JSONL log file path."""
+        res: dict[str, Path] = {}
+        for r in self.run_results:
+            if r.session_id and r.jsonl_path:
+                res[r.session_id] = r.jsonl_path
+        return res
+
+    @property
+    def stderr_paths_by_session(self) -> dict[str, Path]:
+        """Mapping from session ID to its stderr log file path."""
+        res: dict[str, Path] = {}
+        for r in self.run_results:
+            if r.session_id and r.stderr_path:
+                res[r.session_id] = r.stderr_path
+        return res
+
+    def jsonl_path_for(self, session_id: str) -> Path | None:
+        """Return the JSONL log file path for a specific session ID, or None."""
+        return self.jsonl_paths_by_session.get(session_id)
+
+    def stderr_path_for(self, session_id: str) -> Path | None:
+        """Return the stderr log file path for a specific session ID, or None."""
+        return self.stderr_paths_by_session.get(session_id)
 
     def __eq__(self, other: object) -> bool:
         """Allow ergonomic comparison against SingleCycleStatus enum or string value."""
@@ -167,13 +220,17 @@ class SingleCycleResult:
             val = other.value if isinstance(other, SingleCycleStatus) else other
             if self.status == val:
                 return True
-            if self.escalation is not None and self.escalation.reason == val:
+            if self.escalation is not None and (
+                self.escalation.reason == val or str(self.escalation) == val
+            ):
+                return True
+            if self.escalation_details is not None and self.escalation_details == val:
                 return True
             return False
         return super().__eq__(other)
 
 
-WorkerRunResult = SingleCycleResult
+SingleCycleResult = WorkerRunResult
 
 
 def is_checkpoint_fresh(
@@ -211,6 +268,7 @@ class HandoffCoordinator:
         notify: Callable[[str | EscalationNotice], None] | None = None,
         git_operations: GitOperations | None = None,
         confirm_recovery: Callable[[EscalationNotice], bool | Awaitable[bool]] | None = None,
+        max_consecutive_handoffs: int = MAX_CONSECUTIVE_HANDOFFS,
     ) -> None:
         self._supervisor = supervisor or WorkerSupervisor(
             runtime_paths=runtime_paths, notify=notify, budget_config=budget_config
@@ -234,6 +292,12 @@ class HandoffCoordinator:
             if confirm_recovery is not None
             else default_recovery_confirmation
         )
+        self._max_consecutive_handoffs = max_consecutive_handoffs
+
+    @property
+    def max_consecutive_handoffs(self) -> int:
+        """Configured ceiling on consecutive context handoffs per ticket."""
+        return self._max_consecutive_handoffs
 
     @property
     def runtime_paths(self) -> RuntimePaths:
@@ -254,6 +318,17 @@ class HandoffCoordinator:
     def confirm_recovery(self) -> Callable[[EscalationNotice], bool | Awaitable[bool]]:
         """Injected confirmation callable for emergency recovery escalation."""
         return self._confirm_recovery
+
+    def _emit_notice(self, notice: str | EscalationNotice) -> None:
+        """Emit a structured notice or string message through the T019 notification seam."""
+        if self._notify is not None:
+            try:
+                self._notify(notice)
+            except Exception:
+                try:
+                    self._notify(str(notice))
+                except Exception:
+                    pass
 
     def build_initial_prompt(
         self,
@@ -370,7 +445,8 @@ class HandoffCoordinator:
         session_runs: list[SessionRunResult],
         valid_checkpoint_recorded: bool,
         last_stderr_tail: str = "",
-    ) -> SingleCycleResult:
+        consecutive_handoffs: int = 0,
+    ) -> WorkerRunResult:
         """Route failure through the escalation notice, confirmation, and recovery synthesis flow."""
         reason_str = reason.value if isinstance(reason, SingleCycleStatus) else str(reason)
         escalation = EscalationNotice(
@@ -384,14 +460,7 @@ class HandoffCoordinator:
         )
 
         # 1. Emit escalation notice through T019 notify seam
-        if self._notify is not None:
-            try:
-                self._notify(escalation)
-            except Exception:
-                try:
-                    self._notify(str(escalation))
-                except Exception:
-                    pass
+        self._emit_notice(escalation)
 
         # 2. Call injectable confirm_recovery(escalation) -> bool
         if inspect.iscoroutinefunction(self._confirm_recovery):
@@ -405,10 +474,12 @@ class HandoffCoordinator:
 
         # 3. Declined or unanswered confirmation: returns ESCALATED, working tree untouched, no synthesis file
         if not confirmed:
-            return SingleCycleResult(
+            return WorkerRunResult(
                 status=SingleCycleStatus.ESCALATED,
-                session_id=source_session_id,
+                session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
                 session_ids=tuple(observed_session_ids),
+                handoffs=consecutive_handoffs,
                 occupancy=current_occupancy,
                 ready_signal_present=False,
                 run_results=tuple(session_runs),
@@ -423,20 +494,24 @@ class HandoffCoordinator:
             resolved_checkpoint = checkpoint_path.resolve()
             resolved_dir = self._runtime_paths.checkpoints_dir.resolve()
             if not resolved_checkpoint.is_relative_to(resolved_dir):
-                return SingleCycleResult(
+                return WorkerRunResult(
                     status=SingleCycleStatus.ESCALATED,
-                    session_id=source_session_id,
+                    session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                    resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
                     session_ids=tuple(observed_session_ids),
+                    handoffs=consecutive_handoffs,
                     occupancy=current_occupancy,
                     ready_signal_present=False,
                     run_results=tuple(session_runs),
                     escalation=escalation,
                 )
         except (ValueError, RuntimeError):
-            return SingleCycleResult(
+            return WorkerRunResult(
                 status=SingleCycleStatus.ESCALATED,
-                session_id=source_session_id,
+                session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
                 session_ids=tuple(observed_session_ids),
+                handoffs=consecutive_handoffs,
                 occupancy=current_occupancy,
                 ready_signal_present=False,
                 run_results=tuple(session_runs),
@@ -468,6 +543,7 @@ class HandoffCoordinator:
             atomic_write_text(checkpoint_path, synthetic_content)
 
         # 5. Resume with a fresh session
+        self._supervisor.reset_budget_monitor()
         resume_prompt = self.build_resume_prompt(ticket, checkpoint_path)
         resumed_run = await self._supervisor.run(
             ticket=ticket,
@@ -488,11 +564,12 @@ class HandoffCoordinator:
             resumed_run.ready_signal_present
             or self._runtime_paths.ready_signal_path(ticket.id).is_file()
         ):
-            return SingleCycleResult(
+            return WorkerRunResult(
                 status=SingleCycleStatus.READY,
-                session_id=source_session_id,
+                session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
                 resumed_session_id=resumed_run.session_id,
                 session_ids=tuple(observed_session_ids),
+                handoffs=consecutive_handoffs,
                 occupancy=current_occupancy,
                 ready_signal_present=True,
                 checkpoint_path=checkpoint_path,
@@ -500,11 +577,12 @@ class HandoffCoordinator:
                 escalation=escalation,
             )
 
-        return SingleCycleResult(
+        return WorkerRunResult(
             status=SingleCycleStatus.ESCALATED,
-            session_id=source_session_id,
+            session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
             resumed_session_id=resumed_run.session_id,
             session_ids=tuple(observed_session_ids),
+            handoffs=consecutive_handoffs,
             occupancy=current_occupancy,
             ready_signal_present=False,
             checkpoint_path=checkpoint_path,
@@ -518,24 +596,37 @@ class HandoffCoordinator:
         *,
         spec_excerpt: SpecExcerpt | str | None = None,
         session_id: str | None = None,
-    ) -> SingleCycleResult:
-        """Execute a single worker cycle with automated recovery and escalation paths.
+        max_consecutive_handoffs: int | None = None,
+    ) -> WorkerRunResult:
+        """Execute worker execution cycles with context handoff chain loop, recovery, and escalation.
 
         Args:
             ticket: Active Ticket domain entity.
             spec_excerpt: Optional pre-parsed or mock SpecExcerpt.
             session_id: Optional existing session ID when resuming an ongoing session.
+            max_consecutive_handoffs: Optional override for consecutive handoff limit.
 
         Returns:
-            SingleCycleResult indicating READY or ESCALATED.
+            WorkerRunResult indicating READY or ESCALATED with telemetry, log paths, and session history.
         """
         if not isinstance(ticket.id, str) or not TICKET_ID_PATTERN.match(ticket.id):
             raise ValueError(f"Invalid ticket ID format: '{ticket.id}'")
+
+        effective_max_handoffs = (
+            max_consecutive_handoffs
+            if max_consecutive_handoffs is not None
+            else self._max_consecutive_handoffs
+        )
 
         handoff_requested_at: list[float | None] = [None]
         session_runs: list[SessionRunResult] = []
         observed_session_ids: list[str] = []
         valid_checkpoint_recorded: bool = False
+        consecutive_handoffs: int = 0
+        current_occupancy: int = 0
+        last_checkpoint_path: Path | None = None
+        last_handoff_requested_at: float | None = None
+
         if session_id is not None and is_valid_session_id(session_id):
             observed_session_ids.append(session_id)
 
@@ -557,385 +648,352 @@ class HandoffCoordinator:
 
         active_supervisor.on_budget_action = _handle_budget_action
 
+        current_prompt = self.build_initial_prompt(
+            ticket, spec_excerpt=spec_excerpt
+        )
+        current_session_id = session_id
+
         try:
-            # 1. Run Session A with initial prompt
-            initial_prompt = self.build_initial_prompt(
-                ticket, spec_excerpt=spec_excerpt
-            )
-            result_a = await active_supervisor.run(
-                ticket=ticket,
-                prompt=initial_prompt,
-                session_id=session_id,
-            )
-            session_runs.append(result_a)
-            if (
-                result_a.session_id
-                and result_a.session_id not in observed_session_ids
-                and is_valid_session_id(result_a.session_id)
-            ):
-                observed_session_ids.append(result_a.session_id)
-
-            current_occupancy = result_a.occupancy
-            source_session_id = result_a.session_id or (
-                session_id if session_id and is_valid_session_id(session_id) else None
-            )
-
-            # 2. Check for CEILING breach on Session A
-            if (
-                result_a.reason == RunTerminationReason.KILLED_CEILING
-                or current_occupancy >= self._budget_config.ceiling
-            ):
-                return await self._handle_escalation(
+            while True:
+                # 1. Run the worker session
+                result = await active_supervisor.run(
                     ticket=ticket,
-                    reason=SingleCycleStatus.CEILING,
-                    source_session_id=source_session_id,
-                    current_occupancy=current_occupancy,
-                    observed_session_ids=observed_session_ids,
-                    session_runs=session_runs,
-                    valid_checkpoint_recorded=valid_checkpoint_recorded,
-                    last_stderr_tail=result_a.stderr_tail,
+                    prompt=current_prompt,
+                    session_id=current_session_id,
+                )
+                session_runs.append(result)
+                if (
+                    result.session_id
+                    and result.session_id not in observed_session_ids
+                    and is_valid_session_id(result.session_id)
+                ):
+                    observed_session_ids.append(result.session_id)
+
+                current_occupancy = max(current_occupancy, result.occupancy)
+                source_session_id = result.session_id or (
+                    current_session_id
+                    if current_session_id and is_valid_session_id(current_session_id)
+                    else None
                 )
 
-            # 3. Check for STALL on Session A
-            if result_a.reason == RunTerminationReason.STALLED:
-                return await self._handle_escalation(
-                    ticket=ticket,
-                    reason=SingleCycleStatus.STALLED,
-                    source_session_id=source_session_id,
-                    current_occupancy=current_occupancy,
-                    observed_session_ids=observed_session_ids,
-                    session_runs=session_runs,
-                    valid_checkpoint_recorded=valid_checkpoint_recorded,
-                    last_stderr_tail=result_a.stderr_tail,
-                )
-
-            # 4. Check for HANDOFF threshold reaction
-            if result_a.reason == RunTerminationReason.KILLED_HANDOFF:
-                learned_session_id = result_a.session_id
-                if not learned_session_id or not is_valid_session_id(learned_session_id):
+                # 2. Check for CEILING breach on the session
+                if (
+                    result.reason == RunTerminationReason.KILLED_CEILING
+                    or current_occupancy >= self._budget_config.ceiling
+                ):
                     return await self._handle_escalation(
                         ticket=ticket,
-                        reason=SingleCycleStatus.FAILED,
+                        reason=SingleCycleStatus.CEILING,
                         source_session_id=source_session_id,
                         current_occupancy=current_occupancy,
                         observed_session_ids=observed_session_ids,
                         session_runs=session_runs,
                         valid_checkpoint_recorded=valid_checkpoint_recorded,
+                        last_stderr_tail=result.stderr_tail,
+                        consecutive_handoffs=consecutive_handoffs,
                     )
 
-                # Execute same-session handoff instruction run
-                handoff_prompt = self.build_handoff_prompt(ticket)
-                handoff_result = await active_supervisor.run(
-                    ticket=ticket,
-                    prompt=handoff_prompt,
-                    session_id=learned_session_id,
-                    bounded=True,
-                )
-                session_runs.append(handoff_result)
-                current_occupancy = max(current_occupancy, handoff_result.occupancy)
-
-                # Check if ceiling breached during handoff run
-                if (
-                    handoff_result.reason == RunTerminationReason.KILLED_CEILING
-                    or current_occupancy >= self._budget_config.ceiling
-                ):
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.CEILING,
-                        source_session_id=learned_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=handoff_result.stderr_tail,
-                    )
-
-                # Check if stalled during handoff run
-                if handoff_result.reason == RunTerminationReason.STALLED:
+                # 3. Check for STALL on the session
+                if result.reason == RunTerminationReason.STALLED:
                     return await self._handle_escalation(
                         ticket=ticket,
                         reason=SingleCycleStatus.STALLED,
-                        source_session_id=learned_session_id,
+                        source_session_id=source_session_id,
                         current_occupancy=current_occupancy,
                         observed_session_ids=observed_session_ids,
                         session_runs=session_runs,
                         valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=handoff_result.stderr_tail,
+                        last_stderr_tail=result.stderr_tail,
+                        consecutive_handoffs=consecutive_handoffs,
                     )
 
-                # Checkpoint validation strictly AFTER handoff process has exited
-                checkpoint_path = self._runtime_paths.checkpoint_path(ticket.id)
-                req_time = (
-                    handoff_requested_at[0]
-                    if handoff_requested_at[0] is not None
-                    else self._clock()
-                )
+                # 4. Check for HANDOFF threshold reaction (KILLED_HANDOFF)
+                if result.reason == RunTerminationReason.KILLED_HANDOFF:
+                    learned_session_id = result.session_id
+                    if not learned_session_id or not is_valid_session_id(learned_session_id):
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.FAILED,
+                            source_session_id=source_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
 
-                # Validate checkpoint
-                val_status = self.validate_checkpoint(ticket.id, req_time)
-                if val_status == SingleCycleStatus.CHECKPOINT_MISSING:
-                    return await self._handle_escalation(
+                    # Emit notice: threshold crossed
+                    self._emit_notice(
+                        f"[{ticket.id}] Context threshold crossed at {result.occupancy} tokens; "
+                        f"initiating handoff cycle {consecutive_handoffs + 1}"
+                    )
+
+                    # Execute same-session handoff instruction run
+                    handoff_prompt = self.build_handoff_prompt(ticket)
+                    handoff_result = await active_supervisor.run(
                         ticket=ticket,
-                        reason=SingleCycleStatus.CHECKPOINT_MISSING,
-                        source_session_id=learned_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=False,
+                        prompt=handoff_prompt,
+                        session_id=learned_session_id,
+                        bounded=True,
                     )
-                elif val_status == SingleCycleStatus.CHECKPOINT_STALE:
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.CHECKPOINT_STALE,
-                        source_session_id=learned_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=False,
+                    session_runs.append(handoff_result)
+                    current_occupancy = max(current_occupancy, handoff_result.occupancy)
+                    consecutive_handoffs += 1
+
+                    # Check if ceiling breached during handoff run
+                    if (
+                        handoff_result.reason == RunTerminationReason.KILLED_CEILING
+                        or current_occupancy >= self._budget_config.ceiling
+                    ):
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.CEILING,
+                            source_session_id=learned_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=handoff_result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    # Check if stalled during handoff run
+                    if handoff_result.reason == RunTerminationReason.STALLED:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.STALLED,
+                            source_session_id=learned_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=handoff_result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    # Checkpoint validation strictly AFTER handoff process has exited
+                    checkpoint_path = self._runtime_paths.checkpoint_path(ticket.id)
+                    req_time = (
+                        handoff_requested_at[0]
+                        if handoff_requested_at[0] is not None
+                        else self._clock()
+                    )
+                    last_handoff_requested_at = req_time
+                    handoff_requested_at[0] = None
+
+                    val_status = self.validate_checkpoint(ticket.id, req_time)
+                    if val_status == SingleCycleStatus.CHECKPOINT_MISSING:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.CHECKPOINT_MISSING,
+                            source_session_id=learned_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=False,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+                    elif val_status == SingleCycleStatus.CHECKPOINT_STALE:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.CHECKPOINT_STALE,
+                            source_session_id=learned_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=False,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    # Checkpoint is accepted!
+                    valid_checkpoint_recorded = True
+                    last_checkpoint_path = checkpoint_path
+                    self._emit_notice(
+                        f"[{ticket.id}] Handoff checkpoint validated ({checkpoint_path}) "
+                        f"for cycle {consecutive_handoffs}"
                     )
 
-                # Checkpoint is accepted!
-                valid_checkpoint_recorded = True
+                    # Check if consecutive handoffs reached cap
+                    if consecutive_handoffs >= effective_max_handoffs:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=f"{effective_max_handoffs} handoffs without completion",
+                            source_session_id=learned_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
 
-                # 5. Launch Session B (fresh session without --session)
-                resume_prompt = self.build_resume_prompt(ticket, checkpoint_path)
-                session_b_result = await active_supervisor.run(
-                    ticket=ticket,
-                    prompt=resume_prompt,
-                    session_id=None,
-                )
-                session_runs.append(session_b_result)
+                    # Emit notice: session N+1 started
+                    next_session_num = len(observed_session_ids) + 1
+                    self._emit_notice(
+                        f"[{ticket.id}] Session {next_session_num} started "
+                        f"(session N+1 started after handoff {consecutive_handoffs})"
+                    )
+
+                    # Prepare next session (Session N+1)
+                    active_supervisor.reset_budget_monitor()
+                    current_prompt = self.build_resume_prompt(ticket, checkpoint_path)
+                    current_session_id = None
+                    continue
+
+                # 5. Check if ready signal is present
                 if (
-                    session_b_result.session_id
-                    and session_b_result.session_id not in observed_session_ids
-                    and is_valid_session_id(session_b_result.session_id)
-                ):
-                    observed_session_ids.append(session_b_result.session_id)
-
-                current_occupancy = max(current_occupancy, session_b_result.occupancy)
-
-                if (
-                    session_b_result.reason == RunTerminationReason.KILLED_CEILING
-                    or current_occupancy >= self._budget_config.ceiling
-                ):
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.CEILING,
-                        source_session_id=session_b_result.session_id or learned_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=session_b_result.stderr_tail,
-                    )
-
-                if session_b_result.reason == RunTerminationReason.STALLED:
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.STALLED,
-                        source_session_id=session_b_result.session_id or learned_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=session_b_result.stderr_tail,
-                    )
-
-                if (
-                    session_b_result.ready_signal_present
+                    result.ready_signal_present
                     or self._runtime_paths.ready_signal_path(ticket.id).is_file()
                 ):
-                    return SingleCycleResult(
+                    return WorkerRunResult(
                         status=SingleCycleStatus.READY,
-                        session_id=learned_session_id,
-                        resumed_session_id=session_b_result.session_id,
+                        session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                        resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
                         session_ids=tuple(observed_session_ids),
+                        handoffs=consecutive_handoffs,
                         occupancy=current_occupancy,
                         ready_signal_present=True,
-                        handoff_requested_at=req_time,
-                        checkpoint_path=checkpoint_path,
+                        handoff_requested_at=last_handoff_requested_at,
+                        checkpoint_path=last_checkpoint_path,
                         run_results=tuple(session_runs),
                     )
 
-                # Session B crashed:
-                if session_b_result.is_crash:
-                    if session_b_result.session_id and is_valid_session_id(session_b_result.session_id):
-                        retry_prompt = self.build_crash_retry_prompt(ticket, session_b_result.stderr_tail)
-                        retry_result = await active_supervisor.run(
+                # 6. Session did not write ready signal. Check for CRASH vs EXIT 0:
+                if result.is_crash:
+                    # Recovery Path 2: Crash (non-zero exit or stream error event)
+                    if not source_session_id or not is_valid_session_id(source_session_id):
+                        return await self._handle_escalation(
                             ticket=ticket,
-                            prompt=retry_prompt,
-                            session_id=session_b_result.session_id,
-                            bounded=True,
+                            reason=SingleCycleStatus.FAILED,
+                            source_session_id=source_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
                         )
-                        session_runs.append(retry_result)
-                        current_occupancy = max(current_occupancy, retry_result.occupancy)
-                        if retry_result.is_crash:
-                            return await self._handle_escalation(
-                                ticket=ticket,
-                                reason="CRASH_AFTER_RETRY",
-                                source_session_id=session_b_result.session_id,
-                                current_occupancy=current_occupancy,
-                                observed_session_ids=observed_session_ids,
-                                session_runs=session_runs,
-                                valid_checkpoint_recorded=valid_checkpoint_recorded,
-                                last_stderr_tail=retry_result.stderr_tail,
-                            )
-                        if (
-                            retry_result.ready_signal_present
-                            or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-                        ):
-                            return SingleCycleResult(
-                                status=SingleCycleStatus.READY,
-                                session_id=learned_session_id,
-                                resumed_session_id=session_b_result.session_id,
-                                session_ids=tuple(observed_session_ids),
-                                occupancy=current_occupancy,
-                                ready_signal_present=True,
-                                handoff_requested_at=req_time,
-                                checkpoint_path=checkpoint_path,
-                                run_results=tuple(session_runs),
-                            )
+
+                    retry_prompt = self.build_crash_retry_prompt(ticket, result.stderr_tail)
+                    retry_result = await active_supervisor.run(
+                        ticket=ticket,
+                        prompt=retry_prompt,
+                        session_id=source_session_id,
+                        bounded=True,
+                    )
+                    session_runs.append(retry_result)
+                    current_occupancy = max(current_occupancy, retry_result.occupancy)
+
+                    if retry_result.is_crash:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason="CRASH_AFTER_RETRY",
+                            source_session_id=source_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=retry_result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    if (
+                        retry_result.reason == RunTerminationReason.KILLED_CEILING
+                        or current_occupancy >= self._budget_config.ceiling
+                    ):
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.CEILING,
+                            source_session_id=source_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=retry_result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    if retry_result.reason == RunTerminationReason.STALLED:
+                        return await self._handle_escalation(
+                            ticket=ticket,
+                            reason=SingleCycleStatus.STALLED,
+                            source_session_id=source_session_id,
+                            current_occupancy=current_occupancy,
+                            observed_session_ids=observed_session_ids,
+                            session_runs=session_runs,
+                            valid_checkpoint_recorded=valid_checkpoint_recorded,
+                            last_stderr_tail=retry_result.stderr_tail,
+                            consecutive_handoffs=consecutive_handoffs,
+                        )
+
+                    if (
+                        retry_result.ready_signal_present
+                        or self._runtime_paths.ready_signal_path(ticket.id).is_file()
+                    ):
+                        return WorkerRunResult(
+                            status=SingleCycleStatus.READY,
+                            session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                            resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
+                            session_ids=tuple(observed_session_ids),
+                            handoffs=consecutive_handoffs,
+                            occupancy=current_occupancy,
+                            ready_signal_present=True,
+                            handoff_requested_at=last_handoff_requested_at,
+                            checkpoint_path=last_checkpoint_path,
+                            run_results=tuple(session_runs),
+                        )
+
                     return await self._handle_escalation(
                         ticket=ticket,
-                        reason=SingleCycleStatus.FAILED,
-                        source_session_id=session_b_result.session_id or learned_session_id,
+                        reason="NO_SIGNAL_AFTER_NUDGE",
+                        source_session_id=source_session_id,
                         current_occupancy=current_occupancy,
                         observed_session_ids=observed_session_ids,
                         session_runs=session_runs,
                         valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=session_b_result.stderr_tail,
+                        last_stderr_tail=retry_result.stderr_tail,
+                        consecutive_handoffs=consecutive_handoffs,
                     )
 
-                # Session B exit 0 without ready signal:
-                if session_b_result.session_id and is_valid_session_id(session_b_result.session_id):
-                    nudge_prompt = self.build_nudge_prompt(ticket)
-                    nudge_result = await active_supervisor.run(
-                        ticket=ticket,
-                        prompt=nudge_prompt,
-                        session_id=session_b_result.session_id,
-                        bounded=True,
-                    )
-                    session_runs.append(nudge_result)
-                    current_occupancy = max(current_occupancy, nudge_result.occupancy)
-                    if (
-                        nudge_result.ready_signal_present
-                        or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-                    ):
-                        return SingleCycleResult(
-                            status=SingleCycleStatus.READY,
-                            session_id=learned_session_id,
-                            resumed_session_id=session_b_result.session_id,
-                            session_ids=tuple(observed_session_ids),
-                            occupancy=current_occupancy,
-                            ready_signal_present=True,
-                            handoff_requested_at=req_time,
-                            checkpoint_path=checkpoint_path,
-                            run_results=tuple(session_runs),
-                        )
-                return await self._handle_escalation(
-                    ticket=ticket,
-                    reason="NO_SIGNAL_AFTER_NUDGE",
-                    source_session_id=session_b_result.session_id or learned_session_id,
-                    current_occupancy=current_occupancy,
-                    observed_session_ids=observed_session_ids,
-                    session_runs=session_runs,
-                    valid_checkpoint_recorded=valid_checkpoint_recorded,
-                )
-
-            # 6. Session A exited without handoff: check if ready signal was already written
-            if (
-                result_a.ready_signal_present
-                or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-            ):
-                return SingleCycleResult(
-                    status=SingleCycleStatus.READY,
-                    session_id=result_a.session_id,
-                    session_ids=tuple(observed_session_ids),
-                    occupancy=current_occupancy,
-                    ready_signal_present=True,
-                    run_results=tuple(session_runs),
-                )
-
-            # 7. Session A did not write ready signal. Check for CRASH vs EXIT 0:
-            if result_a.is_crash:
-                # Recovery Path 2: Crash (non-zero exit or stream error event)
-                # Exactly one same-session resume-retry whose prompt includes the trimmed stderr tail
+                # 7. Recovery Path 1: Exit 0 without a ready signal (nudge)
                 if not source_session_id or not is_valid_session_id(source_session_id):
                     return await self._handle_escalation(
                         ticket=ticket,
-                        reason=SingleCycleStatus.FAILED,
+                        reason="NO_SIGNAL_AFTER_NUDGE",
                         source_session_id=source_session_id,
                         current_occupancy=current_occupancy,
                         observed_session_ids=observed_session_ids,
                         session_runs=session_runs,
                         valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=result_a.stderr_tail,
+                        consecutive_handoffs=consecutive_handoffs,
                     )
 
-                retry_prompt = self.build_crash_retry_prompt(ticket, result_a.stderr_tail)
-                retry_result = await active_supervisor.run(
+                nudge_prompt = self.build_nudge_prompt(ticket)
+                nudge_result = await active_supervisor.run(
                     ticket=ticket,
-                    prompt=retry_prompt,
+                    prompt=nudge_prompt,
                     session_id=source_session_id,
                     bounded=True,
                 )
-                session_runs.append(retry_result)
-                current_occupancy = max(current_occupancy, retry_result.occupancy)
-
-                # Second crash: escalates without a third spawn
-                if retry_result.is_crash:
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason="CRASH_AFTER_RETRY",
-                        source_session_id=source_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=retry_result.stderr_tail,
-                    )
+                session_runs.append(nudge_result)
+                current_occupancy = max(current_occupancy, nudge_result.occupancy)
 
                 if (
-                    retry_result.reason == RunTerminationReason.KILLED_CEILING
-                    or current_occupancy >= self._budget_config.ceiling
-                ):
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.CEILING,
-                        source_session_id=source_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=retry_result.stderr_tail,
-                    )
-
-                if retry_result.reason == RunTerminationReason.STALLED:
-                    return await self._handle_escalation(
-                        ticket=ticket,
-                        reason=SingleCycleStatus.STALLED,
-                        source_session_id=source_session_id,
-                        current_occupancy=current_occupancy,
-                        observed_session_ids=observed_session_ids,
-                        session_runs=session_runs,
-                        valid_checkpoint_recorded=valid_checkpoint_recorded,
-                        last_stderr_tail=retry_result.stderr_tail,
-                    )
-
-                if (
-                    retry_result.ready_signal_present
+                    nudge_result.ready_signal_present
                     or self._runtime_paths.ready_signal_path(ticket.id).is_file()
                 ):
-                    return SingleCycleResult(
+                    return WorkerRunResult(
                         status=SingleCycleStatus.READY,
-                        session_id=source_session_id,
+                        session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                        resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
                         session_ids=tuple(observed_session_ids),
+                        handoffs=consecutive_handoffs,
                         occupancy=current_occupancy,
                         ready_signal_present=True,
+                        handoff_requested_at=last_handoff_requested_at,
+                        checkpoint_path=last_checkpoint_path,
                         run_results=tuple(session_runs),
                     )
 
-                # Retry exited 0 without signal -> escalate
                 return await self._handle_escalation(
                     ticket=ticket,
                     reason="NO_SIGNAL_AFTER_NUDGE",
@@ -944,56 +1002,9 @@ class HandoffCoordinator:
                     observed_session_ids=observed_session_ids,
                     session_runs=session_runs,
                     valid_checkpoint_recorded=valid_checkpoint_recorded,
-                    last_stderr_tail=retry_result.stderr_tail,
+                    last_stderr_tail=nudge_result.stderr_tail,
+                    consecutive_handoffs=consecutive_handoffs,
                 )
-
-            # 8. Recovery Path 1: Exit 0 without a ready signal
-            # Exactly one nudge run on the same session
-            if not source_session_id or not is_valid_session_id(source_session_id):
-                return await self._handle_escalation(
-                    ticket=ticket,
-                    reason="NO_SIGNAL_AFTER_NUDGE",
-                    source_session_id=source_session_id,
-                    current_occupancy=current_occupancy,
-                    observed_session_ids=observed_session_ids,
-                    session_runs=session_runs,
-                    valid_checkpoint_recorded=valid_checkpoint_recorded,
-                )
-
-            nudge_prompt = self.build_nudge_prompt(ticket)
-            nudge_result = await active_supervisor.run(
-                ticket=ticket,
-                prompt=nudge_prompt,
-                session_id=source_session_id,
-                bounded=True,
-            )
-            session_runs.append(nudge_result)
-            current_occupancy = max(current_occupancy, nudge_result.occupancy)
-
-            if (
-                nudge_result.ready_signal_present
-                or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-            ):
-                return SingleCycleResult(
-                    status=SingleCycleStatus.READY,
-                    session_id=source_session_id,
-                    session_ids=tuple(observed_session_ids),
-                    occupancy=current_occupancy,
-                    ready_signal_present=True,
-                    run_results=tuple(session_runs),
-                )
-
-            # A signal written during the nudge ends READY; otherwise escalate.
-            return await self._handle_escalation(
-                ticket=ticket,
-                reason="NO_SIGNAL_AFTER_NUDGE",
-                source_session_id=source_session_id,
-                current_occupancy=current_occupancy,
-                observed_session_ids=observed_session_ids,
-                session_runs=session_runs,
-                valid_checkpoint_recorded=valid_checkpoint_recorded,
-                last_stderr_tail=nudge_result.stderr_tail,
-            )
 
         finally:
             active_supervisor.on_budget_action = previous_budget_action

@@ -81,6 +81,7 @@ class FakeCommandRunner:
         self.spawn_invocations: list[CommandInvocation] = []
         self._registrations: dict[str, CommandResult] = {}
         self._spawn_registrations: dict[str, FakeProcessHandle] = {}
+        self._spawn_sequences: dict[str, list[FakeProcessHandle]] = {}
         self.default_result = default_result or CommandResult(
             exit_code=0,
             stdout="",
@@ -146,6 +147,7 @@ class FakeCommandRunner:
             delay=delay,
         )
         self._spawn_registrations[key] = handle
+        self._spawn_sequences.setdefault(key, []).append(handle)
         return handle
 
     def register_spawn_handle(
@@ -156,6 +158,7 @@ class FakeCommandRunner:
         """Register an existing FakeProcessHandle for a command."""
         key = self._normalize_key(cmd)
         self._spawn_registrations[key] = handle
+        self._spawn_sequences.setdefault(key, []).append(handle)
 
     async def run(
         self,
@@ -184,6 +187,10 @@ class FakeCommandRunner:
 
         self.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=cwd, env=env))
         key = self._normalize_key(cmd)
+        if key in self._spawn_sequences and self._spawn_sequences[key]:
+            if len(self._spawn_sequences[key]) > 1:
+                return self._spawn_sequences[key].pop(0)
+            return self._spawn_sequences[key][0]
         if key in self._spawn_registrations:
             return self._spawn_registrations[key]
         if self.default_spawn_handle is not None:
