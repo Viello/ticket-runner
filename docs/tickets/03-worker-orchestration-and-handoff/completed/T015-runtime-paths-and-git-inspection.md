@@ -1,5 +1,6 @@
 # T015 — Runtime paths value object and git inspection commands
-Status: pending
+Status: completed
+Completed: 2026-09-16T09:48:15Z
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
 ### Requirements

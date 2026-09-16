@@ -135,3 +135,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Parser Metadata Tolerance for Unknown Security Values
 - **Problem**: Rejecting or raising format errors on non-standard `Security:` metadata values (such as `Security: optional`, `Security: none`, or omitted lines) breaks backward compatibility with existing tickets and tightly couples queue scanning to rigid review configurations.
 - **Solution**: Follow repo metadata tolerance conventions by only resolving exact case-insensitive matches for `Security: required` (with whitespace stripping) to `True`, safely defaulting missing lines and all alternative values to `False` without raising.
+
+### Safe Parent Directory Creation for Relative Paths
+- **Problem**: Calling `Path(path).parent.mkdir(parents=True, exist_ok=True)` on a filename in the current working directory (where `Path("file.txt").parent == Path("")`) raises `FileNotFoundError: [WinError 3] The system cannot find the path specified: ''` on Windows.
+- **Solution**: Guard parent directory creation in `RuntimePaths.ensure_parent_dir` by checking `if str(parent) not in ("", ".")` before dispatching to `mkdir()`.
+
+### Pure Path Object Instantiation Without Disk Side-Effects
+- **Problem**: Initializing path configuration value objects that eagerly invoke directory creation (`mkdir`) causes import-time and test-time side-effects, polluting clean worktrees or tripping git cleanliness checks.
+- **Solution**: Keep `RuntimePaths` as a pure value object computing immutable `Path` representations, exposing explicit `ensure_*` helper methods that callers invoke only on demand when ready to write.

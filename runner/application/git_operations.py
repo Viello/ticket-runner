@@ -47,6 +47,38 @@ class GitOperations:
         """Default conventional commit prefix."""
         return self._commit_prefix
 
+    async def status_porcelain(self, cwd: Path | None = None) -> str:
+        """Run `git status --porcelain` and return raw stdout.
+
+        Returns:
+            The raw stdout output of `git status --porcelain`.
+
+        Raises:
+            GitError: If the status command fails (e.g. not a git repository).
+        """
+        target_cwd = cwd if cwd is not None else self._cwd
+        result = await self._client.status_porcelain(cwd=target_cwd)
+        if not result.success:
+            err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise GitError(f"Failed to run git status --porcelain: {err_msg}")
+        return result.stdout
+
+    async def diff_stat(self, cwd: Path | None = None) -> str:
+        """Run `git diff --stat` and return raw stdout.
+
+        Returns:
+            The raw stdout output of `git diff --stat`.
+
+        Raises:
+            GitError: If the diff command fails.
+        """
+        target_cwd = cwd if cwd is not None else self._cwd
+        result = await self._client.diff_stat(cwd=target_cwd)
+        if not result.success:
+            err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise GitError(f"Failed to run git diff --stat: {err_msg}")
+        return result.stdout
+
     async def check_clean_working_tree(self) -> bool:
         """Check if the git working tree is clean with zero uncommitted changes.
 
@@ -56,11 +88,8 @@ class GitOperations:
         Raises:
             GitError: If the status command fails (e.g. not a git repository).
         """
-        result = await self._client.status_porcelain(cwd=self._cwd)
-        if not result.success:
-            err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
-            raise GitError(f"Failed to check git working tree status: {err_msg}")
-        return len(result.stdout.strip()) == 0
+        stdout = await self.status_porcelain()
+        return len(stdout.strip()) == 0
 
     async def get_current_branch(self) -> str:
         """Get the name of the currently checked out branch.
