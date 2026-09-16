@@ -1,5 +1,6 @@
 # T020 — Worker supervisor B: stall watchdog, termination ladder, bounded runs
-Status: pending
+Status: completed
+Completed: 2026-09-16T13:29:00Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 

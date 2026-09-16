@@ -184,4 +184,17 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In newly spawned OpenCode sessions, the session identifier is unknown prior to execution and only learned from the first streamed event's `sessionID` field; attempting immediate log file creation before receiving the first event causes missing or misplaced log streams.
 - **Solution**: Buffer initial stdout lines in memory until the first valid session ID is decoded and validated, then atomically open the session log in append mode (`open(..., "a", newline="")`) and flush the buffered lines before proceeding with streaming writes.
 
+### Async Stream Cancellation and Drain Race Invariants
+- **Problem**: When waiting concurrently on the next stdout stream line and external kill events with `asyncio.wait(..., return_when=FIRST_COMPLETED)`, abandoning the stream reader task without cancellation or proper draining leaves unconsumed or pending tasks running in the event loop background, and can miss writing the final buffered output line that completed concurrently with the interrupt.
+- **Solution**: Explicitly cancel and suppress exceptions on pending tasks upon `FIRST_COMPLETED`, inspect whether the line read task completed simultaneously before termination ladder execution, and persist any retrieved line to the active session log before exiting.
+
+### Injected Time Delta Evaluation vs Clock Sampling Latency
+- **Problem**: Evaluating stall and wall-clock timeouts solely prior to initiating `asyncio.wait()` causes elapsed silence or deadline violations that occur during chunk generation to be masked if the stream producer advances an injected clock immediately prior to yielding a line, updating `last_line_time` without ever evaluating the duration of the preceding silent gap.
+- **Solution**: Compute and evaluate elapsed silence `arrival_time - last_line_time` and wall-clock duration `arrival_time - start_time` both before initiating the bounded wait and immediately upon receipt of the next completed line, triggering `RunTerminationReason.STALLED` if the silence window was exceeded.
+
+### Dual Sync and Async Callable Protocol for External Interrupt APIs
+- **Problem**: Implementing external interrupt APIs (like `request_kill`) as native coroutines (`async def`) causes unawaited invocations from synchronous callbacks (such as budget monitors or telemetry hooks) to fail silently with unhandled `RuntimeWarning: coroutine was never awaited`, while defining them as pure synchronous methods raises `TypeError` when callers in async contexts invoke `await supervisor.request_kill(...)`.
+- **Solution**: Implement interrupt methods as synchronous operations setting internal atomic state and an `asyncio.Event`, returning a lightweight custom awaitable object implementing `__await__` that yields immediately to `None`, supporting both synchronous and awaited call sites without warnings or runtime errors.
+
+
 

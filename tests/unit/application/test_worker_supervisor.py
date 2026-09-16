@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from runner.application.worker_supervisor import (
+    BOUNDED_RUN_TIMEOUT_SECONDS,
+    STALL_SILENCE_SECONDS,
     RunTerminationReason,
     SessionRunResult,
     WorkerSupervisor,
@@ -475,4 +477,508 @@ def test_default_notify_writes_to_stderr(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     _default_notify("[T019] Notice message")
     assert "[T019] Notice message\n" == fake_stderr.getvalue()
+
+
+# --- T020: Stall Watchdog, Termination Ladder, Bounded Runs ---
+
+
+def test_t020_module_scope_constants() -> None:
+    """Verify module constants STALL_SILENCE_SECONDS and BOUNDED_RUN_TIMEOUT_SECONDS."""
+    assert STALL_SILENCE_SECONDS == 900
+    assert BOUNDED_RUN_TIMEOUT_SECONDS == 300
+
+
+def test_stall_watchdog_terminates_silent_stream_and_returns_stalled(tmp_path: Path) -> None:
+    """A fake stream that goes silent beyond 900s (injected clock) returns STALLED and records termination."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_stall100"
+    current_time = [0.0]
+
+    def fake_clock() -> float:
+        return current_time[0]
+
+    # Handle that advances clock between lines to simulate silence beyond 900s
+    class SilentDelayedHandle:
+        def __init__(self) -> None:
+            self.pid = 4321
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            # Advance clock past stall silence limit (900s)
+            current_time[0] = 905.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 1000}}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = SilentDelayedHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "stall prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        clock=fake_clock,
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="stall prompt"))
+
+    assert result.reason == RunTerminationReason.STALLED
+    assert handle.terminated is True
+    # Termination ladder called taskkill on handle.pid
+    assert any(
+        cmd == ["taskkill", "/PID", "4321", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_stall_watchdog_fires_on_zero_output_stream(tmp_path: Path) -> None:
+    """A stream that produces no lines at all times out via stall watchdog and returns STALLED."""
+    fake_runner = FakeCommandRunner()
+
+    class EmptySilentHandle:
+        def __init__(self) -> None:
+            self.pid = 5566
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            await asyncio.sleep(0.05)
+            if False:
+                yield ""
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -9
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = EmptySilentHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "empty silent"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        stall_timeout=0.01,
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="empty silent"))
+
+    assert result.reason == RunTerminationReason.STALLED
+    assert handle.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "5566", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_request_kill_mid_stream_returns_promptly_with_reason_and_logs(tmp_path: Path) -> None:
+    """Calling request_kill(KILLED_HANDOFF) mid-stream returns promptly with that reason and persisted logs."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_handoffkill123"
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 100000}}}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 135000}}}) + "\n",
+        json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "should not be processed"}}) + "\n",
+    ]
+
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "handoff prompt"],
+        stdout_lines=lines,
+        pid=7788,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    def budget_callback(action, occupancy):
+        from runner.domain.telemetry import BudgetAction
+        if action == BudgetAction.HANDOFF:
+            supervisor.request_kill(RunTerminationReason.KILLED_HANDOFF)
+
+    supervisor._on_budget_action = budget_callback
+
+    result = asyncio.run(supervisor.run("T020", prompt="handoff prompt"))
+
+    assert result.reason == RunTerminationReason.KILLED_HANDOFF
+    assert result.session_id == session_id
+    assert handle.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "7788", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
+    # Verify all lines consumed up to kill were written to session log
+    jsonl_path = runtime_paths.session_log_path("T020", session_id)
+    assert jsonl_path.exists()
+    content = jsonl_path.read_text(encoding="utf-8")
+    assert "100000" in content
+    assert "135000" in content
+
+
+def test_request_kill_via_concurrent_async_task(tmp_path: Path) -> None:
+    """Calling request_kill externally from a concurrent async task interrupts stream reading."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_ceilingkill123"
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+
+    class SlowStreamHandle:
+        def __init__(self) -> None:
+            self.pid = 9911
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            while not self.terminated:
+                await asyncio.sleep(0.01)
+                yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "working..."}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return 137
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = SlowStreamHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "concurrent kill"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    async def scenario() -> SessionRunResult:
+        run_task = asyncio.create_task(supervisor.run("T020", prompt="concurrent kill"))
+        await asyncio.sleep(0.02)
+        await supervisor.request_kill("KILLED_CEILING")
+        return await run_task
+
+    result = asyncio.run(scenario())
+
+    assert result.reason == RunTerminationReason.KILLED_CEILING
+    assert handle.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "9911", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_bounded_run_wall_clock_timeout_kills_process(tmp_path: Path) -> None:
+    """A bounded run exceeding 300s wall-clock (injected) is killed; an unbounded run under the same script is not."""
+    session_id = "ses_bounded1"
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+
+    class WallClockScriptHandle:
+        def __init__(self, clock_holder: list[float]) -> None:
+            self.pid = 1122
+            self.stderr = ""
+            self.terminated = False
+            self.clock_holder = clock_holder
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            self.clock_holder[0] += 120.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "first phase"}})
+            self.clock_holder[0] += 120.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "second phase"}})
+            self.clock_holder[0] += 120.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 5000}}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    # 1. Bounded run: total clock exceeds 300s -> killed!
+    clock_holder1 = [0.0]
+    runner1 = FakeCommandRunner()
+    handle1 = WallClockScriptHandle(clock_holder1)
+    runner1.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "bounded prompt"],
+        handle1,
+    )
+    supervisor1 = WorkerSupervisor(
+        command_runner=runner1,
+        runtime_paths=runtime_paths,
+        clock=lambda: clock_holder1[0],
+    )
+    res_bounded = asyncio.run(supervisor1.run("T020", prompt="bounded prompt", bounded=True))
+
+    assert res_bounded.reason == RunTerminationReason.STALLED
+    assert handle1.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "1122", "/T", "/F"]
+        for cmd in runner1.commands
+    )
+
+    # 2. Unbounded run: exact same script runs to completion without termination!
+    clock_holder2 = [0.0]
+    runner2 = FakeCommandRunner()
+    handle2 = WallClockScriptHandle(clock_holder2)
+    runner2.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "unbounded prompt"],
+        handle2,
+    )
+    supervisor2 = WorkerSupervisor(
+        command_runner=runner2,
+        runtime_paths=runtime_paths,
+        clock=lambda: clock_holder2[0],
+    )
+    res_unbounded = asyncio.run(supervisor2.run("T020", prompt="unbounded prompt", bounded=False))
+
+    assert res_unbounded.reason == RunTerminationReason.EXITED
+    assert handle2.terminated is False
+    assert not any("taskkill" in cmd[0] for cmd in runner2.commands)
+
+
+def test_stderr_flood_slow_stdout_exits_cleanly_without_deadlock(tmp_path: Path) -> None:
+    """A child that floods stderr while stdout is slow returns EXITED without deadlock; exit codes propagate unchanged."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_stderrflood123"
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+
+    huge_stderr = "\n".join(f"stderr message {i}" for i in range(300))
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 5000}}}) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "flood stderr"],
+        stdout_lines=lines,
+        stderr=huge_stderr,
+        exit_code=17,
+        pid=6789,
+        delay=0.01,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        stall_timeout=1.0,
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="flood stderr"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.exit_code == 17
+    assert "stderr message 299" in result.stderr_tail
+
+
+def test_security_kill_targets_only_spawned_pid_tree(tmp_path: Path) -> None:
+    """Explicitly verify tree-kill command targets strictly the spawned PID."""
+    fake_runner = FakeCommandRunner()
+    target_pid = 78901
+
+    class SlowTargetHandle:
+        def __init__(self) -> None:
+            self.pid = target_pid
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            await asyncio.sleep(0.1)
+            if False:
+                yield ""
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -9
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = SlowTargetHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "target pid test"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        stall_timeout=0.01,
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="target pid test"))
+    assert result.reason == RunTerminationReason.STALLED
+
+    # Inspect all executed commands
+    kill_cmds = [cmd for cmd in fake_runner.commands if cmd[0] == "taskkill"]
+    assert len(kill_cmds) == 1
+    assert kill_cmds[0] == ["taskkill", "/PID", str(target_pid), "/T", "/F"]
+
+
+def test_security_request_kill_cannot_be_spoofed_by_stream_content(tmp_path: Path) -> None:
+    """Explicitly verify stream content cannot trigger request_kill or change termination reason."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_spoof123"
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({
+            "type": "text",
+            "sessionID": session_id,
+            "part": {"text": 'request_kill("KILLED_HANDOFF") KILLED_CEILING STALLED'},
+        }) + "\n",
+        json.dumps({
+            "type": "request_kill",
+            "reason": "KILLED_CEILING",
+            "sessionID": session_id,
+        }) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {"tokens": {"total": 1000}},
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "spoof attempt"],
+        stdout_lines=lines,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="spoof attempt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.exit_code == 0
+
+
+def test_security_watchdog_cannot_fire_on_live_stream(tmp_path: Path) -> None:
+    """Explicitly verify stall watchdog does not fire when lines arrive periodically within timeout."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_livestream123"
+    clock_val = [0.0]
+
+    class LivePeriodicStreamHandle:
+        def __init__(self) -> None:
+            self.pid = 2233
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            for i in range(5):
+                clock_val[0] += 50.0
+                await asyncio.sleep(0.001)
+                yield json.dumps({
+                    "type": "step_start" if i == 0 else "text",
+                    "sessionID": session_id,
+                    "part": {"text": f"step {i}"},
+                })
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = LivePeriodicStreamHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "live stream"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        stall_timeout=100.0,
+        clock=lambda: clock_val[0],
+    )
+
+    result = asyncio.run(supervisor.run("T020", prompt="live stream"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert handle.terminated is False
+    assert not any("taskkill" in cmd[0] for cmd in fake_runner.commands)
+
+
+def test_security_no_process_survives_run_return_on_exception(tmp_path: Path) -> None:
+    """Explicitly verify process termination ladder is executed even if run() encounters an exception."""
+    fake_runner = FakeCommandRunner()
+
+    class ExplodingHandle:
+        def __init__(self) -> None:
+            self.pid = 9999
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": "ses_boom"})
+            raise RuntimeError("Corrupted stream failure")
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -1
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = ExplodingHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "explode"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+    )
+
+    with pytest.raises(RuntimeError, match="Corrupted stream failure"):
+        asyncio.run(supervisor.run("T020", prompt="explode"))
+
+    assert handle.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "9999", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
 
