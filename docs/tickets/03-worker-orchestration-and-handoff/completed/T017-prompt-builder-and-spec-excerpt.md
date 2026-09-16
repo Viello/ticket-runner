@@ -1,5 +1,6 @@
 # T017 — Prompt builder and Spec Excerpt extraction
-Status: pending
+Status: completed
+Completed: 2026-09-16T12:55:50Z
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
 ### Requirements

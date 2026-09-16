@@ -156,3 +156,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: CLI tools like OpenCode running on Windows emit JSONL streaming events ending with CRLF (`\r\n`), causing naive `\n` line stripping or strict line parsing assertions to preserve trailing `\r` carriage returns.
 - **Solution**: Always strip trailing CRLF explicitly using `.rstrip("\r\n")` on decoded stream lines before yielding to callers.
 
+### Dual Class and Instance Builder Method Dispatch
+- **Problem**: Decorating builder entrypoints with `@classmethod` prevents access to instance attributes when called on configured instances, while regular methods require instantiation and fail when called directly on the class.
+- **Solution**: Implement a lightweight descriptor (`_BuildDispatcher`) that inspects whether the method was accessed on an instance or owner class, routing to the appropriate bound or unbound builder callable.
+
+### Verbatim Markdown Passthrough in Pure Prompt Composition
+- **Problem**: Attempting to sanitize, escape, or reformat pre-authored ticket requirements and acceptance criteria in prompt templates corrupts verbatim code snippets, regular expressions, and markdown syntax.
+- **Solution**: Pass ticket content strings through verbatim into the prompt template without escaping, while deterministically normalizing bullet points and section headers.
+
