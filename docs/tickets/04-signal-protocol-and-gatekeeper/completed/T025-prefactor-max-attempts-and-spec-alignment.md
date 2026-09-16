@@ -1,5 +1,6 @@
 # T025 — Prefactor: rename verification budget to `max_attempts` and align Spec 04
-Status: pending
+Status: completed
+Completed: 2026-09-16T15:46:30Z
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
 Blocked by: none
 

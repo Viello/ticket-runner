@@ -18,8 +18,8 @@ verification:
   test_cmd: "pytest"
   # Optional build command run before test_cmd (e.g., "npm run build" or "")
   build_cmd: ""
-  # Maximum failed verification attempts before tripping the Circuit Breaker
-  max_retries: 3
+  # Total Verification Attempts before the Circuit Breaker trips
+  max_attempts: 3
   # Maximum execution time in seconds for verification commands
   timeout_seconds: 300
 

@@ -45,7 +45,7 @@ class VerificationConfig:
 
     test_cmd: str
     build_cmd: str = ""
-    max_retries: int = 3
+    max_attempts: int = 3
     timeout_seconds: int = 300
 
     def __post_init__(self) -> None:
@@ -53,8 +53,8 @@ class VerificationConfig:
             raise ConfigError("Verification test_cmd must be a non-empty string")
         if not isinstance(self.build_cmd, str):
             raise ConfigError("Verification build_cmd must be a string")
-        if not isinstance(self.max_retries, int) or self.max_retries <= 0:
-            raise ConfigError("Verification max_retries must be a positive integer")
+        if not isinstance(self.max_attempts, int) or self.max_attempts <= 0:
+            raise ConfigError("Verification max_attempts must be a positive integer")
         if not isinstance(self.timeout_seconds, int) or self.timeout_seconds <= 0:
             raise ConfigError("Verification timeout_seconds must be a positive integer")
 

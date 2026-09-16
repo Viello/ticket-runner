@@ -51,7 +51,7 @@ worker:
 verification:
   test_cmd: "pytest"
   build_cmd: ""
-  max_retries: 3
+  max_attempts: 3
   timeout_seconds: 300
 
 tokens:

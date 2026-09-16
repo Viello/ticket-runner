@@ -47,34 +47,34 @@ def test_verification_config_valid() -> None:
     cfg = VerificationConfig(
         test_cmd="pytest",
         build_cmd="npm run build",
-        max_retries=3,
+        max_attempts=3,
         timeout_seconds=300,
     )
     assert cfg.test_cmd == "pytest"
     assert cfg.build_cmd == "npm run build"
-    assert cfg.max_retries == 3
+    assert cfg.max_attempts == 3
     assert cfg.timeout_seconds == 300
 
 
 @pytest.mark.parametrize(
-    ("test_cmd", "max_retries", "timeout_seconds"),
+    ("test_cmd", "max_attempts", "timeout_seconds"),
     [
         ("", 3, 300),        # empty test_cmd
         ("   ", 3, 300),     # whitespace test_cmd
-        ("pytest", 0, 300),  # zero max_retries
-        ("pytest", -1, 300), # negative max_retries
+        ("pytest", 0, 300),  # zero max_attempts
+        ("pytest", -1, 300), # negative max_attempts
         ("pytest", 3, 0),    # zero timeout
         ("pytest", 3, -10),  # negative timeout
     ],
 )
 def test_verification_config_invalid(
-    test_cmd: str, max_retries: int, timeout_seconds: int
+    test_cmd: str, max_attempts: int, timeout_seconds: int
 ) -> None:
     with pytest.raises(ConfigError):
         VerificationConfig(
             test_cmd=test_cmd,
             build_cmd="",
-            max_retries=max_retries,
+            max_attempts=max_attempts,
             timeout_seconds=timeout_seconds,
         )
 
@@ -158,7 +158,7 @@ def test_immutability_frozen_dataclass() -> None:
 def test_runner_config_composite() -> None:
     project = ProjectConfig(name="ticket-runner", branch="agent/ticket-runner", base_branch="main")
     worker = WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md")
-    verification = VerificationConfig(test_cmd="pytest", build_cmd="", max_retries=3, timeout_seconds=300)
+    verification = VerificationConfig(test_cmd="pytest", build_cmd="", max_attempts=3, timeout_seconds=300)
     tokens = TokenBudgetConfig(warn=120000, handoff=135000, ceiling=150000)
     presence = PresenceConfig(default_mode="nearby", idle_escalation_minutes=3)
     discord = DiscordConfig(enabled=True, token_env="DISCORD_BOT_TOKEN", channel_id="")

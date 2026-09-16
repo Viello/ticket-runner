@@ -20,7 +20,7 @@ worker:
 verification:
   test_cmd: "pytest"
   build_cmd: "npm run build"
-  max_retries: 3
+  max_attempts: 3
   timeout_seconds: 300
 
 tokens:
@@ -67,7 +67,7 @@ def test_load_valid_yaml_file(tmp_path: Path) -> None:
     assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
     assert config.verification.test_cmd == "pytest"
     assert config.verification.build_cmd == "npm run build"
-    assert config.verification.max_retries == 3
+    assert config.verification.max_attempts == 3
     assert config.verification.timeout_seconds == 300
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
@@ -206,7 +206,7 @@ git: {}
     config = loader.load_from_string(minimal_yaml)
 
     assert config.verification.build_cmd == ""
-    assert config.verification.max_retries == 3
+    assert config.verification.max_attempts == 3
     assert config.verification.timeout_seconds == 300
     assert config.presence.idle_escalation_minutes == 3
     assert config.discord.enabled is True
