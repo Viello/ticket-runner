@@ -123,7 +123,7 @@ def test_cli_start_threads_config_path(
     assert received_config_path == Path("custom.yaml")
 
 
-def test_cli_start_with_pending_tickets_and_no_processor_reports_spec_03(
+def test_cli_start_with_pending_tickets_and_no_processor_reports_spec_04(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -147,7 +147,8 @@ def test_cli_start_with_pending_tickets_and_no_processor_reports_spec_03(
     code = ticket_runner.main(["start", "--local-only"])
     assert code == 1
     captured = capsys.readouterr()
-    assert "Worker execution arrives in Spec 03" in captured.out or "Worker execution will arrive in Spec 03" in captured.out
+    assert "Worker execution will arrive in Spec 03" not in captured.out
+    assert "Spec 04" in captured.out
     # Repository was untouched
     assert pending_ticket.status == TicketStatus.PENDING
 

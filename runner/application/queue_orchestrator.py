@@ -264,7 +264,7 @@ class QueueOrchestrator:
         active_processor = processor or self._processor
         if active_processor is None:
             raise RuntimeError(
-                "No ticket processor configured. Worker execution will arrive in Spec 03."
+                "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
             )
 
         self.acquire_lock()
@@ -413,7 +413,7 @@ class QueueOrchestrator:
             pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
             if pending is not None and active_processor is None:
                 raise RuntimeError(
-                    "No ticket processor configured. Worker execution will arrive in Spec 03."
+                    "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
                 )
 
             # 2. Process initial queue until empty or paused
@@ -463,7 +463,7 @@ class QueueOrchestrator:
                     printer(f"[Queue] Detected new pending ticket '{pending.id}'. Resuming queue execution...")
                     if active_processor is None:
                         raise RuntimeError(
-                            "No ticket processor configured. Worker execution will arrive in Spec 03."
+                            "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
                         )
                     while not self._is_paused:
                         outcome = await self.run_next(processor=active_processor)

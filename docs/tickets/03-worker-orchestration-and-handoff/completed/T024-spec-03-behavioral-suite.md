@@ -1,5 +1,6 @@
 # T024 — Spec 03 behavioral suite and placeholder refresh
-Status: pending
+Status: completed
+Completed: 2026-09-16T14:18:48Z
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
 ### Requirements
