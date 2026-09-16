@@ -1,4 +1,4 @@
-"""Unit tests for HandoffCoordinator application interactor (T021)."""
+"""Unit tests for HandoffCoordinator application interactor (T021 & T022)."""
 
 import asyncio
 import json
@@ -8,23 +8,29 @@ import pytest
 
 from runner.adapters.markdown.gotchas_store import GotchasStore
 from runner.adapters.markdown.spec_parser import SpecExcerpt
+from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import (
     CLOCK_SLACK_SECONDS,
+    ESCALATED,
+    EscalationNotice,
     HandoffCoordinator,
     SingleCycleResult,
     SingleCycleStatus,
+    WorkerRunResult,
+    default_recovery_confirmation,
     is_checkpoint_fresh,
 )
-from runner.application.worker_supervisor import WorkerSupervisor
+from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.domain.config import TokenBudgetConfig, WorkerConfig
 from runner.domain.exceptions import TicketFormatError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.ticket import Ticket, TicketStatus
-from tests.fakes.fake_command_runner import FakeCommandRunner
+from runner.ports.command_runner import CommandResult
+from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
 
 
 def _make_ticket(
-    ticket_id: str = "T021",
+    ticket_id: str = "T022",
     security_required: bool = True,
     spec_path: str = "docs/specs/03-worker-orchestration-and-handoff.md",
 ) -> Ticket:
@@ -49,7 +55,7 @@ SAMPLE_SPEC_EXCERPT = SpecExcerpt(
 )
 
 
-# --- AC 1: Handoff at 135k, Fixed Prompt, Checkpoint Freshness, and Session B Resume ---
+# --- AC 1 (T021): Handoff at 135k, Fixed Prompt, Fresh Checkpoint, Session B Resume ---
 
 
 def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path) -> None:
@@ -60,13 +66,12 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
     """
     fake_runner = FakeCommandRunner()
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021", security_required=True)
-    checkpoint_file = runtime_paths.checkpoint_path("T021")
+    ticket = _make_ticket("T022", security_required=True)
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
 
     session_a_id = "ses_firstSession1"
     session_b_id = "ses_secondSession2"
 
-    # Stream for Session A: hits 135,000 tokens
     session_a_lines = [
         json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
         json.dumps({
@@ -76,7 +81,6 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
         }) + "\n",
     ]
 
-    # Stream for Handoff instruction run on Session A
     session_handoff_lines = [
         json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
         json.dumps({
@@ -91,7 +95,6 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
         }) + "\n",
     ]
 
-    # Stream for Session B: fresh session, finishes with ready signal
     session_b_lines = [
         json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n",
         json.dumps({
@@ -101,7 +104,6 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
         }) + "\n",
     ]
 
-    # Initial prompt matching
     supervisor = WorkerSupervisor(
         command_runner=fake_runner,
         runtime_paths=runtime_paths,
@@ -109,68 +111,58 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
     coordinator = HandoffCoordinator(
         supervisor=supervisor,
         runtime_paths=runtime_paths,
+        clock=lambda: 1000.0,
     )
 
     initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
     handoff_prompt = coordinator.build_handoff_prompt(ticket)
     resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
 
-    # Verify Spec 03 fixed prompt content
     assert "Context budget threshold reached (135k tokens)." in handoff_prompt
     assert ".agents/skills/handoff/SKILL.md" in handoff_prompt
     assert checkpoint_file.as_posix() in handoff_prompt
     assert "include modified files, architectural decisions, test status, and immediate next steps" in handoff_prompt.lower()
     assert handoff_prompt.strip().endswith("Then exit.")
 
-    # Verify Resume prompt content
     assert checkpoint_file.as_posix() in resume_prompt
     assert "`git status`" in resume_prompt
-    assert "T021" in resume_prompt
+    assert "T022" in resume_prompt
+
+    # Deterministic handle writing checkpoint upon wait()
+    class _HandoffHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(stdout_lines=session_handoff_lines)
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T022")
+            checkpoint_file.write_text("# Checkpoint\n- Modified: file1.py", encoding="utf-8")
+            os.utime(checkpoint_file, (1001.0, 1001.0))
+            return 0
+
+    class _SessionBHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(stdout_lines=session_b_lines)
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path("T022")
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
 
     fake_runner.register_spawn(
         ["opencode", "run", "--format", "json", "--auto", initial_prompt],
         stdout_lines=session_a_lines,
     )
-    fake_runner.register_spawn(
+    fake_runner.register_spawn_handle(
         ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt],
-        stdout_lines=session_handoff_lines,
+        _HandoffHandle(),
     )
-    fake_runner.register_spawn(
+    fake_runner.register_spawn_handle(
         ["opencode", "run", "--format", "json", "--auto", resume_prompt],
-        stdout_lines=session_b_lines,
+        _SessionBHandle(),
     )
 
-    # Fake clock to test freshness
-    simulated_time = [1000.0]
-
-    def _clock() -> float:
-        return simulated_time[0]
-
-    coordinator._clock = _clock
-
-    async def _execute() -> SingleCycleResult:
-        async def _run_cycle_with_checkpoint():
-            run_task = asyncio.create_task(
-                coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
-            )
-            # Give Session A time to run and trigger handoff
-            await asyncio.sleep(0.01)
-            # Advance clock and write fresh checkpoint
-            simulated_time[0] = 1001.0
-            runtime_paths.ensure_checkpoint_dir("T021")
-            checkpoint_file.write_text("# Checkpoint\n- Modified: file1.py", encoding="utf-8")
-            os.utime(checkpoint_file, (1001.0, 1001.0))
-
-            # Emit ready signal for Session B
-            ready_sig = runtime_paths.ready_signal_path("T021")
-            runtime_paths.ensure_signals_dir()
-            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
-
-            return await run_task
-
-        return await _run_cycle_with_checkpoint()
-
-    result = asyncio.run(_execute())
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
 
     assert result.status == SingleCycleStatus.READY
     assert result == "READY"
@@ -183,31 +175,580 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
     assert result.ready_signal_present is True
     assert len(result.run_results) == 3
 
-    # Verify command sequence in spawns
     assert len(fake_runner.spawns) == 3
-    # 1. Initial run (no --session)
-    assert fake_runner.spawns[0] == [
-        "opencode", "run", "--format", "json", "--auto", initial_prompt
+    assert fake_runner.spawns[0] == ["opencode", "run", "--format", "json", "--auto", initial_prompt]
+    assert fake_runner.spawns[1] == ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt]
+    assert fake_runner.spawns[2] == ["opencode", "run", "--format", "json", "--auto", resume_prompt]
+
+
+# --- T022 Path 1: Exit 0 Without Ready Signal (Nudge) ---
+
+
+def test_exit_0_without_ready_signal_nudges_same_session_and_succeeds(tmp_path: Path) -> None:
+    """Exit 0 without ready signal triggers exactly one nudge spawn on same session;
+
+    signal appearing on disk during nudge returns READY.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    session_id = "ses_nudgeSession"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 30000}}}) + "\n",
     ]
-    # 2. Handoff run (with --session learned-id)
+
+    nudge_prompt = coordinator_prompt = f"You exited without writing `.agent/signals/{ticket.id}_ready.json`. Write it with your `self_review_notes`, or report the blocker, then exit."
+
+    class _NudgeHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(stdout_lines=[
+                json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+                json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 32000}}}) + "\n",
+            ])
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path(ticket.id)
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready", "self_review_notes": "All ACs pass"}', encoding="utf-8")
+            return 0
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", nudge_prompt],
+        _NudgeHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert result.is_ready is True
+    assert result.session_id == session_id
+    assert result.occupancy == 32000
+    assert len(fake_runner.spawns) == 2
     assert fake_runner.spawns[1] == [
-        "opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt
-    ]
-    # 3. Session B run (no --session, fresh session)
-    assert fake_runner.spawns[2] == [
-        "opencode", "run", "--format", "json", "--auto", resume_prompt
+        "opencode", "run", "--format", "json", "--session", session_id, "--auto", nudge_prompt
     ]
 
 
-# --- AC 2: Checkpoint Stale and Missing Failures ---
+def test_exit_0_without_ready_signal_nudges_and_escalates_on_missing_signal(tmp_path: Path) -> None:
+    """If nudge run also finishes without a ready signal, execution escalates."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    session_id = "ses_nudgeEscalate"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 30000}}}) + "\n",
+    ]
+    nudge_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 35000}}}) + "\n",
+    ]
+
+    notices: list[EscalationNotice] = []
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        notify=notices.append,
+        confirm_recovery=lambda esc: False,  # Decline recovery
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    nudge_prompt = coordinator.build_nudge_prompt(ticket)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", nudge_prompt],
+        stdout_lines=nudge_lines,
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "ESCALATED"
+    assert result == WorkerRunResult.ESCALATED
+    assert result.is_ready is False
+    assert result.is_escalated is True
+    assert len(fake_runner.spawns) == 2
+    assert len(notices) == 1
+    assert notices[0].ticket_id == "T022"
+    assert notices[0].reason == "NO_SIGNAL_AFTER_NUDGE"
+
+
+# --- T022 Path 2: Crash Retry (Non-Zero Exit or Error Event) ---
+
+
+def test_crash_retries_once_same_session_with_trimmed_stderr(tmp_path: Path) -> None:
+    """Non-zero exit triggers exactly one same-session retry whose prompt includes stderr tail."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    session_id = "ses_crashSession"
+
+    stderr_msg = "Error: unhandled exception in build script\nTraceback line 42"
+
+    class _CrashHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+                ],
+                stderr=stderr_msg,
+                exit_code=1,
+            )
+
+    class _RetryHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+                    json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 40000}}}) + "\n",
+                ],
+                exit_code=0,
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path(ticket.id)
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    retry_prompt = coordinator.build_crash_retry_prompt(ticket, stderr_msg)
+
+    assert "unhandled exception in build script" in retry_prompt
+    assert "Traceback line 42" in retry_prompt
+
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        _CrashHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", retry_prompt],
+        _RetryHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert result.is_ready is True
+    assert len(fake_runner.spawns) == 2
+    assert fake_runner.spawns[1] == [
+        "opencode", "run", "--format", "json", "--session", session_id, "--auto", retry_prompt
+    ]
+
+
+def test_second_crash_escalates_without_third_spawn(tmp_path: Path) -> None:
+    """A second crash on the retry run escalates without a third spawn."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    session_id = "ses_doubleCrash"
+
+    class _Crash1Handle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_id}) + "\n"],
+                stderr="First crash error",
+                exit_code=1,
+            )
+
+    class _Crash2Handle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_id}) + "\n"],
+                stderr="Second crash error",
+                exit_code=1,
+            )
+
+    notices: list[EscalationNotice] = []
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        notify=notices.append,
+        confirm_recovery=lambda esc: False,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    retry_prompt = coordinator.build_crash_retry_prompt(ticket, "First crash error")
+
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        _Crash1Handle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", retry_prompt],
+        _Crash2Handle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "CRASH_AFTER_RETRY"
+    assert result.is_ready is False
+    assert len(fake_runner.spawns) == 2  # Exactly 2 spawns: initial + retry; no 3rd spawn
+    assert len(notices) == 1
+    assert notices[0].reason == "CRASH_AFTER_RETRY"
+    assert "Second crash error" in notices[0].stderr_tail
+
+
+def test_stream_error_event_triggers_crash_retry(tmp_path: Path) -> None:
+    """A stream 'error' event triggers crash retry even if process exits with code 0."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    session_id = "ses_streamError"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "error", "sessionID": session_id, "part": {"message": "Model connection refused"}}) + "\n",
+    ]
+
+    class _RetryHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+                    json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 25000}}}) + "\n",
+                ],
+                exit_code=0,
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path(ticket.id)
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    retry_prompt = coordinator.build_crash_retry_prompt(ticket, "")
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", retry_prompt],
+        _RetryHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert len(fake_runner.spawns) == 2
+
+
+# --- T022 Path 3: Escalation and Emergency Synthesis ---
+
+
+def test_escalation_confirmed_synthesizes_checkpoint_and_resumes_fresh_session(tmp_path: Path) -> None:
+    """With confirm_recovery True, synthetic checkpoint is written with status/diff content
+
+    and marker 'synthesized — no Worker handoff', then a fresh session resumes.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
+
+    session_a_id = "ses_ceilingBreach"
+    session_resumed_id = "ses_emergencyResume"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_a_id, "part": {"tokens": {"total": 150000}}}) + "\n",
+    ]
+
+    class _ResumedHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_resumed_id}) + "\n",
+                    json.dumps({"type": "step_finish", "sessionID": session_resumed_id, "part": {"tokens": {"total": 20000}}}) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path(ticket.id)
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    # Register fake git operations
+    fake_runner.register_result(
+        ["git", "status", "--porcelain"],
+        CommandResult(exit_code=0, stdout=" M runner/coordinator.py\n?? untracked.py\n", stderr=""),
+    )
+    fake_runner.register_result(
+        ["git", "diff", "--stat"],
+        CommandResult(exit_code=0, stdout=" runner/coordinator.py | 12 +++---\n 1 file changed\n", stderr=""),
+    )
+
+    git_ops = GitOperations(runner=fake_runner)
+    notices: list[EscalationNotice] = []
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        git_operations=git_ops,
+        notify=notices.append,
+        confirm_recovery=lambda esc: True,  # Authorize recovery
+        clock=lambda: 5555.0,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _ResumedHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert result.is_ready is True
+    assert result.resumed_session_id == session_resumed_id
+    assert result.session_ids == (session_a_id, session_resumed_id)
+
+    # Verify synthetic checkpoint file content
+    assert checkpoint_file.is_file()
+    content = checkpoint_file.read_text(encoding="utf-8")
+    assert "synthesized — no Worker handoff" in content
+    assert "T022" in content
+    assert "CEILING" in content
+    assert "5555.0" in content
+    assert "ses_ceilingBreach" in content
+    assert "M runner/coordinator.py" in content
+    assert "1 file changed" in content
+
+
+def test_escalation_declined_leaves_tree_untouched_and_writes_no_checkpoint(tmp_path: Path) -> None:
+    """Declined confirmation returns WorkerRunResult.ESCALATED, writes no checkpoint,
+
+    and leaves working tree untouched.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
+
+    session_a_id = "ses_ceilingBreach"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_a_id, "part": {"tokens": {"total": 150000}}}) + "\n",
+    ]
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        confirm_recovery=lambda esc: False,  # Decline
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "ESCALATED"
+    assert result == WorkerRunResult.ESCALATED
+    assert result == "CEILING"
+    assert result.is_ready is False
+    assert not checkpoint_file.exists()  # No checkpoint written!
+    assert len(fake_runner.spawns) == 1  # No fresh session spawned
+
+
+def test_stall_routes_through_confirmation_flow(tmp_path: Path) -> None:
+    """Stall failure routes through confirmation flow."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+
+    session_a_id = "ses_stallSession"
+    notices: list[EscalationNotice] = []
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        stall_timeout=5.0,
+    )
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        notify=notices.append,
+        confirm_recovery=lambda esc: False,
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    class _StallHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n"],
+                delay=10.0,
+            )
+
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        _StallHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "STALLED"
+    assert len(notices) == 1
+    assert notices[0].reason == "STALLED"
+
+
+def test_emergency_synthesis_does_not_overwrite_valid_cycle_checkpoint(tmp_path: Path) -> None:
+    """Emergency synthesis must not overwrite a valid fresh checkpoint from the current cycle."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    ticket = _make_ticket("T022")
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
+
+    session_a_id = "ses_handoffPassed"
+    session_b_id = "ses_sessionBCrashed"
+    session_resumed_id = "ses_sessionCResumed"
+
+    session_a_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_a_id, "part": {"tokens": {"total": 135000}}}) + "\n",
+    ]
+    session_handoff_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_a_id, "part": {"tokens": {"total": 136000}}}) + "\n",
+    ]
+
+    class _HandoffHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(stdout_lines=session_handoff_lines)
+
+        async def wait(self) -> int:
+            runtime_paths.ensure_checkpoint_dir("T022")
+            checkpoint_file.write_text("# Worker Real Checkpoint\n- Detailed findings", encoding="utf-8")
+            os.utime(checkpoint_file, (1001.0, 1001.0))
+            return 0
+
+    class _SessionBCrashHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n"],
+                stderr="Session B fatal crash",
+                exit_code=1,
+            )
+
+    class _SessionBRetryCrashHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n"],
+                stderr="Session B second crash",
+                exit_code=1,
+            )
+
+    class _SessionCResumedHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(
+                stdout_lines=[
+                    json.dumps({"type": "step_start", "sessionID": session_resumed_id}) + "\n",
+                    json.dumps({"type": "step_finish", "sessionID": session_resumed_id, "part": {"tokens": {"total": 20000}}}) + "\n",
+                ]
+            )
+
+        async def wait(self) -> int:
+            ready_sig = runtime_paths.ready_signal_path(ticket.id)
+            runtime_paths.ensure_signals_dir()
+            ready_sig.write_text('{"status": "ready"}', encoding="utf-8")
+            return 0
+
+    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        clock=lambda: 1000.0,
+        confirm_recovery=lambda esc: True,  # Authorize recovery
+    )
+
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    handoff_prompt = coordinator.build_handoff_prompt(ticket)
+    resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+    retry_prompt = coordinator.build_crash_retry_prompt(ticket, "Session B fatal crash")
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_a_lines,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_a_id, "--auto", handoff_prompt],
+        _HandoffHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _SessionBCrashHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_b_id, "--auto", retry_prompt],
+        _SessionBRetryCrashHandle(),
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", resume_prompt],
+        _SessionCResumedHandle(),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    # Verify the original worker checkpoint was NOT overwritten by emergency synthesis
+    assert checkpoint_file.is_file()
+    content = checkpoint_file.read_text(encoding="utf-8")
+    assert "# Worker Real Checkpoint" in content
+    assert "synthesized — no Worker handoff" not in content
+
+
+# --- T021 Checkpoint Stale and Missing Failures (Now Escalated) ---
 
 
 def test_checkpoint_written_before_handoff_request_fails_as_stale(tmp_path: Path) -> None:
-    """A checkpoint written before handoff_requested_at fails validation and returns CHECKPOINT_STALE."""
+    """A checkpoint written before handoff_requested_at fails validation and escalates."""
     fake_runner = FakeCommandRunner()
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
-    checkpoint_file = runtime_paths.checkpoint_path("T021")
+    ticket = _make_ticket("T022")
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
 
     session_a_id = "ses_stale123"
 
@@ -234,6 +775,7 @@ def test_checkpoint_written_before_handoff_request_fails_as_stale(tmp_path: Path
         supervisor=supervisor,
         runtime_paths=runtime_paths,
         clock=lambda: simulated_time[0],
+        confirm_recovery=lambda esc: False,
     )
 
     initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
@@ -248,27 +790,25 @@ def test_checkpoint_written_before_handoff_request_fails_as_stale(tmp_path: Path
         stdout_lines=session_handoff_lines,
     )
 
-    # Pre-write a stale checkpoint with mtime older than (1000.0 - 2.0)
-    runtime_paths.ensure_checkpoint_dir("T021")
+    runtime_paths.ensure_checkpoint_dir("T022")
     checkpoint_file.write_text("# Old Checkpoint from previous run", encoding="utf-8")
     os.utime(checkpoint_file, (995.0, 995.0))
 
     result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
 
-    assert result.status == SingleCycleStatus.CHECKPOINT_STALE
+    assert result.status == SingleCycleStatus.ESCALATED
     assert result == "CHECKPOINT_STALE"
+    assert result == "ESCALATED"
     assert result.is_ready is False
     assert result.session_id == session_a_id
-    assert result.resumed_session_id is None
-    # Exactly 2 spawns: Session A and handoff run; no Session B spawned
     assert len(fake_runner.spawns) == 2
 
 
-def test_missing_checkpoint_returns_checkpoint_missing(tmp_path: Path) -> None:
-    """Missing checkpoint file returns CHECKPOINT_MISSING with no Session B spawn."""
+def test_missing_checkpoint_returns_checkpoint_missing_and_escalates(tmp_path: Path) -> None:
+    """Missing checkpoint file fails validation and escalates."""
     fake_runner = FakeCommandRunner()
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
+    ticket = _make_ticket("T022")
 
     session_a_id = "ses_missing123"
 
@@ -290,7 +830,11 @@ def test_missing_checkpoint_returns_checkpoint_missing(tmp_path: Path) -> None:
     ]
 
     supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
-    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        confirm_recovery=lambda esc: False,
+    )
 
     initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
     handoff_prompt = coordinator.build_handoff_prompt(ticket)
@@ -304,100 +848,13 @@ def test_missing_checkpoint_returns_checkpoint_missing(tmp_path: Path) -> None:
         stdout_lines=session_handoff_lines,
     )
 
-    # Do not create checkpoint file
     result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
 
-    assert result.status == SingleCycleStatus.CHECKPOINT_MISSING
+    assert result.status == SingleCycleStatus.ESCALATED
     assert result == "CHECKPOINT_MISSING"
+    assert result == "ESCALATED"
     assert result.is_ready is False
     assert len(fake_runner.spawns) == 2
-
-
-# --- AC 3: Crossing 150k Ceiling ---
-
-
-def test_crossing_150k_kills_with_ceiling_and_launches_no_handoff(tmp_path: Path) -> None:
-    """Crossing 150k kills with KILLED_CEILING and launches no handoff run."""
-    fake_runner = FakeCommandRunner()
-    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
-
-    session_a_id = "ses_ceilingBreach"
-
-    session_a_lines = [
-        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
-        json.dumps({
-            "type": "step_finish",
-            "sessionID": session_a_id,
-            "part": {"tokens": {"total": 150000}},
-        }) + "\n",
-    ]
-
-    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
-    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
-
-    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
-
-    fake_runner.register_spawn(
-        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
-        stdout_lines=session_a_lines,
-    )
-
-    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
-
-    assert result.status == SingleCycleStatus.CEILING
-    assert result == "CEILING"
-    assert result.is_ready is False
-    assert result.occupancy == 150000
-    # No handoff run launched: exactly 1 spawn
-    assert len(fake_runner.spawns) == 1
-
-
-# --- AC 4: Normal Exit Under Thresholds With Ready Signal ---
-
-
-def test_normal_exit_under_thresholds_with_ready_signal_returns_ready(tmp_path: Path) -> None:
-    """A run that exits under thresholds with a ready signal returns READY with no extra spawns."""
-    fake_runner = FakeCommandRunner()
-    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
-
-    session_a_id = "ses_cleanRun"
-
-    session_a_lines = [
-        json.dumps({"type": "step_start", "sessionID": session_a_id}) + "\n",
-        json.dumps({
-            "type": "step_finish",
-            "sessionID": session_a_id,
-            "part": {"tokens": {"total": 50000}},
-        }) + "\n",
-    ]
-
-    # Pre-write ready signal
-    runtime_paths.ensure_signals_dir()
-    runtime_paths.ready_signal_path("T021").write_text('{"status": "ready"}', encoding="utf-8")
-
-    supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
-    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
-
-    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
-
-    fake_runner.register_spawn(
-        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
-        stdout_lines=session_a_lines,
-    )
-
-    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
-
-    assert result.status == SingleCycleStatus.READY
-    assert result == "READY"
-    assert result.is_ready is True
-    assert result.session_id == session_a_id
-    assert result.occupancy == 50000
-    assert result.ready_signal_present is True
-    assert result.handoffs == 0
-    # No handoff or session B: exactly 1 spawn
-    assert len(fake_runner.spawns) == 1
 
 
 # --- Clock Slack Boundary Invariants ---
@@ -410,15 +867,12 @@ def test_checkpoint_freshness_clock_slack_boundary(tmp_path: Path) -> None:
 
     handoff_requested_at = 1000.0
 
-    # Exactly at boundary: 1000.0 - 2.0 = 998.0 -> fresh
     os.utime(checkpoint_file, (998.0, 998.0))
     assert is_checkpoint_fresh(checkpoint_file, handoff_requested_at, slack=CLOCK_SLACK_SECONDS) is True
 
-    # Just inside boundary: 998.1 -> fresh
     os.utime(checkpoint_file, (998.1, 998.1))
     assert is_checkpoint_fresh(checkpoint_file, handoff_requested_at, slack=CLOCK_SLACK_SECONDS) is True
 
-    # Just outside boundary: 997.9 -> stale
     os.utime(checkpoint_file, (997.9, 997.9))
     assert is_checkpoint_fresh(checkpoint_file, handoff_requested_at, slack=CLOCK_SLACK_SECONDS) is False
 
@@ -430,8 +884,8 @@ def test_checkpoint_validated_strictly_after_process_exits(tmp_path: Path) -> No
     """Worker may write checkpoint only as instruction run exits; validate after wait() completes."""
     fake_runner = FakeCommandRunner()
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
-    checkpoint_file = runtime_paths.checkpoint_path("T021")
+    ticket = _make_ticket("T022")
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
 
     session_a_id = "ses_delayedExit"
     session_b_id = "ses_delayedExitB"
@@ -459,8 +913,7 @@ def test_checkpoint_validated_strictly_after_process_exits(tmp_path: Path) -> No
             return self.stdout_lines()
 
         async def wait(self) -> int:
-            # Checkpoint is written only when process wait() finishes
-            runtime_paths.ensure_checkpoint_dir("T021")
+            runtime_paths.ensure_checkpoint_dir("T022")
             checkpoint_file.write_text("# Checkpoint on process exit", encoding="utf-8")
             os.utime(checkpoint_file, (1000.5, 1000.5))
             self.has_exited = True
@@ -493,9 +946,8 @@ def test_checkpoint_validated_strictly_after_process_exits(tmp_path: Path) -> No
         stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_b_id}) + "\n"],
     )
 
-    # Pre-write ready signal for Session B
     runtime_paths.ensure_signals_dir()
-    runtime_paths.ready_signal_path("T021").write_text('{"status": "ready"}', encoding="utf-8")
+    runtime_paths.ready_signal_path("T022").write_text('{"status": "ready"}', encoding="utf-8")
 
     result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
 
@@ -511,11 +963,9 @@ def test_security_checkpoint_path_containment_and_traversal_rejection(tmp_path: 
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
     coordinator = HandoffCoordinator(runtime_paths=runtime_paths)
 
-    # 1. Invalid ticket ID raises TicketFormatError or ValueError
     with pytest.raises((TicketFormatError, ValueError)):
         _make_ticket(ticket_id="../../etc/passwd")
 
-    # 2. validate_checkpoint directly rejects traversal IDs
     status = coordinator.validate_checkpoint("../../escaped", handoff_requested_at=1000.0)
     assert status == SingleCycleStatus.CHECKPOINT_MISSING
 
@@ -524,9 +974,8 @@ def test_security_resumed_session_id_must_be_stream_learned_and_allowlist_valid(
     """Security: resumed --session must be learned from stream and allowlist-validated."""
     fake_runner = FakeCommandRunner()
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021")
+    ticket = _make_ticket("T022")
 
-    # Worker emits unallowlisted session ID
     malicious_session_id = "ses_evil;rm -rf /"
 
     session_a_lines = [
@@ -539,7 +988,11 @@ def test_security_resumed_session_id_must_be_stream_learned_and_allowlist_valid(
     ]
 
     supervisor = WorkerSupervisor(command_runner=fake_runner, runtime_paths=runtime_paths)
-    coordinator = HandoffCoordinator(supervisor=supervisor, runtime_paths=runtime_paths)
+    coordinator = HandoffCoordinator(
+        supervisor=supervisor,
+        runtime_paths=runtime_paths,
+        confirm_recovery=lambda esc: False,
+    )
 
     initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
 
@@ -550,8 +1003,8 @@ def test_security_resumed_session_id_must_be_stream_learned_and_allowlist_valid(
 
     result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
 
-    # Malicious session ID is rejected; handoff run is NOT spawned with it
-    assert result.status == SingleCycleStatus.FAILED
+    assert result.status == SingleCycleStatus.ESCALATED
+    assert result == "FAILED"
     assert len(fake_runner.spawns) == 1
     assert not any("--session" in inv.cmd for inv in fake_runner.spawn_invocations)
 
@@ -563,19 +1016,41 @@ def test_security_prompts_contain_no_environment_expansion_or_secret_leakage(mon
     monkeypatch.setenv("OPENCODE_API_KEY", "opencode_secret_key_999")
 
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
-    ticket = _make_ticket("T021", security_required=True)
-    checkpoint_file = runtime_paths.checkpoint_path("T021")
+    ticket = _make_ticket("T022", security_required=True)
+    checkpoint_file = runtime_paths.checkpoint_path("T022")
 
     coordinator = HandoffCoordinator(runtime_paths=runtime_paths)
 
     initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
     handoff_prompt = coordinator.build_handoff_prompt(ticket)
     resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
+    nudge_prompt = coordinator.build_nudge_prompt(ticket)
+    retry_prompt = coordinator.build_crash_retry_prompt(ticket, "error detail")
 
-    for p in (initial_prompt, handoff_prompt, resume_prompt):
+    for p in (initial_prompt, handoff_prompt, resume_prompt, nudge_prompt, retry_prompt):
         assert secret_token not in p
         assert "opencode_secret_key_999" not in p
-        # Ensure no shell-style expansion placeholders are left raw or evaluated
         assert "$DISCORD_BOT_TOKEN" not in p
         assert "%DISCORD_BOT_TOKEN%" not in p
         assert "$OPENCODE_API_KEY" not in p
+
+
+def test_security_default_recovery_confirmation_safe_on_closed_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Security: default_recovery_confirmation must catch OSError, EOFError, KeyboardInterrupt and return False."""
+    def _raise_oserror(prompt: str = "") -> str:
+        raise OSError("reading from stdin while output is captured")
+
+    monkeypatch.setattr("builtins.input", _raise_oserror)
+    assert default_recovery_confirmation("T022") is False
+
+    def _raise_eof(prompt: str = "") -> str:
+        raise EOFError()
+
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    assert default_recovery_confirmation("T022") is False
+
+    def _raise_interrupt(prompt: str = "") -> str:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("builtins.input", _raise_interrupt)
+    assert default_recovery_confirmation("T022") is False

@@ -1,5 +1,6 @@
 # T022 — Recovery and escalation: nudge, crash retry, emergency synthesis
-Status: pending
+Status: completed
+Completed: 2026-09-16T13:49:30Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 

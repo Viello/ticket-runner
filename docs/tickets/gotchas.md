@@ -209,3 +209,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Stream-Learned Session IDs for Resumed Invocations
 - **Problem**: Invoking opencode run --session with an unlearned or synthetic session ID immediately exits with code 1 (Session not found); inventing synthetic session IDs for resumed handoff runs causes hard process failures.
 - **Solution**: Only pass session IDs that were actively decoded from the preceding stream sessionID events and strictly validated against the ^ses_[A-Za-z0-9]+$ allowlist.
+
+### Checkpoint Preservation During Recovery Escalation
+- **Problem**: Synthesizing an emergency fallback checkpoint from `git status` and `git diff` during escalation risks clobbering a rich, valid checkpoint authored by the worker in the current cycle if escalation occurred later on Session B.
+- **Solution**: Only synthesize and write the emergency checkpoint when no handoff was requested or when checkpoint freshness validation failed in the current cycle (`not (valid_checkpoint_recorded and checkpoint_path.is_file())`), preserving worker-authored architectural notes.
+
+### Deterministic Checkpoint Generation in Async Subprocess Fakes
+- **Problem**: Using `asyncio.sleep(0.01)` to pause execution between concurrent tasks to allow mock checkpoint authoring causes test suite race conditions and flaky failures under high CPU load.
+- **Solution**: Hook process completion deterministically in `FakeProcessHandle.wait()`, authoring test artifacts synchronously upon process exit before returning the mock exit code.

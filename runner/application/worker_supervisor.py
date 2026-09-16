@@ -61,6 +61,7 @@ class SessionRunResult:
     jsonl_path: Path | None = None
     stderr_path: Path | None = None
     diagnostics: tuple[str, ...] = ()
+    has_error_event: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.reason, str) and not isinstance(
@@ -85,6 +86,11 @@ class SessionRunResult:
     def log_paths(self) -> tuple[Path, ...]:
         """Tuple of existing log paths (jsonl, stderr) created for this run."""
         return tuple(p for p in (self.jsonl_path, self.stderr_path) if p is not None)
+
+    @property
+    def is_crash(self) -> bool:
+        """Whether this session run suffered a crash (non-zero exit or stream error event)."""
+        return self.exit_code != 0 or self.has_error_event
 
 
 def _default_notify(notice: str) -> None:
@@ -133,6 +139,16 @@ class WorkerSupervisor:
     def runtime_paths(self) -> RuntimePaths:
         """Runtime paths value object used by this supervisor."""
         return self._runtime_paths
+
+    @property
+    def command_runner(self) -> CommandRunner:
+        """Command runner port used by this supervisor."""
+        return self._command_runner
+
+    @property
+    def cwd(self) -> Path | None:
+        """Configured working directory."""
+        return self._cwd
 
     @property
     def on_budget_action(self) -> Callable[[BudgetAction, int], None] | None:
@@ -208,6 +224,7 @@ class WorkerSupervisor:
         jsonl_target_path: Path | None = None
         stderr_target_path: Path | None = None
         termination_reason: RunTerminationReason | None = None
+        has_error_event: bool = False
 
         def _init_logging(sid: str) -> None:
             nonlocal log_file, log_skipped, jsonl_target_path, stderr_target_path
@@ -347,6 +364,9 @@ class WorkerSupervisor:
                     )
                     continue
 
+                if event.type == "error":
+                    has_error_event = True
+
                 if event.type == "step_finish" and event.token_usage is not None:
                     action = self._budget_monitor.observe(event.token_usage)
                     if self._on_budget_action is not None:
@@ -419,6 +439,7 @@ class WorkerSupervisor:
             jsonl_path=jsonl_target_path if not log_skipped else None,
             stderr_path=stderr_target_path if not log_skipped else None,
             diagnostics=tuple(diagnostics),
+            has_error_event=has_error_event,
         )
 
     run_session = run

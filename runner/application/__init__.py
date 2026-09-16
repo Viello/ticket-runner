@@ -6,10 +6,14 @@ from runner.application.handoff_coordinator import (
     CEILING,
     CHECKPOINT_MISSING,
     CHECKPOINT_STALE,
-    READY,
+    ESCALATED,
+    EscalationNotice,
     HandoffCoordinator,
+    READY,
     SingleCycleResult,
     SingleCycleStatus,
+    WorkerRunResult,
+    default_recovery_confirmation,
 )
 from runner.application.prompt_builder import PromptBuilder, build_prompt
 from runner.application.queue_orchestrator import (
@@ -26,6 +30,8 @@ __all__ = [
     "CheckResult",
     "Doctor",
     "DoctorReport",
+    "ESCALATED",
+    "EscalationNotice",
     "GitOperations",
     "HandoffCoordinator",
     "PromptBuilder",
@@ -36,6 +42,8 @@ __all__ = [
     "TicketOutcome",
     "TicketOutcomeStatus",
     "TicketProcessor",
+    "WorkerRunResult",
     "build_prompt",
+    "default_recovery_confirmation",
 ]
 
