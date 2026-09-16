@@ -1,5 +1,6 @@
 # T009 — Gotchas aggregation manager
-Status: pending
+Status: completed
+Completed: 2026-09-16T06:17:00Z
 Spec: docs/specs/02-queue-and-tickets.md
 
 ### Requirements

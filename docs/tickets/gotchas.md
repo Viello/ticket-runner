@@ -80,4 +80,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Sentinel lock files created during orchestrator runs dirty the git tree and cause pre-flight cleanliness checks or Gatekeeper `git add .` operations to stage runtime artifacts.
 - **Solution**: Add `docs/tickets/.queue.lock` and `.queue.lock` directly to root `.gitignore` so OS lock sentinels never appear in `git status --porcelain`.
 
+### Non-Destructive Gotchas Normalization
+- **Problem**: Normalizing freeform gotchas into structured markdown risks corrupting entries that already contain markdown or rewriting worker-authored nuance.
+- **Solution**: Detect existing markdown headings and bullet formats before applying transformations, preserving pre-existing markdown intact and deriving concise titles without modifying worker detail.
+
+### Scoped Read-Modify-Write Window
+- **Problem**: In-memory caching of gotchas or long-lived store instances can clobber external developer edits made to `docs/tickets/gotchas.md` while the runner is paused.
+- **Solution**: Scope the read-modify-write cycle strictly to the invocation of `append()`, loading fresh content from disk immediately prior to deduplicating and atomic writing.
+
+### Windows Path.write_text CRLF Auto-Conversion
+- **Problem**: In test suites on Windows, `Path.write_text()` automatically translates `\n` to `\r\n`, causing test assertions checking exact byte equality or LF line endings against raw file handles to fail unexpectedly.
+- **Solution**: In tests verifying raw file contents and line endings, write fixture content using `path.open("w", encoding="utf-8", newline="")` to disable automatic platform CRLF translation.
+
 
