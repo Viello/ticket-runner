@@ -1,0 +1,3 @@
+# Ticket-Driven Security Review via Progressive Context Pointer
+
+We decided that security reviews must be ticket-driven—invoked only when explicitly flagged by ticket requirements/frontmatter (`Security: required`) or the user—rather than evaluated heuristically on every change touching subprocesses or filesystem paths. The execution discipline is anchored in `.agents/skills/implement/SKILL.md` and linked via a lean context pointer in `AGENTS.md` using progressive disclosure. This protects the 150k token budget from runaway consumption on standard tickets while guaranteeing rigorous pre-signal audits, question signal escalation for blockers, and independent Gatekeeper verification.
