@@ -53,3 +53,8 @@ class CleanSlateError(TicketRunnerError):
     """Raised when clean-slate queue or spec archival fails."""
     pass
 
+
+class NonInteractiveError(TicketRunnerError):
+    """Raised when human contact requires an interactive stdin that is unavailable."""
+    pass
+

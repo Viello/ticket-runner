@@ -1,5 +1,6 @@
 # T029 — Intervention port and terminal menu
-Status: pending
+Status: completed
+Completed: 2026-09-16T16:43:21Z
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
 Blocked by: none
 

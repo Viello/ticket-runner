@@ -270,3 +270,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Building the "last 100 lines of stdout then drained stderr" diagnostics by concatenating full streams buffers unbounded output, so a runaway command can exhaust memory before its timeout even fires.
 - **Solution**: Retain stdout lines in a `deque(maxlen=tail_line_limit)` and slice drained stderr to its last `tail_line_limit` lines before concatenating; per-source N-line retention preserves the combined last-N window exactly while capping memory.
 
+### Redirected Stdin Fails with EOFError, Not a Quiet EOF
+- **Problem**: `input()` on redirected or closed stdin raises `EOFError` (and can raise `OSError` on Windows when the handle is invalid), so a terminal prompt loop can spin or crash instead of degrading gracefully when the Runner runs without a console.
+- **Solution**: Catch `OSError` and `EOFError` around every prompt read: question prompts re-raise as `NonInteractiveError`, and the intervention menu maps the failure to an `abort` decision so the Runner never silently continues.
+
+### Builtin Input Defaults Bind at Class Definition Time
+- **Problem**: Using `input` (or `print`) as a default argument value in a class `__init__` binds the builtin at import time, so monkeypatching `builtins.input` in tests has no effect on instances created afterward and "defaults to the builtin" is untestable.
+- **Solution**: Give injectable seam parameters `None` defaults and resolve the builtin inside `__init__` (`self._input_fn = input_fn if input_fn is not None else input`) so the default resolves at instantiation time and remains swappable via monkeypatch.
+
