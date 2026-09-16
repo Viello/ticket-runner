@@ -164,3 +164,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Attempting to sanitize, escape, or reformat pre-authored ticket requirements and acceptance criteria in prompt templates corrupts verbatim code snippets, regular expressions, and markdown syntax.
 - **Solution**: Pass ticket content strings through verbatim into the prompt template without escaping, while deterministically normalizing bullet points and section headers.
 
+### Provider Token Context-Occupancy Under-Counting
+- **Problem**: In LLM JSON streams (such as OpenCode per-step provider events), `tokens.input` represents only non-cached input tokens and excludes `cache_read` and `cache_write`. Summing only `input + output` severely underestimates context window occupancy and causes the orchestrator to miss warning and handoff thresholds.
+- **Solution**: Calculate context occupancy using `total` when present, otherwise compute the complete sum of `input + output + reasoning + cache_read + cache_write` per ADR 0015 to ensure cache creation and reads are properly budgeted.
+
+### Multi-Threshold Priority and Reminders Suppression
+- **Problem**: When a single token update or resumed session jumps across multiple budget thresholds at once (such as leaping from below 120k directly past 135k or 150k), independent threshold conditions can emit lower-priority actions or leave lower thresholds armed to trigger redundant warnings later.
+- **Solution**: Evaluate thresholds in descending priority order (`CEILING` > `HANDOFF` > `WARN`) and immediately mark lower-level reminders as already sent (`_warn_sent = True`, `_handoff_sent = True`) when a higher threshold is crossed, preserving monotonic single-fire semantics.
+

@@ -1,5 +1,6 @@
 # T018 — Token telemetry and budget monitor (domain)
-Status: pending
+Status: completed
+Completed: 2026-09-16T13:04:30Z
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
 ### Requirements
