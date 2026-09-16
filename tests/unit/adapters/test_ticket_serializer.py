@@ -232,3 +232,26 @@ def test_update_rejects_missing_file(tmp_path: Path) -> None:
 
     with pytest.raises(TicketFormatError, match="T999-absent.md"):
         TicketMarkdownSerializer().update_header(missing, {"Status": "completed"})
+
+
+def test_update_accepts_integer_metadata_value(tmp_path: Path) -> None:
+    path = _write_ticket(tmp_path)
+
+    TicketMarkdownSerializer().update_header(path, {"Attempts": 3})
+
+    result = _read(path)
+    assert "Attempts: 3" in result
+
+
+def test_update_removes_metadata_when_value_is_none(tmp_path: Path) -> None:
+    content = TICKET_TEMPLATE.replace(
+        "Status: pending\n",
+        "Status: pending\nCompleted: 2026-09-16T10:00:00Z\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    TicketMarkdownSerializer().update_header(path, {"Completed": None})
+
+    result = _read(path)
+    assert "Completed:" not in result
+    assert "Status: pending" in result

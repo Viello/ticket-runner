@@ -1,5 +1,6 @@
 # T010 — Completed and skipped ticket relocation
-Status: pending
+Status: completed
+Completed: 2026-09-16T06:35:53Z
 Spec: docs/specs/02-queue-and-tickets.md
 
 ### Requirements

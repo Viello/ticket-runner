@@ -92,4 +92,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In test suites on Windows, `Path.write_text()` automatically translates `\n` to `\r\n`, causing test assertions checking exact byte equality or LF line endings against raw file handles to fail unexpectedly.
 - **Solution**: In tests verifying raw file contents and line endings, write fixture content using `path.open("w", encoding="utf-8", newline="")` to disable automatic platform CRLF translation.
 
+### Volume-Atomic Relocation with Cross-Volume Fallback
+- **Problem**: Naive `shutil.move` or copy-then-delete patterns during ticket finalization leave orphaned `.tmp` or partial file copies behind if interrupted, polluting active queue scans.
+- **Solution**: Execute ticket file moves via atomic `os.replace` within the same volume, wrapping with a `shutil.move` fallback only if cross-volume `OSError` arises, ensuring immediate clean removal from active directory scans.
+
+### Collision Safety for Ticket Archival
+- **Problem**: Moving a completed or skipped ticket into `completed/` when an archived file of the same name already exists silently overwrites historical records with `os.replace`.
+- **Solution**: Explicitly check destination existence before modifying source files and raise `TicketFormatError` without altering source or destination files, protecting completion history from data loss.
+
 

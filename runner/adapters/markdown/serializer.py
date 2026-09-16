@@ -26,7 +26,7 @@ class TicketMarkdownSerializer:
     def update_header(
         self,
         path: Path | str,
-        metadata: Mapping[str, str | TicketStatus],
+        metadata: Mapping[str, Any],
     ) -> None:
         """Update or insert header metadata lines with an atomic write.
 
@@ -59,7 +59,7 @@ class TicketMarkdownSerializer:
         self,
         path: Path,
         text: str,
-        metadata: Mapping[str, str | TicketStatus],
+        metadata: Mapping[str, Any],
     ) -> str:
         lines = text.splitlines(keepends=True)
         region_start = self._metadata_region_start(lines, path)
@@ -76,6 +76,12 @@ class TicketMarkdownSerializer:
         for key in sorted(normalized, key=self._key_rank):
             value = normalized[key]
             existing = self._find_metadata_line(lines, region_start, region_end, key)
+            if value is None:
+                if existing is not None:
+                    index, _ = existing
+                    del lines[index]
+                    region_end -= 1
+                continue
             if existing is not None:
                 index, original_key = existing
                 _, ending = self._split_ending(lines[index])
@@ -100,19 +106,24 @@ class TicketMarkdownSerializer:
     def _normalize_metadata(
         self,
         path: Path,
-        metadata: Mapping[str, str | TicketStatus],
-    ) -> dict[str, str]:
-        normalized: dict[str, str] = {}
+        metadata: Mapping[str, Any],
+    ) -> dict[str, str | None]:
+        normalized: dict[str, str | None] = {}
         for key, value in metadata.items():
             if not isinstance(key, str) or not METADATA_KEY_PATTERN.match(key):
                 raise TicketFormatError(f"Invalid ticket metadata key {key!r} for '{path}'")
+            if value is None:
+                normalized[key] = None
+                continue
             if isinstance(value, TicketStatus):
                 text = value.value
+            elif isinstance(value, (int, float)):
+                text = str(value)
             elif isinstance(value, str):
                 text = value.strip()
             else:
                 raise TicketFormatError(
-                    f"Ticket metadata value for '{key}' must be a string or TicketStatus, got: {value!r}"
+                    f"Ticket metadata value for '{key}' must be a string, number, or TicketStatus, got: {value!r}"
                 )
             if not text:
                 raise TicketFormatError(f"Ticket metadata value for '{key}' must not be empty")

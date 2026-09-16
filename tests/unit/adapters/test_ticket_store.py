@@ -1,8 +1,10 @@
 """Unit tests for the DirectoryTicketStore adapter."""
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 
+from runner.adapters.markdown.parser import TicketMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.domain.exceptions import TicketFormatError
 from runner.domain.ticket import TicketStatus
@@ -219,3 +221,220 @@ def test_direct_spec_directory_as_root(tmp_path: Path) -> None:
     assert store.get_active_spec_slug() == "01-sample"
     assert [t.id for t in store.list_pending()] == ["T001", "T002"]
     assert store.select_next_pending().id == "T001"
+
+
+def test_finalize_completed_relocates_ticket_and_updates_header(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(
+        spec_dir,
+        "T001-first.md",
+        "T001",
+        title="First Ticket",
+        spec="docs/specs/01-sample.md",
+    )
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    assert len(store.list_pending()) == 1
+
+    dest = store.finalize_completed(ticket_file, completed_at="2026-09-16T12:00:00Z")
+
+    expected_dest = spec_dir / "completed" / "T001-first.md"
+    assert dest == expected_dest
+    assert dest.is_file()
+    assert not ticket_file.exists()
+
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    assert "Completed: 2026-09-16T12:00:00Z" in content
+    assert "### Requirements\n- Sample requirement." in content
+    assert "Commit:" not in content
+
+    # Clean active directory: no temp artifacts, scanner no longer finds it
+    assert list(spec_dir.glob("*.tmp")) == []
+    assert store.list_pending() == []
+    assert store.select_next_pending() is None
+
+
+def test_finalize_completed_with_ticket_entity_and_datetime(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    parser = TicketMarkdownParser()
+    ticket = parser.parse(ticket_file)
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dt = datetime(2026, 9, 16, 14, 30, 0, tzinfo=timezone.utc)
+    dest = store.finalize_completed(ticket, completed_at=dt)
+
+    assert dest.is_file()
+    assert not ticket_file.exists()
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    assert "Completed: 2026-09-16T14:30:00Z" in content
+
+
+def test_finalize_completed_with_timezone_conversion(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    # UTC+8: 22:30:00 -> UTC: 14:30:00
+    dt_utc_plus_8 = datetime(2026, 9, 16, 22, 30, 0, tzinfo=timezone(timedelta(hours=8)))
+    dest = store.finalize_completed(ticket_file, completed_at=dt_utc_plus_8)
+
+    content = dest.read_text(encoding="utf-8")
+    assert "Completed: 2026-09-16T14:30:00Z" in content
+
+
+def test_finalize_completed_default_timestamp_is_utc_z(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed(ticket_file)
+
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    # Look for Completed: YYYY-MM-DDTHH:MM:SSZ
+    import re
+    assert re.search(r"^Completed: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", content, re.MULTILINE)
+
+
+def test_finalize_completed_creates_completed_folder_and_gitkeep(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+    completed_dir = spec_dir / "completed"
+    assert not completed_dir.exists()
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed(ticket_file)
+
+    assert completed_dir.is_dir()
+    assert (completed_dir / ".gitkeep").is_file()
+    assert dest.is_file()
+
+
+def test_finalize_completed_collision_fails_loudly_without_data_loss(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    existing_dest = completed_dir / "T001-first.md"
+    existing_dest.write_text("Original archived content", encoding="utf-8")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+
+    with pytest.raises(TicketFormatError, match="already exists"):
+        store.finalize_completed(ticket_file)
+
+    # Neither file was modified or deleted
+    assert ticket_file.is_file()
+    assert "Status: pending" in ticket_file.read_text(encoding="utf-8")
+    assert existing_dest.read_text(encoding="utf-8") == "Original archived content"
+
+
+def test_finalize_skipped_with_reason_string(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_skipped(
+        ticket_file,
+        details="Circuit breaker tripped: 3 failed attempts in gatekeeper verification",
+    )
+
+    assert dest == spec_dir / "completed" / "T001-first.md"
+    assert dest.is_file()
+    assert not ticket_file.exists()
+
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: skipped" in content
+    assert "Failure: Circuit breaker tripped: 3 failed attempts in gatekeeper verification" in content
+    assert "Commit:" not in content
+    assert "Completed:" not in content
+    assert store.list_pending() == []
+
+
+def test_finalize_skipped_with_dictionary_details(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_skipped(
+        ticket_file,
+        details={
+            "Reason": "Circuit breaker threshold reached",
+            "Attempts": 3,
+        },
+    )
+
+    assert dest.is_file()
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: skipped" in content
+    assert "Reason: Circuit breaker threshold reached" in content
+    assert "Attempts: 3" in content
+
+
+def test_finalize_skipped_creates_completed_folder_and_gitkeep(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+    completed_dir = spec_dir / "completed"
+    assert not completed_dir.exists()
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_skipped(ticket_file, details="Skipped")
+
+    assert completed_dir.is_dir()
+    assert (completed_dir / ".gitkeep").is_file()
+    assert dest.is_file()
+
+
+def test_finalize_skipped_collision_fails_loudly_without_data_loss(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    existing_dest = completed_dir / "T001-first.md"
+    existing_dest.write_text("Existing archive", encoding="utf-8")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+
+    with pytest.raises(TicketFormatError, match="already exists"):
+        store.finalize_skipped(ticket_file, details="Skipped")
+
+    assert ticket_file.is_file()
+    assert existing_dest.read_text(encoding="utf-8") == "Existing archive"
+
+
+def test_finalize_already_archived_ticket_raises_error(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    completed_dir = spec_dir / "completed"
+    ticket_file = _write_ticket(completed_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+
+    with pytest.raises(TicketFormatError, match="already.*completed"):
+        store.finalize_completed(ticket_file)
+
+    with pytest.raises(TicketFormatError, match="already.*completed"):
+        store.finalize_skipped(ticket_file, details="Skipped")
+
+
+def test_finalize_nonexistent_ticket_raises_error(tmp_path: Path) -> None:
+    missing_file = tmp_path / "01-sample" / "T999-missing.md"
+    store = DirectoryTicketStore(root_dir=tmp_path)
+
+    with pytest.raises(TicketFormatError, match="not found"):
+        store.finalize_completed(missing_file)
+
+
+def test_finalize_invalid_completed_at_raises_error(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+
+    with pytest.raises(TicketFormatError, match="timestamp"):
+        store.finalize_completed(ticket_file, completed_at="not-a-timestamp")

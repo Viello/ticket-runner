@@ -83,3 +83,43 @@ class FakeTicketRepository:
         """Select lowest-identifier pending ticket."""
         pending = self.list_pending(spec_slug=spec_slug)
         return pending[0] if pending else None
+
+    def _find_ticket(self, ticket: Ticket | Path | str) -> Ticket:
+        target_id = ticket.id if isinstance(ticket, Ticket) else Path(str(ticket)).stem.split("-")[0]
+        for t in self._tickets:
+            if t.id == target_id or str(t.path) == str(ticket) or t.path.name == Path(str(ticket)).name:
+                return t
+        from runner.domain.exceptions import TicketFormatError
+        raise TicketFormatError(f"Ticket '{ticket}' not found in repository")
+
+    def finalize_completed(
+        self,
+        ticket: Ticket | Path | str,
+        completed_at: datetime | str | None = None,
+    ) -> Path:
+        """Simulate marking a ticket completed and relocating."""
+        if self._error:
+            raise self._error
+        target = self._find_ticket(ticket)
+        dest_path = target.path.parent / "completed" / target.path.name
+        idx = self._tickets.index(target)
+        object.__setattr__(target, "status", TicketStatus.COMPLETED)
+        object.__setattr__(target, "path", dest_path)
+        self._tickets[idx] = target
+        return dest_path
+
+    def finalize_skipped(
+        self,
+        ticket: Ticket | Path | str,
+        details: str | Mapping[str, Any] | None = None,
+    ) -> Path:
+        """Simulate marking a ticket skipped and relocating."""
+        if self._error:
+            raise self._error
+        target = self._find_ticket(ticket)
+        dest_path = target.path.parent / "completed" / target.path.name
+        idx = self._tickets.index(target)
+        object.__setattr__(target, "status", TicketStatus.SKIPPED)
+        object.__setattr__(target, "path", dest_path)
+        self._tickets[idx] = target
+        return dest_path
