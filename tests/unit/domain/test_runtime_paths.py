@@ -154,3 +154,41 @@ def test_ensure_all_dirs(tmp_path: Path) -> None:
     assert paths.checkpoints_dir.is_dir()
     assert paths.checkpoint_dir("T015").is_dir()
     assert paths.logs_dir.is_dir()
+
+
+def test_is_valid_session_id() -> None:
+    from runner.domain.runtime_paths import is_valid_session_id
+
+    assert is_valid_session_id("ses_01ABC") is True
+    assert is_valid_session_id("ses_f55aa0e33ffeUDl1DvFKlpFsPO") is True
+    assert is_valid_session_id("ses_1234567890") is True
+
+    assert is_valid_session_id("ses_") is False
+    assert is_valid_session_id("invalid") is False
+    assert is_valid_session_id("ses_abc/../../evil") is False
+    assert is_valid_session_id("ses_abc.log") is False
+    assert is_valid_session_id("ses_abc def") is False
+    assert is_valid_session_id("") is False
+    assert is_valid_session_id(None) is False
+    assert is_valid_session_id(123) is False  # type: ignore[arg-type]
+
+
+def test_safe_session_paths() -> None:
+    paths = RuntimePaths()
+
+    # Valid session ID produces matching jsonl and stderr paths
+    result = paths.safe_session_paths("T019", "ses_valid123")
+    assert result is not None
+    jsonl_path, stderr_path = result
+    assert jsonl_path == Path(".agent/logs/T019_session_ses_valid123.jsonl")
+    assert stderr_path == Path(".agent/logs/T019_session_ses_valid123.stderr.log")
+
+    # Invalid session ID returns None
+    assert paths.safe_session_paths("T019", "invalid_id") is None
+    assert paths.safe_session_paths("T019", "ses_../../escape") is None
+    assert paths.safe_session_paths("T019", "") is None
+
+    # Invalid ticket ID attempting traversal returns None
+    assert paths.safe_session_paths("../escape", "ses_valid123") is None
+    assert paths.safe_session_paths("T019/nested", "ses_valid123") is None
+

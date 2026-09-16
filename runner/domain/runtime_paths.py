@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_AGENT_DIR = Path(".agent")
+SESSION_ID_PATTERN = re.compile(r"^ses_[A-Za-z0-9]+$")
+TICKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def is_valid_session_id(session_id: object) -> bool:
+    """Return True if session_id matches the OpenCode session allowlist (^ses_[A-Za-z0-9]+$)."""
+    if not isinstance(session_id, str):
+        return False
+    return bool(SESSION_ID_PATTERN.match(session_id))
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,32 @@ class RuntimePaths:
     def session_stderr_log_path(self, ticket_id: str, session_id: str) -> Path:
         """Alias to session_stderr_path for caller convenience."""
         return self.session_stderr_path(ticket_id, session_id)
+
+    def safe_session_paths(
+        self, ticket_id: str, session_id: str
+    ) -> tuple[Path, Path] | None:
+        """Return safe (jsonl_path, stderr_path) if both ticket_id and session_id pass allowlists and containment.
+
+        Returns None if ticket_id or session_id is invalid or if the resulting paths escape logs_dir.
+        """
+        if not isinstance(ticket_id, str) or not TICKET_ID_PATTERN.match(ticket_id):
+            return None
+        if not is_valid_session_id(session_id):
+            return None
+
+        jsonl = self.session_log_path(ticket_id, session_id)
+        stderr = self.session_stderr_path(ticket_id, session_id)
+
+        try:
+            logs_resolved = self.logs_dir.resolve()
+            if not jsonl.resolve().is_relative_to(logs_resolved):
+                return None
+            if not stderr.resolve().is_relative_to(logs_resolved):
+                return None
+        except (ValueError, RuntimeError):
+            return None
+
+        return jsonl, stderr
 
     def ensure_signals_dir(self) -> Path:
         """Create and return the signals directory."""

@@ -172,3 +172,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When a single token update or resumed session jumps across multiple budget thresholds at once (such as leaping from below 120k directly past 135k or 150k), independent threshold conditions can emit lower-priority actions or leave lower thresholds armed to trigger redundant warnings later.
 - **Solution**: Evaluate thresholds in descending priority order (`CEILING` > `HANDOFF` > `WARN`) and immediately mark lower-level reminders as already sent (`_warn_sent = True`, `_handoff_sent = True`) when a higher threshold is crossed, preserving monotonic single-fire semantics.
 
+### OpenCode Live Event Stream Token Structure and Cache Metrics
+- **Problem**: In OpenCode v1.18.x `--format json` streaming events, `step_finish` encapsulates token metrics within a nested `part.tokens` dictionary where cache metrics are nested further as `tokens.cache.read` and `tokens.cache.write` rather than flat fields, while older or alternate formats emit flat `tokens` dictionaries.
+- **Solution**: Extract token telemetry flexibly by checking `part.tokens` before falling back to top-level `tokens`, and unpack `cache.read`/`cache.write` from nested dictionaries to guarantee accurate `TokenUsage` and context occupancy calculations.
+
+### Untrusted Session ID Path Containment and Allowlist Guardrails
+- **Problem**: Session IDs learned directly from untrusted streaming subprocess output can contain directory traversal sequences (`../../`) or invalid filesystem characters, risking arbitrary file creation or log clobbering outside `.agent/logs/`.
+- **Solution**: Strictly sanitize session IDs against `^ses_[A-Za-z0-9]+$` before constructing any filesystem path, verify that resolved log paths are strictly contained within `logs_dir` via `Path.is_relative_to()`, and drop log creation while emitting a diagnostic if validation fails.
+
+### Session Stream Line Buffering Preceding Session ID Discovery
+- **Problem**: In newly spawned OpenCode sessions, the session identifier is unknown prior to execution and only learned from the first streamed event's `sessionID` field; attempting immediate log file creation before receiving the first event causes missing or misplaced log streams.
+- **Solution**: Buffer initial stdout lines in memory until the first valid session ID is decoded and validated, then atomically open the session log in append mode (`open(..., "a", newline="")`) and flush the buffered lines before proceeding with streaming writes.
+
+

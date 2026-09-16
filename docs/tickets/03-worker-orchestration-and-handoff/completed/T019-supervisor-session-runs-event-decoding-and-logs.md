@@ -1,5 +1,6 @@
 # T019 — Worker supervisor A: session runs, event decoding, and session logs
-Status: pending
+Status: completed
+Completed: 2026-09-16T13:16:00Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
