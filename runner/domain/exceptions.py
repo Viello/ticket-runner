@@ -32,3 +32,9 @@ class CommandNotFoundError(TicketRunnerError):
     def __init__(self, command: str, message: str | None = None) -> None:
         self.command = command
         super().__init__(message or f"Command not found: '{command}'")
+
+
+class QueueLockError(TicketRunnerError):
+    """Raised when the queue sentinel lock cannot be acquired or operation fails."""
+    pass
+

@@ -64,3 +64,20 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Minimal ticket headers such as `# T001` authored during pre-flight checks fail strict `# T<NNN> — <Title>` regex patterns.
 - **Solution**: Make the title separator and text optional in the header pattern (`HEADER_PATTERN`), falling back to the ticket ID as the title when omitted.
 
+### Windows File Locking Byte Range and File Mode
+- **Problem**: `msvcrt.locking` locks bytes starting from the current file position; unpositioned locks or improper file opening modes fail to lock empty sentinel files or raise sharing errors.
+- **Solution**: Open the sentinel in binary append-update mode (`a+b`) to guarantee creation without truncation, seek explicitly to byte offset 0, and lock a fixed 1-byte length non-blocking (`msvcrt.LK_NBLCK`).
+
+### Immediate Handle Cleanup on Lock Conflict
+- **Problem**: When a second process or instance fails to acquire an OS file lock on Windows, leaving the opened file handle unclosed blocks subsequent file deletion or replacement.
+- **Solution**: Wrap lock acquisition in a `try...except` block that immediately closes the opened file handle and resets references if OS locking raises `PermissionError`, `BlockingIOError`, or `OSError`.
+
+### Platform-Branching for POSIX and Windows Locking Primitives
+- **Problem**: Unconditional imports of `fcntl` crash on Windows with `ModuleNotFoundError`, while POSIX systems lack `msvcrt`.
+- **Solution**: Branch at import and execution time: use `msvcrt.locking` when `sys.platform == "win32"` and lazily import `fcntl` on POSIX systems, ensuring universal cross-platform compatibility.
+
+### Gitignoring Sentinel Lock Files
+- **Problem**: Sentinel lock files created during orchestrator runs dirty the git tree and cause pre-flight cleanliness checks or Gatekeeper `git add .` operations to stage runtime artifacts.
+- **Solution**: Add `docs/tickets/.queue.lock` and `.queue.lock` directly to root `.gitignore` so OS lock sentinels never appear in `git status --porcelain`.
+
+
