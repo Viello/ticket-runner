@@ -1,5 +1,6 @@
 # T016 — Streaming process spawn on the CommandRunner seam
-Status: pending
+Status: completed
+Completed: 2026-09-16T10:00:24Z
 Security: required
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 

@@ -143,3 +143,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Pure Path Object Instantiation Without Disk Side-Effects
 - **Problem**: Initializing path configuration value objects that eagerly invoke directory creation (`mkdir`) causes import-time and test-time side-effects, polluting clean worktrees or tripping git cleanliness checks.
 - **Solution**: Keep `RuntimePaths` as a pure value object computing immutable `Path` representations, exposing explicit `ensure_*` helper methods that callers invoke only on demand when ready to write.
+
+### Windows Process Tree Termination via Taskkill
+- **Problem**: Calling standard `proc.terminate()` on Windows only terminates the root wrapper process (such as `cmd.exe` executing an `opencode.cmd` npm shim), leaving descendant runtime child processes (such as `node.exe`) running as orphaned background processes holding open network ports and file locks.
+- **Solution**: Execute process tree termination via `taskkill /PID <pid> /T /F` on Windows when terminating spawned subprocesses, falling back to direct `proc.terminate()` only if `taskkill` fails or process lookup raises.
+
+### Concurrent Stderr Draining to Prevent Subprocess Pipe Deadlocks
+- **Problem**: Reading standard output incrementally with `readline()` while a child process emits high volumes of stderr causes the OS pipe buffer (4KB–64KB) to fill up, deadlocking the child process and stalling stream consumption indefinitely.
+- **Solution**: Launch a concurrent asynchronous background task (`_drain_stderr`) immediately upon process spawn that continuously drains `proc.stderr` in non-blocking chunks into an in-memory buffer until EOF.
+
+### Stripping CRLF Line Delimiters in JSON Streaming
+- **Problem**: CLI tools like OpenCode running on Windows emit JSONL streaming events ending with CRLF (`\r\n`), causing naive `\n` line stripping or strict line parsing assertions to preserve trailing `\r` carriage returns.
+- **Solution**: Always strip trailing CRLF explicitly using `.rstrip("\r\n")` on decoded stream lines before yielding to callers.
+
