@@ -131,3 +131,7 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Clean-Slate Scope Protection During Empty Queue Runs
 - **Problem**: Scanning all directory entries under `docs/tickets/` upon queue exhaustion when no tickets were processed in the active session risks prompting or executing accidental cleanup of unworked or unrelated spec directories.
 - **Solution**: Restrict clean-slate targets strictly to an explicitly configured `spec_slug` or spec directories that had tickets actively processed in the running session (`_processed_spec_slugs`).
+
+### Parser Metadata Tolerance for Unknown Security Values
+- **Problem**: Rejecting or raising format errors on non-standard `Security:` metadata values (such as `Security: optional`, `Security: none`, or omitted lines) breaks backward compatibility with existing tickets and tightly couples queue scanning to rigid review configurations.
+- **Solution**: Follow repo metadata tolerance conventions by only resolving exact case-insensitive matches for `Security: required` (with whitespace stripping) to `True`, safely defaulting missing lines and all alternative values to `False` without raising.

@@ -1,5 +1,6 @@
 # T014 — Parse the `Security: required` ticket flag
-Status: pending
+Status: completed
+Completed: 2026-09-16T09:36:12Z
 Spec: docs/specs/03-worker-orchestration-and-handoff.md
 
 ### Requirements
