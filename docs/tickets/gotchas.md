@@ -258,3 +258,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: The atomic writer cleans up its own failures, but a hard process kill mid-write can leave `{ticket_id}_ready.json.tmp` or `{ticket_id}.json.tmp` sidecars that violate the "never leaves partial files" purge contract if only the artifact files are deleted.
 - **Solution**: Delete each Signal artifact together with its sibling carrying `TEMP_SUFFIX` (imported from `runner.adapters.markdown.atomic_write`) in both `purge` and `consume_ready`, tolerating `FileNotFoundError` so absent files or directories remain no-ops.
 
+### Bounding Subprocess Deadlines Across Output and Exit
+- **Problem**: Wrapping only stdout consumption in `asyncio.wait_for` bounds the drain but leaves `handle.wait()` unbounded, so a command that closes stdout while its process lingers can stall verification past `timeout_seconds`; `wait_for` also cancels the drain task on expiry, discarding output already buffered in the pipe before termination. The fake test double models runtime as stdout delay, so a wait-only bound never trips it.
+- **Solution**: Await the drain task and `handle.wait()` together under one `asyncio.wait(..., timeout=..., return_when=ALL_COMPLETED)`, terminate the handle when any task is still pending, then give the drain a short bounded grace before cancelling; report `timed_out=True` with `exit_code=None` once the deadline fires regardless of post-termination task outcomes.
+
+### Cwd-Preferring Executable Resolution on Windows
+- **Problem**: `shutil.which("cmd.exe")` prepends the process current directory on Windows unless `NoDefaultCurrentDirectoryInExePath` is set, and `CreateProcess` likewise searches the current directory before System32, so a `cmd.exe` (or `taskkill.exe`) dropped into the supervised repository root shadows the real shell when verification commands run or timed-out process trees are killed.
+- **Solution**: Resolve the Gatekeeper's shell to an absolute trusted path (`%COMSPEC%`, then `%SystemRoot%\System32\cmd.exe`) with a bare-name fallback, and assert absolute resolution in a Windows-only test; the same cwd precedence still applies to bare `taskkill` termination inside `SubprocessProcessHandle` and remains a known residual.
+
+### Bounded Tail Retention for Combined Stdout and Stderr
+- **Problem**: Building the "last 100 lines of stdout then drained stderr" diagnostics by concatenating full streams buffers unbounded output, so a runaway command can exhaust memory before its timeout even fires.
+- **Solution**: Retain stdout lines in a `deque(maxlen=tail_line_limit)` and slice drained stderr to its last `tail_line_limit` lines before concatenating; per-source N-line retention preserves the combined last-N window exactly while capping memory.
+

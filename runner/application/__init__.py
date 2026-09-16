@@ -1,6 +1,11 @@
 """Application use cases and interactors for Ticket Runner."""
 
 from runner.application.doctor import CheckResult, Doctor, DoctorReport
+from runner.application.gatekeeper import (
+    CommandOutcome,
+    GatekeeperCommandExecutor,
+    VerificationReport,
+)
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import (
     CEILING,
@@ -28,10 +33,12 @@ __all__ = [
     "CHECKPOINT_MISSING",
     "CHECKPOINT_STALE",
     "CheckResult",
+    "CommandOutcome",
     "Doctor",
     "DoctorReport",
     "ESCALATED",
     "EscalationNotice",
+    "GatekeeperCommandExecutor",
     "GitOperations",
     "HandoffCoordinator",
     "PromptBuilder",
@@ -42,6 +49,7 @@ __all__ = [
     "TicketOutcome",
     "TicketOutcomeStatus",
     "TicketProcessor",
+    "VerificationReport",
     "WorkerRunResult",
     "build_prompt",
     "default_recovery_confirmation",

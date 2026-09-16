@@ -1,5 +1,6 @@
 # T028 — Gatekeeper command execution and diagnostics capture
-Status: pending
+Status: completed
+Completed: 2026-09-16T16:29:27Z
 Security: required
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
 Blocked by: none
