@@ -112,5 +112,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Merely toggling a boolean pause flag without closing the OS file handle on `docs/tickets/.queue.lock` prevents external text editors on Windows from opening or modifying queue files due to file sharing violations (`ERROR_SHARING_VIOLATION`).
 - **Solution**: Explicitly release the OS file lock and close the underlying file handle inside `pause()`, and re-open and re-acquire the non-blocking sentinel lock inside `resume()`.
 
+### Doctor Queue Validation vs Runner Standby Lifecycle
+- **Problem**: Doctor pre-flight validation treats zero pending tickets as a failure (Spec 01 US 03), preventing `ticket_runner.py start` on an empty directory from proceeding directly to the standby watch loop. Weakening Doctor to allow an empty queue undermines early sanity checking.
+- **Solution**: Maintain strict separation of concerns: Doctor pre-flight checks are read-only sanity checks that require pending tickets to catch configuration errors before dispatching work, while the standby lifecycle handles queue exhaustion that occurs *during* an active run as tickets drain.
 
-
+### Standby Polling Event Loop Yielding and Lock Invariants
+- **Problem**: Long polling sleep in standby can block asynchronous event loops or leave the sentinel file lock acquired while waiting, which causes external editors to hit `ERROR_SHARING_VIOLATION` on Windows when trying to add new ticket files.
+- **Solution**: Always release the sentinel file lock upon queue exhaustion before entering standby mode, yield execution between polls with `await asyncio.sleep(poll_interval)`, and wrap lifecycle loops in `try...finally: self.release_lock()` to ensure handles are freed on task cancellation.

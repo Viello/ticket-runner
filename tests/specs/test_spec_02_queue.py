@@ -10,6 +10,7 @@ Validates all relevant User Stories from docs/specs/02-queue-and-tickets.md:
   US 08: Completion timestamp header stamping and single atomic feature commit (ADR 0012)
   US 09: Global gotchas aggregation into docs/tickets/gotchas.md
   US 10: Skipped ticket working tree reset and relocation with failure details, no commit
+  US 11: Queue completion lifecycle transition to standby or process termination per configuration
 """
 
 from __future__ import annotations
@@ -367,3 +368,113 @@ def test_spec_02_empty_queue_returns_none(
     outcome = asyncio.run(orchestrator.run_next())
     assert outcome is None
     assert queue_lock.is_locked is False
+
+
+# --- US 11: Queue Completion Lifecycle: Terminate and Standby ---
+
+def test_spec_02_us_11_lifecycle_terminate_on_queue_completion(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    # Create ticket to drain
+    _create_ticket_file(tickets_dir, "05-lifecycle", "T001-drain.md", "T001 — Drain Queue")
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    printed_lines: list[str] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(changes=[f"Processed {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed_lines.append)
+    )
+
+    assert exit_code == 0
+    assert any("Queue exhausted" in p for p in printed_lines)
+    assert any("terminate" in p.lower() for p in printed_lines)
+    assert queue_lock.is_locked is False
+
+    # Completed ticket was relocated
+    relocated = tickets_dir / "05-lifecycle" / "completed" / "T001-drain.md"
+    assert relocated.is_file()
+
+
+def test_spec_02_us_11_lifecycle_standby_and_resume_on_new_ticket(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    printed_lines: list[str] = []
+    executed_tickets: list[str] = []
+    stop_event = asyncio.Event()
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed_tickets.append(ticket.id)
+        stop_event.set()
+        return TicketOutcome.approved(changes=[f"Processed {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    async def scenario() -> int:
+        async def write_ticket_later() -> None:
+            await asyncio.sleep(0.02)
+            _create_ticket_file(
+                tickets_dir,
+                "06-standby",
+                "T001-arrived.md",
+                "T001 — Arrived Ticket",
+            )
+
+        write_task = asyncio.create_task(write_ticket_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(
+                lifecycle="standby",
+                poll_interval=0.01,
+                printer=printed_lines.append,
+                stop_event=stop_event,
+            )
+        )
+        await write_task
+        return await run_task
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0
+    assert executed_tickets == ["T001"]
+    assert any("standby" in p.lower() for p in printed_lines)
+    assert any("Detected new pending ticket" in p for p in printed_lines)
+    assert queue_lock.is_locked is False
+
+    # Relocated to completed
+    relocated = tickets_dir / "06-standby" / "completed" / "T001-arrived.md"
+    assert relocated.is_file()
+

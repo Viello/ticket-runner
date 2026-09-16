@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -13,6 +14,7 @@ from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.git_operations import GitOperations
+from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.ticket import Ticket
 from runner.ports.ticket_repository import TicketRepository
 
@@ -310,3 +312,114 @@ class QueueOrchestrator:
                 break
             outcomes.append(outcome)
         return outcomes
+
+    async def run_lifecycle(
+        self,
+        processor: TicketProcessor | Callable[[Ticket], Awaitable[TicketOutcome]] | None = None,
+        lifecycle: LifecycleConfig | RunnerConfig | str | None = None,
+        poll_interval: float = 5.0,
+        printer: Callable[[str], None] = print,
+        stop_event: asyncio.Event | None = None,
+        max_standby_iterations: int | None = None,
+    ) -> int:
+        """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
+
+        Args:
+            processor: Injected ticket processor seam. Defaults to self.processor.
+            lifecycle: Policy specification (RunnerConfig, LifecycleConfig, or "standby"/"terminate").
+            poll_interval: Idle standby polling interval in seconds (default: 5.0).
+            printer: Output callback for console notifications.
+            stop_event: Optional asyncio.Event to gracefully exit standby loop.
+            max_standby_iterations: Optional iteration limit for tests.
+
+        Returns:
+            Exit status code (0 for clean termination or standby exit).
+
+        Raises:
+            RuntimeError: If pending tickets exist or arrive without a configured processor.
+            ValueError: If an unknown lifecycle policy is specified.
+        """
+        active_processor = processor or self._processor
+
+        if isinstance(lifecycle, RunnerConfig):
+            policy = lifecycle.lifecycle.queue_completion
+        elif isinstance(lifecycle, LifecycleConfig):
+            policy = lifecycle.queue_completion
+        elif isinstance(lifecycle, str):
+            policy = lifecycle.strip().lower()
+        elif lifecycle is None:
+            policy = "standby"
+        else:
+            raise ValueError(f"Unsupported lifecycle configuration type: {type(lifecycle)}")
+
+        if policy not in ("standby", "terminate"):
+            raise ValueError(f"Unsupported queue completion policy: '{policy}'")
+
+        try:
+            # 1. Check if there are pending tickets without a processor
+            pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
+            if pending is not None and active_processor is None:
+                raise RuntimeError(
+                    "No ticket processor configured. Worker execution will arrive in Spec 03."
+                )
+
+            # 2. Process initial queue until empty or paused
+            if active_processor is not None:
+                while not self._is_paused:
+                    outcome = await self.run_next(processor=active_processor)
+                    if outcome is None:
+                        break
+
+            if self._is_paused:
+                return 0
+
+            # 3. Queue is exhausted
+            printer("[Queue] Queue exhausted: no pending tickets.")
+
+            # 4. Apply lifecycle policy
+            if policy == "terminate":
+                printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
+                return 0
+
+            # Standby mode
+            printer(
+                f"[Queue] Lifecycle policy 'standby': Entering idle watch loop (polling every {poll_interval}s)..."
+            )
+            iteration = 0
+            while not self._is_paused:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                if max_standby_iterations is not None and iteration >= max_standby_iterations:
+                    break
+
+                try:
+                    await asyncio.sleep(poll_interval)
+                except asyncio.CancelledError:
+                    raise
+
+                iteration += 1
+
+                if self._is_paused or (stop_event is not None and stop_event.is_set()):
+                    break
+
+                pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
+                if pending is not None:
+                    printer(f"[Queue] Detected new pending ticket '{pending.id}'. Resuming queue execution...")
+                    if active_processor is None:
+                        raise RuntimeError(
+                            "No ticket processor configured. Worker execution will arrive in Spec 03."
+                        )
+                    while not self._is_paused:
+                        outcome = await self.run_next(processor=active_processor)
+                        if outcome is None:
+                            break
+
+                    printer("[Queue] Queue exhausted: no pending tickets.")
+                    if policy == "terminate":
+                        printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
+                        return 0
+
+            return 0
+        finally:
+            self.release_lock()
+

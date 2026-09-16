@@ -1,5 +1,6 @@
 # T012 — Queue completion lifecycle and CLI start wiring
-Status: pending
+Status: completed
+Completed: 2026-09-16T07:28:00Z
 Spec: docs/specs/02-queue-and-tickets.md
 
 ### Requirements

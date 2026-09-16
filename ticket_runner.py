@@ -8,7 +8,9 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
+from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.application.doctor import Doctor, DoctorReport
+from runner.application.queue_orchestrator import QueueOrchestrator
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -48,8 +50,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to configuration YAML file (default: config.yaml).",
     )
 
+    # start command
+    start_parser = subparsers.add_parser(
+        "start",
+        help="Start the ticket queue execution (Spec 02+).",
+    )
+    start_parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Bypass Discord bot verification and notifications.",
+    )
+    start_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.yaml"),
+        help="Path to configuration YAML file (default: config.yaml).",
+    )
+
     # placeholders for future subcommands
-    subparsers.add_parser("start", help="Start the ticket queue execution (Spec 02+).")
     subparsers.add_parser("pause", help="Pause the active ticket execution.")
     subparsers.add_parser("status", help="Display current runner and ticket status.")
 
@@ -107,6 +125,40 @@ async def run_doctor(
         return 1
 
 
+async def run_start(
+    config_path: Path,
+    local_only: bool,
+    doctor_instance: Doctor | None = None,
+    orchestrator_instance: QueueOrchestrator | None = None,
+    poll_interval: float = 5.0,
+) -> int:
+    """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
+    doctor = doctor_instance or Doctor(config_path=config_path)
+    doctor_code = await run_doctor(
+        config_path=config_path,
+        local_only=local_only,
+        doctor_instance=doctor,
+    )
+    if doctor_code != 0:
+        return doctor_code
+
+    config = doctor.loaded_config
+    if config is None:
+        loader = YamlConfigLoader()
+        config = loader.load(config_path)
+
+    orchestrator = orchestrator_instance or QueueOrchestrator()
+
+    try:
+        return await orchestrator.run_lifecycle(
+            lifecycle=config.lifecycle,
+            poll_interval=poll_interval,
+        )
+    except RuntimeError as exc:
+        print(f"\n[Runner] Error: {exc}")
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point returning status exit code."""
     parser = create_parser()
@@ -121,7 +173,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "doctor":
         return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
-    elif args.command in ("start", "pause", "status"):
+    elif args.command == "start":
+        return asyncio.run(run_start(config_path=config_path, local_only=local_only))
+    elif args.command in ("pause", "status"):
         print(f"Command '{args.command}' is not yet implemented (scheduled in upcoming specs).")
         return 0
 

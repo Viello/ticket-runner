@@ -15,6 +15,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcome,
     TicketOutcomeStatus,
 )
+from runner.domain.config import LifecycleConfig
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_ticket_repository import FakeTicketRepository
@@ -449,3 +450,221 @@ def test_context_manager_cleans_up_lock(
         assert queue_lock.is_locked is True
 
     assert queue_lock.is_locked is False
+
+
+# --- Lifecycle Support: Standby, Terminate, and Fail-Fast Seams ---
+
+def test_run_lifecycle_terminate_empty_queue(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    printed: list[str] = []
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+    )
+
+    assert exit_code == 0
+    assert any("Queue exhausted" in p for p in printed)
+    assert any("terminate" in p.lower() for p in printed)
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_terminate_after_draining_queue(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="First Ticket")
+    t2 = _make_ticket("T002", title="Second Ticket")
+    ticket_repo = FakeTicketRepository([t1, t2])
+    executed: list[str] = []
+    printed: list[str] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed.append(ticket.id)
+        return TicketOutcome.approved(changes=[f"Work {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+    )
+
+    assert exit_code == 0
+    assert executed == ["T001", "T002"]
+    assert any("Queue exhausted" in p for p in printed)
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_polls_and_resumes_when_ticket_added(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    executed: list[str] = []
+    printed: list[str] = []
+    stop_event = asyncio.Event()
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed.append(ticket.id)
+        # Stop standby loop once ticket is processed
+        stop_event.set()
+        return TicketOutcome.approved()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    async def scenario() -> int:
+        async def add_ticket_later() -> None:
+            await asyncio.sleep(0.02)
+            ticket_repo.add_ticket(_make_ticket("T001", title="Appeared in Standby"))
+
+        add_task = asyncio.create_task(add_ticket_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(
+                lifecycle="standby",
+                poll_interval=0.01,
+                printer=printed.append,
+                stop_event=stop_event,
+            )
+        )
+        await add_task
+        return await run_task
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0
+    assert executed == ["T001"]
+    assert any("standby" in p.lower() for p in printed)
+    assert any("Resuming" in p or "Detected" in p for p in printed)
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_is_cancellable(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+    )
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            orchestrator.run_lifecycle(lifecycle="standby", poll_interval=1.0)
+        )
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_pending_without_processor_raises_before_lock(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    ticket = _make_ticket("T001")
+    ticket_repo = FakeTicketRepository([ticket])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=None,
+    )
+
+    with pytest.raises(RuntimeError, match="No ticket processor configured. Worker execution will arrive in Spec 03."):
+        asyncio.run(orchestrator.run_lifecycle())
+
+    # Invariants: lock not acquired, no git commands executed, ticket untouched
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert len(fake_runner.invocations) == 0
+    assert ticket.status == TicketStatus.PENDING
+
+
+def test_run_lifecycle_standby_raises_when_ticket_appears_without_processor(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=None,
+    )
+
+    async def scenario() -> None:
+        async def add_ticket_later() -> None:
+            await asyncio.sleep(0.02)
+            ticket_repo.add_ticket(_make_ticket("T001"))
+
+        add_task = asyncio.create_task(add_ticket_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(lifecycle="standby", poll_interval=0.01)
+        )
+        await add_task
+        await run_task
+
+    with pytest.raises(RuntimeError, match="No ticket processor configured. Worker execution will arrive in Spec 03."):
+        asyncio.run(scenario())
+
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_supports_lifecycle_config_object(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+    )
+
+    config = LifecycleConfig(queue_completion="terminate")
+    exit_code = asyncio.run(orchestrator.run_lifecycle(lifecycle=config))
+    assert exit_code == 0
