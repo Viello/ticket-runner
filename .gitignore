@@ -1,6 +1,15 @@
 # Ticket Runner runtime state
 .agent/
 
+# Queue sentinel lock (never dirty working tree or staged by Gatekeeper)
+docs/tickets/.queue.lock
+.queue.lock
+**/.queue.lock
+
+# Atomic write temporaries (never staged by the Gatekeeper's `git add .`)
+*.tmp
+
+
 # Configuration & environment secrets
 config.yaml
 !config.example.yaml

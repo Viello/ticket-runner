@@ -32,6 +32,7 @@ Break the work into **tracer bullet** tickets.
 - A completed slice is demoable or verifiable on its own
 - Each slice **under-fills** its window: sized to finish inside one fresh context session with room to spare. A slice that spills into a second session costs more in resume than it saved in size.
 - Any prefactoring should be done first
+- Any slice touching security boundaries (credentials, subprocesses, path sanitization, network, untrusted inputs) must be flagged with `Security: required` in the ticket header below `Status: pending` and declare explicit security verification in acceptance criteria
 
 </vertical-slice-rules>
 
@@ -73,6 +74,7 @@ Do NOT close or modify any parent issue.
 
 # T<NNN> — <Ticket title>
 Status: pending
+Security: required (include only if touching credentials, subprocesses, path sanitization, network, or untrusted inputs; omit otherwise)
 
 ### Requirements
 - <What to build: the end-to-end behaviour this ticket makes work, from the user's perspective>

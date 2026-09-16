@@ -20,7 +20,7 @@ tooling arrives via an explicit ticket.
 
 ## Invariants
 - OpenCode is invoked as a subprocess, never a daemon: `opencode run --format json --session <id> --auto "<prompt>"`; resume with the same session id (ADR 0001).
-- Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement/SKILL.md`), performing pre-signal `/code-review` self-checks, but never commits directly
+- Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement/SKILL.md`), performing pre-signal reviews (`/code-review`, and `/security-review` when flagged), but never commits directly
 - Worker↔Runner messages are durable JSON files (`.agent/signals/{ticket_id}_ready.json`, `.agent/questions/{ticket_id}.json`) — never parse model stdout for state (ADR 0004).
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker (ADR 0002).
 - All automated work happens on `agent/ticket-runner`; the Runner stages and commits, and `.git/hooks/pre-push` blocks pushes (ADR 0005). Never `git push`.
@@ -53,6 +53,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 
 ### 4. Quality & Resilience
 - **Pre-signal review**: Conduct two-axis standards and spec review before committing or emitting `{ticket_id}_ready.json`: `/code-review`.
+- **Security review**: When explicitly flagged by ticket requirements/frontmatter (`Security: required`) or the user, invoke `/security-review` before committing or emitting `{ticket_id}_ready.json`.
 - **Root-cause debugging**: Build a tight, red-capable feedback loop when diagnosing hard failures: `/diagnosing-bugs`.
 - **Context preservation**: Checkpoint progress to `.agent/checkpoints/{ticket_id}/handoff.md` at 135k tokens: `/handoff`.
 
@@ -60,4 +61,5 @@ The project moves across four rungs. The human–agent pair drives all four inte
 - `.agents/skills/` vendors the user's global skill catalog; `handoff`, `claude-handoff`, `to-tickets` have project-specific edits. Don't bulk-reformat, and don't overwrite local copies with the global ones.
 - `.agents/skills/handoff/SKILL.md` is load-bearing (the Runner's handoff protocol calls it by path) — don't move or rename it.
 - `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline (`worker.execution_skill`).
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
 

@@ -386,3 +386,78 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
     assert report.passed is False
     # All 6 checks executed
     assert len(report.checks) == 6
+
+
+@pytest.mark.anyio
+async def test_check_queue_with_injected_fake_repository() -> None:
+    """Verify check_queue succeeds with an injected FakeTicketRepository."""
+    from runner.domain.ticket import Ticket, TicketStatus
+    from tests.fakes.fake_ticket_repository import FakeTicketRepository
+
+    fake_repo = FakeTicketRepository(
+        tickets=[
+            Ticket(
+                id="T001",
+                title="Test Ticket",
+                status=TicketStatus.PENDING,
+                spec_path="docs/specs/01-spec.md",
+                requirements=("Req 1",),
+                acceptance_criteria=(),
+                gotchas=(),
+                path=Path("docs/tickets/01-spec/T001.md"),
+            )
+        ]
+    )
+
+    doctor = Doctor(ticket_store=fake_repo)
+    result = await doctor.check_queue()
+
+    assert result.passed is True
+    assert result.name == CHECK_QUEUE
+    assert "1 pending ticket(s)" in result.message
+
+
+@pytest.mark.anyio
+async def test_check_queue_with_injected_fake_repository_empty() -> None:
+    """Verify check_queue fails when injected FakeTicketRepository has no pending tickets."""
+    from tests.fakes.fake_ticket_repository import FakeTicketRepository
+
+    fake_repo = FakeTicketRepository(tickets=[])
+    doctor = Doctor(ticket_store=fake_repo)
+    result = await doctor.check_queue()
+
+    assert result.passed is False
+    assert result.name == CHECK_QUEUE
+    assert "No pending tickets found" in result.message
+
+
+@pytest.mark.anyio
+async def test_check_queue_with_injected_fake_repository_missing() -> None:
+    """Verify check_queue fails when injected FakeTicketRepository exists() is False."""
+    from tests.fakes.fake_ticket_repository import FakeTicketRepository
+
+    fake_repo = FakeTicketRepository(exists_val=False)
+    doctor = Doctor(ticket_store=fake_repo)
+    result = await doctor.check_queue()
+
+    assert result.passed is False
+    assert result.name == CHECK_QUEUE
+    assert "does not exist" in result.message
+
+
+@pytest.mark.anyio
+async def test_check_queue_handles_ticket_format_error() -> None:
+    """Verify check_queue handles TicketFormatError gracefully with diagnostic remediation."""
+    from runner.domain.exceptions import TicketFormatError
+    from tests.fakes.fake_ticket_repository import FakeTicketRepository
+
+    fake_repo = FakeTicketRepository(
+        error=TicketFormatError("Malformed ticket header in 'docs/tickets/01-spec/T001.md'")
+    )
+    doctor = Doctor(ticket_store=fake_repo)
+    result = await doctor.check_queue()
+
+    assert result.passed is False
+    assert result.name == CHECK_QUEUE
+    assert "Malformed ticket" in result.message
+    assert result.remediation is not None

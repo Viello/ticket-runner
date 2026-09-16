@@ -14,7 +14,7 @@ Manage the OpenCode Worker as an isolated CLI subprocess with real-time JSON eve
 2. As a developer, I want the Runner to inject a scoped prompt containing the active Ticket slice, an automated Spec Excerpt from the parent Spec, global Gotchas, the configured `execution_skill` pointer, and operational rules, so that the Worker's context is grounded in architectural intent while focused on the immediate task.
 3. As a developer, I want the Runner's prompt to instruct the Worker to follow the discipline of `.agents/skills/implement/SKILL.md` (TDD at seams, regular test/typecheck runs), so that implementation quality remains consistent.
 4. As a developer, I want the Runner's prompt to strictly forbid Worker git commits, requiring instead that the Worker emit `.agent/signals/{ticket_id}_ready.json` upon completion, so that git history authority remains solely with the Gatekeeper.
-5. As a developer, I want the Worker to conduct a `/code-review` self-check against the ticket acceptance criteria and record the findings in the `self_review_notes` of the ready signal, so that Gatekeeper has visibility into implementation verification.
+5. As a developer, I want the Worker to conduct `/code-review` (and conditional `/security-review` when flagged by `Security: required`) self-checks and record findings in `self_review_notes` of the ready signal, so that Gatekeeper has visibility into implementation verification.
 6. As a developer, I want the Worker to have access to `.agents/skills/diagnosing-bugs/SKILL.md` on disk for non-trivial test failures, so that root-cause debugging discipline is available when needed.
 7. As a developer, I want the Runner to parse JSON stream events in real time to capture token usage, tool invocations, and textual progress.
 8. As a developer, I want the Runner to emit a warning when token usage crosses 120,000 tokens, so that I am aware that the session is approaching capacity.
@@ -37,7 +37,7 @@ Manage the OpenCode Worker as an isolated CLI subprocess with real-time JSON eve
   2. Spec Excerpt (ADR 0011): `## Problem Statement` and `## Solution` extracted from the parent Spec (`Spec:` header or inferred from `docs/specs/<spec-slug>.md`), along with a link to the full spec file.
   3. Global Gotchas from `docs/tickets/gotchas.md`.
   4. Execution discipline from `worker.execution_skill` (TDD at seams, frequent tests/typechecks).
-  5. Pre-signal `/code-review` self-check against acceptance criteria.
+  5. Pre-signal `/code-review` self-check against acceptance criteria, and conditional `/security-review` (ADR 0013) when the ticket flags `Security: required`.
   6. Direct override forbidding git staging or commits.
   7. Instruction to write `.agent/signals/{ticket_id}_ready.json` with `self_review_notes` upon completion.
   8. Pointer to `.agents/skills/diagnosing-bugs/SKILL.md` on disk for non-trivial test failures.

@@ -11,11 +11,13 @@ from typing import Mapping
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
+from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.git_operations import GitOperations
 from runner.domain.config import RunnerConfig
-from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError
+from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError, TicketFormatError
 from runner.ports.command_runner import CommandRunner
 from runner.ports.config_loader import ConfigLoader
+from runner.ports.ticket_repository import TicketRepository
 
 CHECK_OPENCODE = "opencode"
 CHECK_GIT = "git"
@@ -67,6 +69,7 @@ class Doctor:
         git_operations: GitOperations | None = None,
         config_loader: ConfigLoader | None = None,
         hook_installer: type[PrePushHookInstaller] | None = None,
+        ticket_store: TicketRepository | None = None,
         cwd: Path | None = None,
         config_path: Path | str | None = None,
         tickets_dir: Path | str | None = None,
@@ -97,6 +100,8 @@ class Doctor:
             self._tickets_dir = self._cwd / DEFAULT_TICKETS_DIR
         else:
             self._tickets_dir = DEFAULT_TICKETS_DIR
+
+        self._ticket_store = ticket_store or DirectoryTicketStore(root_dir=self._tickets_dir)
 
         if git_dir is not None:
             self._git_dir = Path(git_dir)
@@ -197,7 +202,7 @@ class Doctor:
 
     async def check_queue(self) -> CheckResult:
         """Verify docs/tickets/ contains at least one pending ticket file."""
-        if not self._tickets_dir.is_dir():
+        if not self._ticket_store.exists():
             return CheckResult(
                 name=CHECK_QUEUE,
                 passed=False,
@@ -205,18 +210,15 @@ class Doctor:
                 remediation=f"Create '{self._tickets_dir}' and add at least one pending ticket specification.",
             )
 
-        pending_tickets: list[Path] = []
-        for path in self._tickets_dir.rglob("*.md"):
-            if path.name == "gotchas.md":
-                continue
-            if "completed" in path.parts:
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-                if re.search(r"^Status:\s*pending\b", content, re.MULTILINE | re.IGNORECASE):
-                    pending_tickets.append(path)
-            except OSError:
-                continue
+        try:
+            pending_tickets = self._ticket_store.list_all_pending()
+        except TicketFormatError as exc:
+            return CheckResult(
+                name=CHECK_QUEUE,
+                passed=False,
+                message=f"Queue validation failed: Malformed ticket: {exc}",
+                remediation=f"Fix the malformed ticket file or remove it from '{self._tickets_dir}'.",
+            )
 
         if not pending_tickets:
             return CheckResult(

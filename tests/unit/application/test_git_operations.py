@@ -319,3 +319,76 @@ def test_git_operations_with_git_client(
 
     fake_runner.register(["git", "status", "--porcelain"], stdout="")
     assert asyncio.run(ops.check_clean_working_tree()) is True
+
+
+# --- remove_path ---
+
+def test_remove_path_success(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "rm", "-r", "docs/tickets/02-queue"], exit_code=0)
+    asyncio.run(git_ops.remove_path("docs/tickets/02-queue", recursive=True))
+
+    assert fake_runner.commands == [["git", "rm", "-r", "docs/tickets/02-queue"]]
+
+
+def test_remove_path_normalizes_absolute_path_within_cwd(
+    fake_runner: FakeCommandRunner,
+    tmp_path: Path,
+) -> None:
+    ops = GitOperations(runner=fake_runner, cwd=tmp_path)
+    target = tmp_path / "docs" / "specs" / "spec.md"
+
+    fake_runner.register(["git", "rm", "docs/specs/spec.md"], exit_code=0)
+    asyncio.run(ops.remove_path(target, recursive=False))
+
+    assert fake_runner.commands == [["git", "rm", "docs/specs/spec.md"]]
+
+
+def test_remove_path_raises_on_git_failure(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(
+        ["git", "rm", "-r", "docs/tickets/unknown"],
+        exit_code=128,
+        stderr="fatal: pathspec 'docs/tickets/unknown' did not match any files",
+    )
+
+    with pytest.raises(GitError, match="Failed to remove path"):
+        asyncio.run(git_ops.remove_path("docs/tickets/unknown", recursive=True))
+
+
+# --- commit_chore ---
+
+def test_commit_chore_authors_chore_commit(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "add", "."], exit_code=0)
+    fake_runner.register(["git", "commit", "-m"], exit_code=0)
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="c" * 40 + "\n")
+
+    sha = asyncio.run(
+        git_ops.commit_chore(
+            scope="queue",
+            title="Clean up 02-queue-and-tickets tickets, gotchas, and spec",
+            changes=[
+                "Archive 02-queue-and-tickets tickets and spec to untracked storage",
+                "Remove tickets and spec from git tracking",
+                "Reset gotchas to skeleton",
+            ],
+        )
+    )
+
+    assert sha == "c" * 40
+    commit_invocations = [
+        inv for inv in fake_runner.invocations if inv.cmd[:2] == ["git", "commit"]
+    ]
+    assert len(commit_invocations) == 1
+    commit_msg = commit_invocations[0].cmd[3]
+    assert commit_msg.startswith("chore(queue): Clean up 02-queue-and-tickets tickets, gotchas, and spec")
+    assert "- Archive 02-queue-and-tickets tickets and spec to untracked storage" in commit_msg
+    assert "- Reset gotchas to skeleton" in commit_msg
+    assert not any(line.endswith(".") for line in commit_msg.splitlines() if line.startswith("- "))

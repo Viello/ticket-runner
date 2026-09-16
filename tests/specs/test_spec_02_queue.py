@@ -1,0 +1,699 @@
+"""Spec 02 Behavioral Test Suite: Directory-Based Ticket Queue and Gotchas Management.
+
+Validates all relevant User Stories from docs/specs/02-queue-and-tickets.md:
+  US 01: Individual ticket markdown files under docs/tickets/<spec-slug>/T<NNN>-<slug>.md
+  US 02: Exclusive OS sentinel file lock (.queue.lock) held during active execution
+  US 03: Sentinel lock released on pause to allow external text editor modifications
+  US 04: Sentinel lock re-acquired and queue re-scanned on resume, picking up new tickets
+  US 05: Strict sequential execution ordered by numeric ticket identifier
+  US 07: Relocation of completed ticket to completed/ subfolder
+  US 08: Completion timestamp header stamping and single atomic feature commit (ADR 0012)
+  US 09: Global gotchas aggregation into docs/tickets/gotchas.md
+  US 10: Skipped ticket working tree reset and relocation with failure details, no commit
+  US 11: Queue completion lifecycle transition to standby or process termination per configuration
+  US 13: Ephemeral clean slate archival and chore commit on queue exhaustion (ADR 0012)
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+import pytest
+
+from runner.adapters.markdown.file_lock import QueueFileLock
+from runner.adapters.markdown.gotchas_store import DEFAULT_SKELETON, GotchasStore
+from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.application.clean_slate import CleanSlateArchiver
+from runner.application.git_operations import GitOperations
+from runner.application.queue_orchestrator import (
+    QueueOrchestrator,
+    TicketOutcome,
+)
+from runner.domain.config import LifecycleConfig
+from runner.domain.ticket import Ticket, TicketStatus
+from tests.fakes.fake_command_runner import FakeCommandRunner
+
+
+def _create_ticket_file(
+    queue_dir: Path,
+    spec_slug: str,
+    ticket_filename: str,
+    title: str,
+    status: str = "pending",
+    requirements: list[str] | None = None,
+) -> Path:
+    spec_folder = queue_dir / spec_slug
+    spec_folder.mkdir(parents=True, exist_ok=True)
+    ticket_path = spec_folder / ticket_filename
+
+    req_lines = "\n".join(f"- {r}" for r in (requirements or ["Initial requirement"]))
+    content = (
+        f"# {title}\n"
+        f"Status: {status}\n"
+        f"Spec: docs/specs/{spec_slug}.md\n\n"
+        f"### Requirements\n"
+        f"{req_lines}\n\n"
+        f"### Acceptance Criteria\n"
+        f"- Criteria 1\n\n"
+        f"### Gotchas\n"
+    )
+    with ticket_path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(content)
+    return ticket_path
+
+
+@pytest.fixture
+def fake_runner() -> FakeCommandRunner:
+    runner = FakeCommandRunner()
+    runner.register(["git", "status", "--porcelain"], stdout="")
+    runner.register(["git", "symbolic-ref", "--short", "HEAD"], stdout="agent/ticket-runner\n")
+    runner.register(["git", "add", "."], stdout="")
+    runner.register(["git", "commit", "-m"], stdout="")
+    runner.register(["git", "rev-parse", "HEAD"], stdout="f" * 40 + "\n")
+    runner.register(["git", "reset", "--hard", "HEAD"], stdout="HEAD is now at fffffff\n")
+    runner.register(["git", "clean", "-fd"], stdout="")
+    return runner
+
+
+@pytest.fixture
+def workspace_tree(tmp_path: Path) -> dict[str, Path]:
+    tickets_dir = tmp_path / "docs" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = tickets_dir / ".queue.lock"
+    gotchas_path = tickets_dir / "gotchas.md"
+    return {
+        "root": tmp_path,
+        "tickets": tickets_dir,
+        "lock": lock_path,
+        "gotchas": gotchas_path,
+    }
+
+
+# --- US 02 & US 05: Sentinel Lock Held During Active Run & Strict Sequential Ordering ---
+
+def test_spec_02_us_02_and_05_sequential_execution_and_sentinel_lock(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    # Scaffold out-of-order tickets under 01-auth
+    _create_ticket_file(tickets_dir, "01-auth", "T003-logout.md", "T003 — Logout Flow")
+    _create_ticket_file(tickets_dir, "01-auth", "T001-setup.md", "T001 — Setup Auth")
+    _create_ticket_file(tickets_dir, "01-auth", "T002-login.md", "T002 — Login Form")
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    execution_history: list[tuple[str, str, bool]] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        # Record ticket ID, event, and lock status during processing
+        execution_history.append((ticket.id, "start", queue_lock.is_locked))
+        await asyncio.sleep(0.01)
+        execution_history.append((ticket.id, "finish", queue_lock.is_locked))
+        return TicketOutcome.approved(changes=[f"Complete {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    assert queue_lock.is_locked is False
+
+    outcomes = asyncio.run(orchestrator.run_all())
+
+    assert len(outcomes) == 3
+    # Verify strict sequential order: T001 starts and finishes before T002 starts
+    order_of_events = [(item[0], item[1]) for item in execution_history]
+    assert order_of_events == [
+        ("T001", "start"),
+        ("T001", "finish"),
+        ("T002", "start"),
+        ("T002", "finish"),
+        ("T003", "start"),
+        ("T003", "finish"),
+    ]
+
+    # Verify sentinel lock was held during all active executions
+    for ticket_id, event, is_locked in execution_history:
+        assert is_locked is True, f"Lock was not held during {event} of {ticket_id}"
+
+    # After queue drains, lock is released
+    assert queue_lock.is_locked is False
+
+
+# --- US 03 & US 04: Lock Released on Pause, Re-acquired on Resume, Picking Up Inserted Tickets ---
+
+def test_spec_02_us_03_and_04_pause_release_and_resume_rescan(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    # Initial pending ticket: T002
+    _create_ticket_file(tickets_dir, "02-feature", "T002-feature.md", "T002 — Feature Work")
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    executed_tickets: list[str] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed_tickets.append(ticket.id)
+        return TicketOutcome.approved()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    # US 03: Pause releases lock handle so external text editor can write
+    orchestrator.pause()
+    assert orchestrator.is_paused is True
+    assert queue_lock.is_locked is False
+
+    # External author creates T001 while paused
+    _create_ticket_file(tickets_dir, "02-feature", "T001-hotfix.md", "T001 — Urgent Hotfix")
+
+    # US 04: Resume re-acquires lock and re-scans directory
+    orchestrator.resume()
+    assert orchestrator.is_paused is False
+    assert queue_lock.is_locked is True
+
+    # Execute next ticket: should pick up T001 first
+    outcome = asyncio.run(orchestrator.run_next())
+    assert outcome is not None
+    assert executed_tickets == ["T001"]
+
+    # Execute remaining ticket: T002
+    outcome_2 = asyncio.run(orchestrator.run_next())
+    assert outcome_2 is not None
+    assert executed_tickets == ["T001", "T002"]
+
+    # Queue drained -> lock released
+    assert queue_lock.is_locked is False
+
+
+# --- US 07, US 08, US 09: Atomic Commit, Relocation to completed/, and Gotchas Aggregation ---
+
+def test_spec_02_us_07_08_09_atomic_commit_relocation_and_gotchas(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    ticket_file = _create_ticket_file(
+        tickets_dir,
+        "03-billing",
+        "T001-checkout.md",
+        "T001 — Implement Checkout",
+    )
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    new_gotcha = "Stripe webhook events require idempotency key validation"
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(
+            new_gotchas=[new_gotcha],
+            changes=["Implement checkout API route", "Add stripe webhook handler"],
+            scope="billing",
+        )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+    assert outcome.commit_sha == "f" * 40
+
+    # US 07 & US 08: Original ticket file is moved to completed/ with timestamp stamped
+    assert not ticket_file.exists()
+    relocated_file = tickets_dir / "03-billing" / "completed" / "T001-checkout.md"
+    assert relocated_file.is_file()
+
+    relocated_content = relocated_file.read_text(encoding="utf-8")
+    assert "Status: completed" in relocated_content
+    assert "Completed: 20" in relocated_content
+    # ADR 0012: Never record commit SHA in ticket frontmatter
+    assert "Commit:" not in relocated_content
+
+    # US 09: Global gotchas appended to docs/tickets/gotchas.md
+    gotchas_content = gotchas_store.load()
+    assert "Stripe webhook events" in gotchas_content
+    assert new_gotcha in gotchas_content
+
+    # US 08: Exactly one conventional commit authored combining everything
+    commit_invocations = [
+        inv for inv in fake_runner.invocations if inv.cmd[:2] == ["git", "commit"]
+    ]
+    assert len(commit_invocations) == 1
+    commit_msg = commit_invocations[0].cmd[3]
+    assert commit_msg.startswith("feat(billing): Implement Checkout")
+    assert "- Implement checkout API route" in commit_msg
+    assert "- Add stripe webhook handler" in commit_msg
+    assert "T001" not in commit_msg
+
+
+# --- US 10: Skipped Ticket Working Tree Reset and Relocation Without Commit ---
+
+def test_spec_02_us_10_skipped_ticket_resets_working_tree_and_no_commit(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    ticket_file = _create_ticket_file(
+        tickets_dir,
+        "04-search",
+        "T005-fuzzy.md",
+        "T005 — Fuzzy Search Indexing",
+    )
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    failure_reason = "Circuit breaker tripped after 3 failed test attempts"
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.skipped(details=failure_reason)
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_skipped is True
+
+    # Working tree was reset
+    assert ["git", "reset", "--hard", "HEAD"] in fake_runner.commands
+    assert ["git", "clean", "-fd"] in fake_runner.commands
+
+    # Ticket relocated to completed with skipped status
+    assert not ticket_file.exists()
+    relocated_file = tickets_dir / "04-search" / "completed" / "T005-fuzzy.md"
+    assert relocated_file.is_file()
+
+    relocated_content = relocated_file.read_text(encoding="utf-8")
+    assert "Status: skipped" in relocated_content
+    assert "Failure: Circuit breaker tripped after 3 failed test attempts" in relocated_content
+
+    # Zero commits authored
+    commit_invocations = [
+        inv for inv in fake_runner.invocations if inv.cmd[:2] == ["git", "commit"]
+    ]
+    assert len(commit_invocations) == 0
+
+
+# --- Empty Queue Behavior ---
+
+def test_spec_02_empty_queue_returns_none(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    outcome = asyncio.run(orchestrator.run_next())
+    assert outcome is None
+    assert queue_lock.is_locked is False
+
+
+# --- US 11: Queue Completion Lifecycle: Terminate and Standby ---
+
+def test_spec_02_us_11_lifecycle_terminate_on_queue_completion(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    # Create ticket to drain
+    _create_ticket_file(tickets_dir, "05-lifecycle", "T001-drain.md", "T001 — Drain Queue")
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    printed_lines: list[str] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(changes=[f"Processed {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed_lines.append)
+    )
+
+    assert exit_code == 0
+    assert any("Queue exhausted" in p for p in printed_lines)
+    assert any("terminate" in p.lower() for p in printed_lines)
+    assert queue_lock.is_locked is False
+
+    # Completed ticket was relocated
+    relocated = tickets_dir / "05-lifecycle" / "completed" / "T001-drain.md"
+    assert relocated.is_file()
+
+
+def test_spec_02_us_11_lifecycle_standby_and_resume_on_new_ticket(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    gotchas_store = GotchasStore(path=gotchas_path)
+    git_ops = GitOperations(runner=fake_runner)
+
+    printed_lines: list[str] = []
+    executed_tickets: list[str] = []
+    stop_event = asyncio.Event()
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed_tickets.append(ticket.id)
+        stop_event.set()
+        return TicketOutcome.approved(changes=[f"Processed {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    async def scenario() -> int:
+        async def write_ticket_later() -> None:
+            await asyncio.sleep(0.02)
+            _create_ticket_file(
+                tickets_dir,
+                "06-standby",
+                "T001-arrived.md",
+                "T001 — Arrived Ticket",
+            )
+
+        write_task = asyncio.create_task(write_ticket_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(
+                lifecycle="standby",
+                poll_interval=0.01,
+                printer=printed_lines.append,
+                stop_event=stop_event,
+            )
+        )
+        await write_task
+        return await run_task
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0
+    assert executed_tickets == ["T001"]
+    assert any("standby" in p.lower() for p in printed_lines)
+    assert any("Detected new pending ticket" in p for p in printed_lines)
+    assert queue_lock.is_locked is False
+
+    # Relocated to completed
+    relocated = tickets_dir / "06-standby" / "completed" / "T001-arrived.md"
+    assert relocated.is_file()
+
+
+# --- US 13: Ephemeral Clean Slate Archival and Chore Commit on Queue Exhaustion (ADR 0012) ---
+
+def test_spec_02_us_13_clean_slate_interactive_confirmed(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    root = workspace_tree["root"]
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    specs_dir = root / "docs" / "specs"
+    specs_dir.mkdir(parents=True, exist_ok=True)
+    spec_file = specs_dir / "07-clean.md"
+    spec_file.write_text("# Spec 07: Clean Slate Specification\n", encoding="utf-8")
+
+    archive_root = root / ".agent" / "archive"
+
+    # Initial pending ticket
+    _create_ticket_file(tickets_dir, "07-clean", "T001-work.md", "T001 — Work Item")
+
+    # Write initial gotchas
+    gotchas_store = GotchasStore(path=gotchas_path)
+    gotchas_store.append(["### Pre-existing Pitfall\n- **Problem**: P\n- **Solution**: S"])
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    git_ops = GitOperations(runner=fake_runner, cwd=root)
+
+    fake_runner.register(["git", "rm", "-r", "docs/tickets/07-clean"], exit_code=0)
+    fake_runner.register(["git", "rm", "docs/specs/07-clean.md"], exit_code=0)
+
+    prompt_history: list[str] = []
+
+    def confirm_cb(prompt: str) -> bool:
+        prompt_history.append(prompt)
+        return True
+
+    archiver = CleanSlateArchiver(
+        git_operations=git_ops,
+        confirmation_callback=confirm_cb,
+        archive_root=archive_root,
+        tickets_dir=tickets_dir,
+        specs_dir=specs_dir,
+        gotchas_store=gotchas_store,
+        cwd=root,
+    )
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(changes=[f"Implemented {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=archiver,
+        processor=fake_processor,
+        cwd=root,
+    )
+
+    printed_lines: list[str] = []
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="interactive")
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle=config, printer=printed_lines.append)
+    )
+
+    assert exit_code == 0
+    assert len(prompt_history) == 1
+    assert "07-clean" in prompt_history[0]
+
+    # 1. Archive copies exist under .agent/archive/07-clean/
+    archive_dir = archive_root / "07-clean"
+    assert archive_dir.is_dir()
+    assert (archive_dir / "completed" / "T001-work.md").is_file()
+    assert (archive_dir / "07-clean.md").is_file()
+
+    # 2. Git removal commands executed
+    assert ["git", "rm", "-r", "docs/tickets/07-clean"] in fake_runner.commands
+    assert ["git", "rm", "docs/specs/07-clean.md"] in fake_runner.commands
+
+    # 3. Gotchas reset to skeleton
+    assert gotchas_store.load() == DEFAULT_SKELETON
+
+    # 4. Authored single chore commit
+    chore_commits = [
+        inv
+        for inv in fake_runner.invocations
+        if inv.cmd[:2] == ["git", "commit"] and "chore(queue)" in inv.cmd[3]
+    ]
+    assert len(chore_commits) == 1
+    commit_msg = chore_commits[0].cmd[3]
+    assert commit_msg.startswith("chore(queue): Clean up 07-clean tickets, gotchas, and spec")
+    assert "- Archive 07-clean tickets and spec to untracked storage" in commit_msg
+    assert "T001" not in commit_msg
+
+
+def test_spec_02_us_13_clean_slate_interactive_declined_leaves_tree_untouched(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    root = workspace_tree["root"]
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    specs_dir = root / "docs" / "specs"
+    specs_dir.mkdir(parents=True, exist_ok=True)
+    spec_file = specs_dir / "08-decline.md"
+    spec_file.write_text("# Spec 08: Decline Specification\n", encoding="utf-8")
+
+    archive_root = root / ".agent" / "archive"
+
+    _create_ticket_file(tickets_dir, "08-decline", "T001-keep.md", "T001 — Keep Item")
+
+    gotchas_store = GotchasStore(path=gotchas_path)
+    gotchas_store.append(["### Permanent Gotcha\n- **Problem**: P\n- **Solution**: S"])
+    original_gotchas = gotchas_store.load()
+
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    git_ops = GitOperations(runner=fake_runner, cwd=root)
+
+    archiver = CleanSlateArchiver(
+        git_operations=git_ops,
+        confirmation_callback=lambda prompt: False,
+        archive_root=archive_root,
+        tickets_dir=tickets_dir,
+        specs_dir=specs_dir,
+        gotchas_store=gotchas_store,
+        cwd=root,
+    )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=archiver,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+        cwd=root,
+    )
+
+    printed_lines: list[str] = []
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="interactive")
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle=config, printer=printed_lines.append)
+    )
+
+    assert exit_code == 0
+    # No archive directory created
+    assert not (archive_root / "08-decline").exists()
+    # No git rm called
+    assert not any(cmd[:2] == ["git", "rm"] for cmd in fake_runner.commands)
+    # Gotchas untouched
+    assert gotchas_store.load() == original_gotchas
+    # Completed ticket still exists in completed/
+    assert (tickets_dir / "08-decline" / "completed" / "T001-keep.md").is_file()
+    # No chore commits authored
+    assert not any(
+        cmd[:2] == ["git", "commit"] and "chore(queue)" in cmd[3]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_spec_02_us_13_clean_slate_never_policy_skips_silently(
+    workspace_tree: dict[str, Path],
+    fake_runner: FakeCommandRunner,
+) -> None:
+    root = workspace_tree["root"]
+    tickets_dir = workspace_tree["tickets"]
+    lock_path = workspace_tree["lock"]
+    gotchas_path = workspace_tree["gotchas"]
+
+    archive_root = root / ".agent" / "archive"
+
+    _create_ticket_file(tickets_dir, "09-never", "T001-task.md", "T001 — Task")
+
+    gotchas_store = GotchasStore(path=gotchas_path)
+    ticket_store = DirectoryTicketStore(root_dir=tickets_dir)
+    queue_lock = QueueFileLock(lock_path=lock_path)
+    git_ops = GitOperations(runner=fake_runner, cwd=root)
+
+    archiver = CleanSlateArchiver(
+        git_operations=git_ops,
+        confirmation_callback=lambda prompt: True,
+        archive_root=archive_root,
+        tickets_dir=tickets_dir,
+        gotchas_store=gotchas_store,
+        cwd=root,
+    )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_store,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=archiver,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+        cwd=root,
+    )
+
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="never")
+
+    exit_code = asyncio.run(orchestrator.run_lifecycle(lifecycle=config))
+
+    assert exit_code == 0
+    assert not (archive_root / "09-never").exists()
+    assert not any(cmd[:2] == ["git", "rm"] for cmd in fake_runner.commands)
+

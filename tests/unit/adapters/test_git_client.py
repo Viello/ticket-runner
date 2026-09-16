@@ -194,3 +194,36 @@ def test_git_client_respects_cwd(
 
     assert len(fake_runner.invocations) == 1
     assert fake_runner.invocations[0].cwd == tmp_path
+
+
+def test_git_client_rm_file(
+    git_client: GitClient,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "rm", "docs/specs/02-queue.md"], exit_code=0)
+    result = asyncio.run(git_client.rm("docs/specs/02-queue.md"))
+
+    assert result.success is True
+    assert fake_runner.commands == [["git", "rm", "docs/specs/02-queue.md"]]
+
+
+def test_git_client_rm_recursive(
+    git_client: GitClient,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "rm", "-r", "docs/tickets/02-queue"], exit_code=0)
+    result = asyncio.run(git_client.rm("docs/tickets/02-queue", recursive=True))
+
+    assert result.success is True
+    assert fake_runner.commands == [["git", "rm", "-r", "docs/tickets/02-queue"]]
+
+
+def test_git_client_rm_recursive_force(
+    git_client: GitClient,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "rm", "-r", "-f", "docs/tickets/02-queue"], exit_code=0)
+    result = asyncio.run(git_client.rm("docs/tickets/02-queue", recursive=True, force=True))
+
+    assert result.success is True
+    assert fake_runner.commands == [["git", "rm", "-r", "-f", "docs/tickets/02-queue"]]
