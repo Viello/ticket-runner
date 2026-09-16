@@ -100,4 +100,17 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Moving a completed or skipped ticket into `completed/` when an archived file of the same name already exists silently overwrites historical records with `os.replace`.
 - **Solution**: Explicitly check destination existence before modifying source files and raise `TicketFormatError` without altering source or destination files, protecting completion history from data loss.
 
+### Single-Commit Ordering Pipeline
+- **Problem**: `GitOperations.commit_ticket` stages all modifications across the repository via `git add .`; relocating tickets or appending gotchas out of order or after committing either leaves working tree changes unstaged or causes broken commits.
+- **Solution**: Strictly sequence finalization steps in the orchestrator before calling `commit_ticket`: first relocate the ticket markdown file with updated completion metadata into `completed/`, then append newly emitted gotchas to `gotchas.md`, and finally stage and author the atomic commit.
+
+### Working Tree Reset Preceding Skipped Ticket Archival
+- **Problem**: Calling `GitOperations.reset_working_tree()` (`git reset --hard HEAD` and `git clean -fd`) after relocating a skipped ticket into `completed/` deletes or reverts the newly archived ticket file, losing the recorded failure reason.
+- **Solution**: Execute `reset_working_tree()` first to discard uncommitted worker trial edits, and only then relocate the ticket to `completed/` with `Status: skipped` and failure details.
+
+### Sentinel Lock Handle Closure on Pause
+- **Problem**: Merely toggling a boolean pause flag without closing the OS file handle on `docs/tickets/.queue.lock` prevents external text editors on Windows from opening or modifying queue files due to file sharing violations (`ERROR_SHARING_VIOLATION`).
+- **Solution**: Explicitly release the OS file lock and close the underlying file handle inside `pause()`, and re-open and re-acquire the non-blocking sentinel lock inside `resume()`.
+
+
 

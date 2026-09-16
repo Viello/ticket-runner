@@ -1,5 +1,6 @@
 # T011 — Queue orchestrator: lock lifecycle, processor seam, and atomic commit
-Status: pending
+Status: completed
+Completed: 2026-09-16T06:56:25Z
 Spec: docs/specs/02-queue-and-tickets.md
 
 ### Requirements
