@@ -305,6 +305,27 @@ class GotchasStore:
 
         return to_append
 
+    def reset_to_skeleton(self) -> None:
+        """Reset gotchas markdown file to the default initial skeleton atomically.
+
+        Preserves line endings and atomically overwrites the file contents
+        with DEFAULT_SKELETON.
+
+        Raises:
+            TicketFormatError: If atomic file write fails.
+        """
+        existing_text = self.load()
+        newline = "\r\n" if "\r\n" in existing_text else "\n"
+        content = self._reline(DEFAULT_SKELETON, newline) + newline
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            atomic_write_text(self._path, content)
+        except OSError as exc:
+            raise TicketFormatError(
+                f"Failed to reset gotchas file '{self._path}' to skeleton atomically: {exc}. "
+                "Ensure no other process has the file open."
+            ) from exc
+
     @staticmethod
     def _extract_title(section: str) -> str | None:
         lines = section.strip().splitlines()

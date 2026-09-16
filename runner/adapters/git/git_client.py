@@ -113,3 +113,19 @@ class GitClient:
     ) -> CommandResult:
         """Run `git clean <flags>` to remove untracked files and directories."""
         return await self._run(["clean", flags], cwd=cwd)
+
+    async def rm(
+        self,
+        path: str | Path,
+        recursive: bool = False,
+        force: bool = False,
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        """Run `git rm [-r] [-f] <path>` to remove files or directories from working tree and index."""
+        args = ["rm"]
+        if recursive:
+            args.append("-r")
+        if force:
+            args.append("-f")
+        args.append(str(path))
+        return await self._run(args, cwd=cwd)

@@ -323,3 +323,65 @@ def test_normalize_entry_with_inline_colon_title() -> None:
     assert normalized.startswith("### Sentinel Lock Cleanup\n")
     assert "- **Problem**: Ensure lock handle is closed on conflict." in normalized
     assert "- **Solution**: Not specified." in normalized
+
+
+def test_reset_to_skeleton_overwrites_existing_entries(tmp_path: Path) -> None:
+    """Verify reset_to_skeleton replaces all accumulated entries with the skeleton."""
+    target = tmp_path / "gotchas.md"
+    existing = (
+        DEFAULT_SKELETON
+        + "\n### Entry 1\n- **Problem**: P1\n- **Solution**: S1\n"
+        + "\n### Entry 2\n- **Problem**: P2\n- **Solution**: S2\n"
+    )
+    _write_raw(target, existing)
+
+    store = GotchasStore(target)
+    assert len(store.load_sections()) == 2
+
+    store.reset_to_skeleton()
+
+    assert _read_raw(target) == DEFAULT_SKELETON
+    assert store.load_sections() == []
+
+
+def test_reset_to_skeleton_creates_missing_file(tmp_path: Path) -> None:
+    """Verify reset_to_skeleton creates gotchas.md with DEFAULT_SKELETON if missing."""
+    target = tmp_path / "docs" / "tickets" / "gotchas.md"
+    assert not target.exists()
+
+    store = GotchasStore(target)
+    store.reset_to_skeleton()
+
+    assert target.is_file()
+    assert _read_raw(target) == DEFAULT_SKELETON
+
+
+def test_reset_to_skeleton_preserves_crlf(tmp_path: Path) -> None:
+    """Verify reset_to_skeleton preserves CRLF if the existing file used CRLF."""
+    target = tmp_path / "gotchas.md"
+    crlf_content = (DEFAULT_SKELETON + "\n### E1\n- **Problem**: P\n- **Solution**: S\n").replace("\n", "\r\n")
+    target.write_bytes(crlf_content.encode("utf-8"))
+
+    store = GotchasStore(target)
+    store.reset_to_skeleton()
+
+    raw_bytes = target.read_bytes()
+    assert b"\r\n" in raw_bytes
+    assert raw_bytes.decode("utf-8") == DEFAULT_SKELETON.replace("\n", "\r\n")
+
+
+def test_reset_to_skeleton_raises_ticket_format_error_on_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify reset_to_skeleton wraps OSError in TicketFormatError."""
+    target = tmp_path / "gotchas.md"
+    _write_raw(target, DEFAULT_SKELETON + "\n### Entry\n- **Problem**: P\n- **Solution**: S\n")
+
+    def failing_replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr("runner.adapters.markdown.atomic_write.os.replace", failing_replace)
+
+    store = GotchasStore(target)
+    with pytest.raises(TicketFormatError, match="atomically"):
+        store.reset_to_skeleton()

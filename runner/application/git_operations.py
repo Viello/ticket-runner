@@ -187,3 +187,61 @@ class GitOperations:
         if not clean_res.success:
             err_msg = clean_res.stderr.strip() or clean_res.stdout.strip() or "unknown error"
             raise GitError(f"Failed to clean working tree with git clean -fd: {err_msg}")
+
+    async def remove_path(
+        self,
+        path: str | Path,
+        recursive: bool = False,
+        force: bool = False,
+    ) -> None:
+        """Remove a path from the working tree and git index via git rm.
+
+        Args:
+            path: Path to file or directory to remove.
+            recursive: Remove directories recursively (-r).
+            force: Override up-to-date checks (-f).
+
+        Raises:
+            GitError: If git rm command fails (e.g. path is untracked or dirty).
+        """
+        p = Path(path)
+        if self._cwd is not None and p.is_absolute():
+            try:
+                clean_path = p.relative_to(self._cwd).as_posix()
+            except ValueError:
+                clean_path = p.as_posix()
+        else:
+            clean_path = p.as_posix()
+
+        result = await self._client.rm(clean_path, recursive=recursive, force=force, cwd=self._cwd)
+        if not result.success:
+            err_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise GitError(f"Failed to remove path '{clean_path}' from git: {err_msg}")
+
+    async def commit_chore(
+        self,
+        scope: str,
+        title: str,
+        changes: list[str] | None = None,
+    ) -> str:
+        """Stage modified files, author conventional chore commit, and return commit SHA.
+
+        Enforces conventional commit format 'chore(<scope>): <clean_title>' without ticket numbers.
+
+        Args:
+            scope: Architectural layer or subsystem (e.g. 'queue').
+            title: Imperative title of the chore commit.
+            changes: Optional list of bulleted change descriptions.
+
+        Returns:
+            The full 40-character commit SHA of the authored chore commit.
+
+        Raises:
+            GitError: If scope is invalid, staging fails, or committing fails.
+        """
+        return await self.commit_ticket(
+            scope=scope,
+            title=title,
+            changes=list(changes) if changes is not None else [],
+            commit_prefix="chore",
+        )

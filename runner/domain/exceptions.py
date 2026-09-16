@@ -38,3 +38,8 @@ class QueueLockError(TicketRunnerError):
     """Raised when the queue sentinel lock cannot be acquired or operation fails."""
     pass
 
+
+class CleanSlateError(TicketRunnerError):
+    """Raised when clean-slate queue or spec archival fails."""
+    pass
+

@@ -13,6 +13,7 @@ from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.application.clean_slate import CleanSlateArchiver
 from runner.application.git_operations import GitOperations
 from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.ticket import Ticket
@@ -114,6 +115,7 @@ class QueueOrchestrator:
         commit_scope: str = "queue",
         spec_slug: str | None = None,
         cwd: Path | None = None,
+        clean_slate_archiver: CleanSlateArchiver | None = None,
     ) -> None:
         self._cwd = cwd
         if tickets_dir is not None:
@@ -152,6 +154,13 @@ class QueueOrchestrator:
         self._commit_scope = commit_scope
         self._spec_slug = spec_slug
         self._is_paused: bool = False
+        self._clean_slate_archiver = clean_slate_archiver or CleanSlateArchiver(
+            git_operations=self._git_operations,
+            gotchas_store=self._gotchas_store,
+            tickets_dir=self._tickets_dir,
+            cwd=self._cwd,
+        )
+        self._processed_spec_slugs: set[str] = set()
 
     @property
     def is_paused(self) -> bool:
@@ -162,6 +171,11 @@ class QueueOrchestrator:
     def is_locked(self) -> bool:
         """Return True if the sentinel lock is held by this instance."""
         return self._lock.is_locked
+
+    @property
+    def clean_slate_archiver(self) -> CleanSlateArchiver:
+        """Archiver handling ephemeral clean-slate lifecycle."""
+        return self._clean_slate_archiver
 
     @property
     def lock(self) -> QueueFileLock:
@@ -260,6 +274,15 @@ class QueueOrchestrator:
             self.release_lock()
             return None
 
+        slug = None
+        if ticket.spec_path:
+            slug = Path(ticket.spec_path).stem
+        elif ticket.path:
+            parent_name = ticket.path.parent.name
+            slug = parent_name if parent_name != "completed" else ticket.path.parent.parent.name
+        if slug:
+            self._processed_spec_slugs.add(slug)
+
         outcome = await active_processor(ticket)
 
         if outcome.is_approved:
@@ -313,6 +336,30 @@ class QueueOrchestrator:
             outcomes.append(outcome)
         return outcomes
 
+    async def _handle_clean_slate(
+        self,
+        policy: str,
+        printer: Callable[[str], None],
+    ) -> None:
+        """Trigger ephemeral clean-slate archival for exhausted spec queues."""
+        if policy == "never":
+            return
+
+        target_slugs: list[str] = []
+        if self._spec_slug:
+            target_slugs = [self._spec_slug]
+        elif self._processed_spec_slugs:
+            target_slugs = sorted(self._processed_spec_slugs)
+
+        for slug in target_slugs:
+            slug_dir = self._tickets_dir / slug
+            if slug_dir.is_dir():
+                await self._clean_slate_archiver.clean_slate(
+                    spec_slug=slug,
+                    policy=policy,
+                    printer=printer,
+                )
+
     async def run_lifecycle(
         self,
         processor: TicketProcessor | Callable[[Ticket], Awaitable[TicketOutcome]] | None = None,
@@ -321,6 +368,7 @@ class QueueOrchestrator:
         printer: Callable[[str], None] = print,
         stop_event: asyncio.Event | None = None,
         max_standby_iterations: int | None = None,
+        clean_slate_policy: str | None = None,
     ) -> int:
         """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
 
@@ -331,6 +379,7 @@ class QueueOrchestrator:
             printer: Output callback for console notifications.
             stop_event: Optional asyncio.Event to gracefully exit standby loop.
             max_standby_iterations: Optional iteration limit for tests.
+            clean_slate_policy: Optional override for clean_slate policy (e.g. 'always' / 'never').
 
         Returns:
             Exit status code (0 for clean termination or standby exit).
@@ -343,12 +392,16 @@ class QueueOrchestrator:
 
         if isinstance(lifecycle, RunnerConfig):
             policy = lifecycle.lifecycle.queue_completion
+            active_clean_slate = clean_slate_policy or lifecycle.lifecycle.clean_slate
         elif isinstance(lifecycle, LifecycleConfig):
             policy = lifecycle.queue_completion
+            active_clean_slate = clean_slate_policy or lifecycle.clean_slate
         elif isinstance(lifecycle, str):
             policy = lifecycle.strip().lower()
+            active_clean_slate = clean_slate_policy or "never"
         elif lifecycle is None:
             policy = "standby"
+            active_clean_slate = clean_slate_policy or "never"
         else:
             raise ValueError(f"Unsupported lifecycle configuration type: {type(lifecycle)}")
 
@@ -375,6 +428,9 @@ class QueueOrchestrator:
 
             # 3. Queue is exhausted
             printer("[Queue] Queue exhausted: no pending tickets.")
+
+            # Ephemeral clean-slate archival
+            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
 
             # 4. Apply lifecycle policy
             if policy == "terminate":
@@ -415,6 +471,7 @@ class QueueOrchestrator:
                             break
 
                     printer("[Queue] Queue exhausted: no pending tickets.")
+                    await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                     if policy == "terminate":
                         printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                         return 0

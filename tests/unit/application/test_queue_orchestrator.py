@@ -668,3 +668,42 @@ def test_run_lifecycle_supports_lifecycle_config_object(
     config = LifecycleConfig(queue_completion="terminate")
     exit_code = asyncio.run(orchestrator.run_lifecycle(lifecycle=config))
     assert exit_code == 0
+
+
+def test_run_lifecycle_clean_slate_always_on_queue_exhaustion(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-clean"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T001-work.md"
+    ticket_file.write_text("# T001 — Work\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-clean.md", path=ticket_file)
+    ticket_repo = FakeTicketRepository([t1])
+
+    clean_slate_invoked: list[str] = []
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            clean_slate_invoked.append(spec_slug)
+            return True
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="always")
+    exit_code = asyncio.run(orchestrator.run_lifecycle(lifecycle=config))
+
+    assert exit_code == 0
+    assert clean_slate_invoked == ["02-clean"]

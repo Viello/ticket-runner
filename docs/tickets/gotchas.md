@@ -119,3 +119,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Standby Polling Event Loop Yielding and Lock Invariants
 - **Problem**: Long polling sleep in standby can block asynchronous event loops or leave the sentinel file lock acquired while waiting, which causes external editors to hit `ERROR_SHARING_VIOLATION` on Windows when trying to add new ticket files.
 - **Solution**: Always release the sentinel file lock upon queue exhaustion before entering standby mode, yield execution between polls with `await asyncio.sleep(poll_interval)`, and wrap lifecycle loops in `try...finally: self.release_lock()` to ensure handles are freed on task cancellation.
+
+### Gotchas Store Skeleton Reset Line Ending and Directory Creation
+- **Problem**: In isolated test workspaces where `docs/tickets/gotchas.md` parent directories do not yet exist, atomic writes raise `FileNotFoundError`, and stripping line endings with `splitlines()` truncates the final trailing newline of `DEFAULT_SKELETON`, causing byte-for-byte mismatches against the canonical markdown skeleton.
+- **Solution**: Explicitly create parent directories with `self._path.parent.mkdir(parents=True, exist_ok=True)` prior to atomic writes, and append a trailing `newline` delimiter to the relined skeleton.
+
+### Non-Interactive Terminal Prompt Fallback Safety
+- **Problem**: Calling standard `input()` for clean-slate interactive confirmation during test suite runs, headless pipelines, or non-interactive environments raises `OSError: reading from stdin while output is captured`.
+- **Solution**: Catch `OSError` alongside `EOFError` and `KeyboardInterrupt` in `default_terminal_confirmation`, safely defaulting to `False` (preserving the working tree) whenever interactive stdin is unavailable.
+
+### Clean-Slate Scope Protection During Empty Queue Runs
+- **Problem**: Scanning all directory entries under `docs/tickets/` upon queue exhaustion when no tickets were processed in the active session risks prompting or executing accidental cleanup of unworked or unrelated spec directories.
+- **Solution**: Restrict clean-slate targets strictly to an explicitly configured `spec_slug` or spec directories that had tickets actively processed in the running session (`_processed_spec_slugs`).
