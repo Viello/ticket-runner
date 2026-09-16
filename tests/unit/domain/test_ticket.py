@@ -39,6 +39,18 @@ def test_ticket_carries_all_fields() -> None:
     assert ticket.acceptance_criteria == ("Invariants hold.",)
     assert ticket.gotchas == ("Keep repo style.",)
     assert ticket.path == Path("docs/tickets/02-queue-and-tickets/T006-ticket-entity.md")
+    assert ticket.security_required is False
+
+
+def test_ticket_accepts_explicit_security_required() -> None:
+    assert _ticket(security_required=True).security_required is True
+    assert _ticket(security_required=False).security_required is False
+
+
+@pytest.mark.parametrize("invalid_value", ["required", "True", "False", 1, 0, None, []])
+def test_ticket_rejects_non_bool_security_required(invalid_value: object) -> None:
+    with pytest.raises(TicketFormatError, match="security_required"):
+        _ticket(security_required=invalid_value)
 
 
 @pytest.mark.parametrize("status", ["pending", "running", "completed", "skipped"])

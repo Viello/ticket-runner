@@ -33,6 +33,10 @@ class GitClient:
         """Run `git status --porcelain` to inspect working tree cleanliness."""
         return await self._run(["status", "--porcelain"], cwd=cwd)
 
+    async def diff_stat(self, cwd: Path | None = None) -> CommandResult:
+        """Run `git diff --stat` to inspect working tree diff statistics."""
+        return await self._run(["diff", "--stat"], cwd=cwd)
+
     async def symbolic_ref(
         self,
         ref: str = "HEAD",

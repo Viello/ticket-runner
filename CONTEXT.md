@@ -12,6 +12,14 @@ _Avoid_: Driver, controller, manager
 The OpenCode agent process invoked by the Runner to implement changes for a single ticket.
 _Avoid_: Engineer, bot, subagent
 
+**Worker Session**:
+An OpenCode conversation bound to one Ticket, identified by a generated `ses_…` session id, spanning one or more Session Runs across Context Handoffs.
+_Avoid_: Thread, chat, conversation
+
+**Session Run**:
+A single supervised `opencode run` process execution; the unit the Runner spawns, streams, and terminates.
+_Avoid_: Invocation, process, attempt
+
 **Ticket**:
 A discrete, scoped task defined in an individual markdown file under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` containing requirements, acceptance criteria, notes, and execution status.
 _Avoid_: Task, issue, work item

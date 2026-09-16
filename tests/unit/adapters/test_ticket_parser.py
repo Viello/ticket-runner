@@ -54,6 +54,7 @@ def test_parse_well_formed_ticket(tmp_path: Path) -> None:
     assert ticket.acceptance_criteria == ("Parsing a well-formed ticket file yields a `Ticket`.",)
     assert ticket.gotchas == ("Never record the commit SHA in ticket frontmatter.",)
     assert ticket.path == path
+    assert ticket.security_required is False
 
 
 @pytest.mark.parametrize("status", ["pending", "running", "completed", "skipped"])
@@ -186,3 +187,61 @@ def test_parse_concise_header_without_title_separator(tmp_path: Path) -> None:
     assert ticket.id == "T001"
     assert ticket.title == "T001"
     assert ticket.status is TicketStatus.PENDING
+
+
+def test_parse_security_required_flag(tmp_path: Path) -> None:
+    content = WELL_FORMED_TICKET.replace(
+        "Status: pending\n",
+        "Status: pending\nSecurity: required\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    ticket = TicketMarkdownParser().parse(path)
+
+    assert ticket.security_required is True
+
+
+@pytest.mark.parametrize(
+    "header_line",
+    [
+        "Security: required",
+        "Security: Required",
+        "Security: REQUIRED",
+        "Security:   required  ",
+        "security: required",
+        "Security:\trequired\t",
+    ],
+)
+def test_parse_security_required_case_and_whitespace_tolerant(
+    tmp_path: Path, header_line: str
+) -> None:
+    content = WELL_FORMED_TICKET.replace(
+        "Status: pending\n",
+        f"Status: pending\n{header_line}\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    assert TicketMarkdownParser().parse(path).security_required is True
+
+
+@pytest.mark.parametrize(
+    "header_line",
+    [
+        "Security: optional",
+        "Security: false",
+        "Security: none",
+        "Security:",
+        "Security: required extra",
+        "Security: not-required",
+    ],
+)
+def test_parse_security_tolerates_non_required_values(
+    tmp_path: Path, header_line: str
+) -> None:
+    content = WELL_FORMED_TICKET.replace(
+        "Status: pending\n",
+        f"Status: pending\n{header_line}\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    assert TicketMarkdownParser().parse(path).security_required is False

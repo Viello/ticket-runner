@@ -392,3 +392,47 @@ def test_commit_chore_authors_chore_commit(
     assert "- Archive 02-queue-and-tickets tickets and spec to untracked storage" in commit_msg
     assert "- Reset gotchas to skeleton" in commit_msg
     assert not any(line.endswith(".") for line in commit_msg.splitlines() if line.startswith("- "))
+
+
+# --- status_porcelain ---
+
+def test_status_porcelain_returns_stdout(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "status", "--porcelain"], stdout=" M runner/application/git_operations.py\n")
+    stdout = asyncio.run(git_ops.status_porcelain())
+
+    assert stdout == " M runner/application/git_operations.py\n"
+    assert fake_runner.commands == [["git", "status", "--porcelain"]]
+
+
+def test_status_porcelain_raises_on_git_failure(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "status", "--porcelain"], exit_code=128, stderr="fatal: not a git repository")
+    with pytest.raises(GitError, match="status"):
+        asyncio.run(git_ops.status_porcelain())
+
+
+# --- diff_stat ---
+
+def test_diff_stat_returns_stdout(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "diff", "--stat"], stdout=" file.py | 2 +-\n 1 file changed\n")
+    stdout = asyncio.run(git_ops.diff_stat())
+
+    assert stdout == " file.py | 2 +-\n 1 file changed\n"
+    assert fake_runner.commands == [["git", "diff", "--stat"]]
+
+
+def test_diff_stat_raises_on_git_failure(
+    git_ops: GitOperations,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "diff", "--stat"], exit_code=128, stderr="fatal: git diff failed")
+    with pytest.raises(GitError, match="diff"):
+        asyncio.run(git_ops.diff_stat())

@@ -52,6 +52,7 @@ class Ticket:
     acceptance_criteria: tuple[str, ...]
     gotchas: tuple[str, ...]
     path: Path
+    security_required: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not TICKET_ID_PATTERN.match(self.id):
@@ -95,3 +96,8 @@ class Ticket:
                 object.__setattr__(self, "path", Path(self.path))
             except TypeError:
                 raise TicketFormatError(f"Ticket path must be a Path, got: {self.path!r}") from None
+
+        if not isinstance(self.security_required, bool):
+            raise TicketFormatError(
+                f"Ticket security_required must be a bool, got: {self.security_required!r}"
+            )

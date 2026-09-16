@@ -255,3 +255,46 @@ def test_update_removes_metadata_when_value_is_none(tmp_path: Path) -> None:
     result = _read(path)
     assert "Completed:" not in result
     assert "Status: pending" in result
+
+
+def test_update_preserves_security_header(tmp_path: Path) -> None:
+    content = TICKET_TEMPLATE.replace(
+        "Status: pending\n",
+        "Status: pending\nSecurity: required\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    TicketMarkdownSerializer().update_header(
+        path,
+        {"Status": "completed", "Completed": "2026-09-16T10:00:00Z"},
+    )
+
+    expected = content.replace(
+        "Status: pending\n",
+        "Status: completed\nCompleted: 2026-09-16T10:00:00Z\n",
+        1,
+    )
+    assert _read(path) == expected
+    assert "Security: required\n" in _read(path)
+
+
+def test_update_preserves_security_header_with_crlf(tmp_path: Path) -> None:
+    content = TICKET_TEMPLATE.replace("\n", "\r\n").replace(
+        "Status: pending\r\n",
+        "Status: pending\r\nSecurity: required\r\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    TicketMarkdownSerializer().update_header(
+        path,
+        {"Status": "completed", "Completed": "2026-09-16T10:00:00Z"},
+    )
+
+    expected = content.replace(
+        "Status: pending\r\n",
+        "Status: completed\r\nCompleted: 2026-09-16T10:00:00Z\r\n",
+        1,
+    )
+    result = _read(path)
+    assert result == expected
+    assert "Security: required\r\n" in result

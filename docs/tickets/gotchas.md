@@ -131,3 +131,110 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Clean-Slate Scope Protection During Empty Queue Runs
 - **Problem**: Scanning all directory entries under `docs/tickets/` upon queue exhaustion when no tickets were processed in the active session risks prompting or executing accidental cleanup of unworked or unrelated spec directories.
 - **Solution**: Restrict clean-slate targets strictly to an explicitly configured `spec_slug` or spec directories that had tickets actively processed in the running session (`_processed_spec_slugs`).
+
+### Parser Metadata Tolerance for Unknown Security Values
+- **Problem**: Rejecting or raising format errors on non-standard `Security:` metadata values (such as `Security: optional`, `Security: none`, or omitted lines) breaks backward compatibility with existing tickets and tightly couples queue scanning to rigid review configurations.
+- **Solution**: Follow repo metadata tolerance conventions by only resolving exact case-insensitive matches for `Security: required` (with whitespace stripping) to `True`, safely defaulting missing lines and all alternative values to `False` without raising.
+
+### Safe Parent Directory Creation for Relative Paths
+- **Problem**: Calling `Path(path).parent.mkdir(parents=True, exist_ok=True)` on a filename in the current working directory (where `Path("file.txt").parent == Path("")`) raises `FileNotFoundError: [WinError 3] The system cannot find the path specified: ''` on Windows.
+- **Solution**: Guard parent directory creation in `RuntimePaths.ensure_parent_dir` by checking `if str(parent) not in ("", ".")` before dispatching to `mkdir()`.
+
+### Pure Path Object Instantiation Without Disk Side-Effects
+- **Problem**: Initializing path configuration value objects that eagerly invoke directory creation (`mkdir`) causes import-time and test-time side-effects, polluting clean worktrees or tripping git cleanliness checks.
+- **Solution**: Keep `RuntimePaths` as a pure value object computing immutable `Path` representations, exposing explicit `ensure_*` helper methods that callers invoke only on demand when ready to write.
+
+### Windows Process Tree Termination via Taskkill
+- **Problem**: Calling standard `proc.terminate()` on Windows only terminates the root wrapper process (such as `cmd.exe` executing an `opencode.cmd` npm shim), leaving descendant runtime child processes (such as `node.exe`) running as orphaned background processes holding open network ports and file locks.
+- **Solution**: Execute process tree termination via `taskkill /PID <pid> /T /F` on Windows when terminating spawned subprocesses, falling back to direct `proc.terminate()` only if `taskkill` fails or process lookup raises.
+
+### Concurrent Stderr Draining to Prevent Subprocess Pipe Deadlocks
+- **Problem**: Reading standard output incrementally with `readline()` while a child process emits high volumes of stderr causes the OS pipe buffer (4KB–64KB) to fill up, deadlocking the child process and stalling stream consumption indefinitely.
+- **Solution**: Launch a concurrent asynchronous background task (`_drain_stderr`) immediately upon process spawn that continuously drains `proc.stderr` in non-blocking chunks into an in-memory buffer until EOF.
+
+### Stripping CRLF Line Delimiters in JSON Streaming
+- **Problem**: CLI tools like OpenCode running on Windows emit JSONL streaming events ending with CRLF (`\r\n`), causing naive `\n` line stripping or strict line parsing assertions to preserve trailing `\r` carriage returns.
+- **Solution**: Always strip trailing CRLF explicitly using `.rstrip("\r\n")` on decoded stream lines before yielding to callers.
+
+### Dual Class and Instance Builder Method Dispatch
+- **Problem**: Decorating builder entrypoints with `@classmethod` prevents access to instance attributes when called on configured instances, while regular methods require instantiation and fail when called directly on the class.
+- **Solution**: Implement a lightweight descriptor (`_BuildDispatcher`) that inspects whether the method was accessed on an instance or owner class, routing to the appropriate bound or unbound builder callable.
+
+### Verbatim Markdown Passthrough in Pure Prompt Composition
+- **Problem**: Attempting to sanitize, escape, or reformat pre-authored ticket requirements and acceptance criteria in prompt templates corrupts verbatim code snippets, regular expressions, and markdown syntax.
+- **Solution**: Pass ticket content strings through verbatim into the prompt template without escaping, while deterministically normalizing bullet points and section headers.
+
+### Provider Token Context-Occupancy Under-Counting
+- **Problem**: In LLM JSON streams (such as OpenCode per-step provider events), `tokens.input` represents only non-cached input tokens and excludes `cache_read` and `cache_write`. Summing only `input + output` severely underestimates context window occupancy and causes the orchestrator to miss warning and handoff thresholds.
+- **Solution**: Calculate context occupancy using `total` when present, otherwise compute the complete sum of `input + output + reasoning + cache_read + cache_write` per ADR 0015 to ensure cache creation and reads are properly budgeted.
+
+### Multi-Threshold Priority and Reminders Suppression
+- **Problem**: When a single token update or resumed session jumps across multiple budget thresholds at once (such as leaping from below 120k directly past 135k or 150k), independent threshold conditions can emit lower-priority actions or leave lower thresholds armed to trigger redundant warnings later.
+- **Solution**: Evaluate thresholds in descending priority order (`CEILING` > `HANDOFF` > `WARN`) and immediately mark lower-level reminders as already sent (`_warn_sent = True`, `_handoff_sent = True`) when a higher threshold is crossed, preserving monotonic single-fire semantics.
+
+### OpenCode Live Event Stream Token Structure and Cache Metrics
+- **Problem**: In OpenCode v1.18.x `--format json` streaming events, `step_finish` encapsulates token metrics within a nested `part.tokens` dictionary where cache metrics are nested further as `tokens.cache.read` and `tokens.cache.write` rather than flat fields, while older or alternate formats emit flat `tokens` dictionaries.
+- **Solution**: Extract token telemetry flexibly by checking `part.tokens` before falling back to top-level `tokens`, and unpack `cache.read`/`cache.write` from nested dictionaries to guarantee accurate `TokenUsage` and context occupancy calculations.
+
+### Untrusted Session ID Path Containment and Allowlist Guardrails
+- **Problem**: Session IDs learned directly from untrusted streaming subprocess output can contain directory traversal sequences (`../../`) or invalid filesystem characters, risking arbitrary file creation or log clobbering outside `.agent/logs/`.
+- **Solution**: Strictly sanitize session IDs against `^ses_[A-Za-z0-9]+$` before constructing any filesystem path, verify that resolved log paths are strictly contained within `logs_dir` via `Path.is_relative_to()`, and drop log creation while emitting a diagnostic if validation fails.
+
+### Session Stream Line Buffering Preceding Session ID Discovery
+- **Problem**: In newly spawned OpenCode sessions, the session identifier is unknown prior to execution and only learned from the first streamed event's `sessionID` field; attempting immediate log file creation before receiving the first event causes missing or misplaced log streams.
+- **Solution**: Buffer initial stdout lines in memory until the first valid session ID is decoded and validated, then atomically open the session log in append mode (`open(..., "a", newline="")`) and flush the buffered lines before proceeding with streaming writes.
+
+### Async Stream Cancellation and Drain Race Invariants
+- **Problem**: When waiting concurrently on the next stdout stream line and external kill events with `asyncio.wait(..., return_when=FIRST_COMPLETED)`, abandoning the stream reader task without cancellation or proper draining leaves unconsumed or pending tasks running in the event loop background, and can miss writing the final buffered output line that completed concurrently with the interrupt.
+- **Solution**: Explicitly cancel and suppress exceptions on pending tasks upon `FIRST_COMPLETED`, inspect whether the line read task completed simultaneously before termination ladder execution, and persist any retrieved line to the active session log before exiting.
+
+### Injected Time Delta Evaluation vs Clock Sampling Latency
+- **Problem**: Evaluating stall and wall-clock timeouts solely prior to initiating `asyncio.wait()` causes elapsed silence or deadline violations that occur during chunk generation to be masked if the stream producer advances an injected clock immediately prior to yielding a line, updating `last_line_time` without ever evaluating the duration of the preceding silent gap.
+- **Solution**: Compute and evaluate elapsed silence `arrival_time - last_line_time` and wall-clock duration `arrival_time - start_time` both before initiating the bounded wait and immediately upon receipt of the next completed line, triggering `RunTerminationReason.STALLED` if the silence window was exceeded.
+
+### Dual Sync and Async Callable Protocol for External Interrupt APIs
+- **Problem**: Implementing external interrupt APIs (like `request_kill`) as native coroutines (`async def`) causes unawaited invocations from synchronous callbacks (such as budget monitors or telemetry hooks) to fail silently with unhandled `RuntimeWarning: coroutine was never awaited`, while defining them as pure synchronous methods raises `TypeError` when callers in async contexts invoke `await supervisor.request_kill(...)`.
+- **Solution**: Implement interrupt methods as synchronous operations setting internal atomic state and an `asyncio.Event`, returning a lightweight custom awaitable object implementing `__await__` that yields immediately to `None`, supporting both synchronous and awaited call sites without warnings or runtime errors.
+
+
+
+### Checkpoint Validation After Process Termination
+- **Problem**: The worker process may write or flush the checkpoint document only as the instruction run terminates; inspecting the file while the process is still running risks validating partial writes or triggering false missing/stale failures.
+- **Solution**: Await full process exit via supervisor.run() before checking checkpoint existence or testing filesystem timestamps.
+
+### Filesystem Timestamp Resolution Slack for Context Handoff
+- **Problem**: Filesystem mtime precision can round to the nearest whole second depending on the underlying OS and volume format, which can cause a checkpoint created in the same second as the handoff request to appear timestamped prior to handoff_requested_at.
+- **Solution**: Apply a module-scoped 2.0-second clock slack window (CLOCK_SLACK_SECONDS = 2.0) in freshness checks (mtime >= handoff_requested_at - 2.0) and compare strictly using wall-clock epoch timestamps (time.time()).
+
+### Stream-Learned Session IDs for Resumed Invocations
+- **Problem**: Invoking opencode run --session with an unlearned or synthetic session ID immediately exits with code 1 (Session not found); inventing synthetic session IDs for resumed handoff runs causes hard process failures.
+- **Solution**: Only pass session IDs that were actively decoded from the preceding stream sessionID events and strictly validated against the ^ses_[A-Za-z0-9]+$ allowlist.
+
+### Checkpoint Preservation During Recovery Escalation
+- **Problem**: Synthesizing an emergency fallback checkpoint from `git status` and `git diff` during escalation risks clobbering a rich, valid checkpoint authored by the worker in the current cycle if escalation occurred later on Session B.
+- **Solution**: Only synthesize and write the emergency checkpoint when no handoff was requested or when checkpoint freshness validation failed in the current cycle (`not (valid_checkpoint_recorded and checkpoint_path.is_file())`), preserving worker-authored architectural notes.
+
+### Deterministic Checkpoint Generation in Async Subprocess Fakes
+- **Problem**: Using `asyncio.sleep(0.01)` to pause execution between concurrent tasks to allow mock checkpoint authoring causes test suite race conditions and flaky failures under high CPU load.
+- **Solution**: Hook process completion deterministically in `FakeProcessHandle.wait()`, authoring test artifacts synchronously upon process exit before returning the mock exit code.
+
+### Supervisor Budget Monitor State Across Chained Sessions
+- **Problem**: In multi-session handoff chains, reusing a `WorkerSupervisor` without resetting its internal `BudgetMonitor` leaves internal latch flags (`_handoff_sent = True`) active from the first session, preventing budget threshold crossings and handoff requests from triggering in subsequent chained sessions.
+- **Solution**: Explicitly reset the supervisor's budget monitor (`supervisor.reset_budget_monitor()`) between chained sessions while preserving its configured thresholds and model limits.
+
+### Sequential Process Handle Registration in Subprocess Fakes
+- **Problem**: In multi-cycle test suites where consecutive sessions execute the exact same command line (e.g. `opencode run --format json --auto <resume_prompt>`), registering mock spawn handles in a standard dictionary keys by command arguments, causing later cycles to overwrite earlier cycle handles or re-execute the same exhausted handle.
+- **Solution**: Enhance command runner test fakes to support sequential queue registration (`register_spawn_sequence`), popping and yielding distinct process handles for each successive spawn matching the command.
+
+### Stderr Sidecar Newline Translation on Windows
+- **Problem**: The supervisor writes the stderr sidecar log through `open("a", encoding="utf-8")` without `newline=""`, so Windows text mode translates LF to CRLF; behavioral suites asserting raw stderr bytes against LF-authored fixtures fail with `\r` mismatch even though the JSONL stream log is LF-normalized.
+- **Solution**: Normalize stderr sidecar bytes in tests with `.read_bytes().replace(b"\r\n", b"\n")`, and keep `newline=""` on the JSONL stream log so it remains byte-faithful to the stripped stream lines.
+
+### Synthetic Checkpoint Whitespace Stripping
+- **Problem**: `format_synthetic_checkpoint` calls `.strip()` on `git status --porcelain` and `git diff --stat` output, silently removing the leading space of the first porcelain entry (e.g. ` M file` becomes `M file`) and the trailing newline, so test oracles reconstructed from raw git stdout never match the written file bytes.
+- **Solution**: Build byte-level oracles from the stripped form, or hardcode the fully rendered synthetic checkpoint document in the test instead of reconstructing it from raw command output.
+
+### Self-Referential Test Oracles for Rendered Artifacts
+- **Problem**: A behavioral test that compares a written artifact against a string generated by the very same production formatter under test cannot detect formatting regressions; it only proves argument plumbing reached the formatter.
+- **Solution**: For byte-for-byte artifact acceptance criteria, hardcode the expected document in the test and compare the file bytes directly against that independent oracle.
+

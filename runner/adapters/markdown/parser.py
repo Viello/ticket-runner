@@ -59,6 +59,7 @@ class TicketMarkdownParser:
             acceptance_criteria=sections["acceptance_criteria"],
             gotchas=sections["gotchas"],
             path=ticket_path,
+            security_required=self._parse_security_required(metadata),
         )
 
     def _title_index(self, lines: list[str], path: Path) -> int:
@@ -97,6 +98,12 @@ class TicketMarkdownParser:
         if raw is None:
             raise TicketFormatError(f"Missing 'Status:' header in ticket file '{path}'")
         return parse_ticket_status(raw, source=f"ticket file '{path}'")
+
+    def _parse_security_required(self, metadata: dict[str, str]) -> bool:
+        raw = metadata.get("security")
+        if raw is None:
+            return False
+        return raw.strip().lower() == "required"
 
     def _resolve_spec_path(self, metadata: dict[str, str], path: Path) -> str:
         explicit = metadata.get("spec", "").strip()

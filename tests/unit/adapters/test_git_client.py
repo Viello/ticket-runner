@@ -227,3 +227,15 @@ def test_git_client_rm_recursive_force(
 
     assert result.success is True
     assert fake_runner.commands == [["git", "rm", "-r", "-f", "docs/tickets/02-queue"]]
+
+
+def test_git_client_diff_stat(
+    git_client: GitClient,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    fake_runner.register(["git", "diff", "--stat"], stdout=" 1 file changed, 1 insertion(+)\n")
+    result = asyncio.run(git_client.diff_stat())
+
+    assert result.success is True
+    assert "1 file changed" in result.stdout
+    assert fake_runner.commands == [["git", "diff", "--stat"]]

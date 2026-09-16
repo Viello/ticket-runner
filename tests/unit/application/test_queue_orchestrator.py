@@ -608,7 +608,7 @@ def test_run_lifecycle_pending_without_processor_raises_before_lock(
         processor=None,
     )
 
-    with pytest.raises(RuntimeError, match="No ticket processor configured. Worker execution will arrive in Spec 03."):
+    with pytest.raises(RuntimeError, match="No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."):
         asyncio.run(orchestrator.run_lifecycle())
 
     # Invariants: lock not acquired, no git commands executed, ticket untouched
@@ -645,7 +645,7 @@ def test_run_lifecycle_standby_raises_when_ticket_appears_without_processor(
         await add_task
         await run_task
 
-    with pytest.raises(RuntimeError, match="No ticket processor configured. Worker execution will arrive in Spec 03."):
+    with pytest.raises(RuntimeError, match="No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."):
         asyncio.run(scenario())
 
     assert orchestrator.is_locked is False

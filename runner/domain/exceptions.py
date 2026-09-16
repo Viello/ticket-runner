@@ -26,6 +26,11 @@ class TicketFormatError(TicketRunnerError):
     pass
 
 
+class SpecFormatError(TicketFormatError):
+    """Raised when a spec file cannot be parsed or lacks required sections."""
+    pass
+
+
 class CommandNotFoundError(TicketRunnerError):
     """Raised when an executable command cannot be resolved or found."""
 
