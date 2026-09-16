@@ -249,3 +249,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### RecursionError from Deeply Nested Untrusted JSON
 - **Problem**: `json.loads` raises `RecursionError`, not `JSONDecodeError`, when untrusted payloads nest arrays or objects beyond the interpreter recursion limit (verified at 20,000 levels on Python 3.14, while 5,000 parsed fine), so a strict parser catching only `JSONDecodeError` leaks a non-domain exception from Worker-authored input.
 - **Solution**: Catch `RecursionError` alongside `json.JSONDecodeError` in the signal decoder and re-raise it as `SignalFormatError` with a bounded "payload nesting is too deep" diagnostic.
+
+### Verbatim Question Rewrites Preserve Audit Fields
+- **Problem**: Rewriting an answered question Signal by re-serializing the parsed `QuestionSignal` entity drops unknown extra fields and normalizes the original timestamp text (e.g. a trailing `Z` becomes `+00:00`), silently changing audit data beyond the single `status`/`answer` flip.
+- **Solution**: Validate the payload through `QuestionSignal.parse` first, then patch `status` and `answer` into the raw JSON mapping loaded from disk and write that through the atomic helper; validating before the write also guarantees a blank answer can never reach disk.
+
+### Temp Sidecar Cleanup in Signal Artifacts
+- **Problem**: The atomic writer cleans up its own failures, but a hard process kill mid-write can leave `{ticket_id}_ready.json.tmp` or `{ticket_id}.json.tmp` sidecars that violate the "never leaves partial files" purge contract if only the artifact files are deleted.
+- **Solution**: Delete each Signal artifact together with its sibling carrying `TEMP_SUFFIX` (imported from `runner.adapters.markdown.atomic_write`) in both `purge` and `consume_ready`, tolerating `FileNotFoundError` so absent files or directories remain no-ops.
+
