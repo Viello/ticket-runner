@@ -11,8 +11,9 @@ from enum import Enum
 import inspect
 import os
 from pathlib import Path
+import shutil
 import sys
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
@@ -36,6 +37,80 @@ TERMINATION_GRACE_SECONDS: float = 0.5
 
 BUILD_LABEL: str = "build"
 TEST_LABEL: str = "test"
+
+CMD_BUILTINS: frozenset[str] = frozenset({
+    "assoc",
+    "break",
+    "call",
+    "cd",
+    "chdir",
+    "cls",
+    "color",
+    "copy",
+    "date",
+    "del",
+    "dir",
+    "doskey",
+    "echo",
+    "endlocal",
+    "erase",
+    "exit",
+    "fc",
+    "find",
+    "findstr",
+    "for",
+    "format",
+    "goto",
+    "graftabl",
+    "help",
+    "if",
+    "label",
+    "md",
+    "mkdir",
+    "mklink",
+    "more",
+    "move",
+    "path",
+    "pause",
+    "popd",
+    "print",
+    "prompt",
+    "pushd",
+    "rd",
+    "rem",
+    "ren",
+    "rename",
+    "rmdir",
+    "set",
+    "setlocal",
+    "shift",
+    "sort",
+    "start",
+    "subst",
+    "time",
+    "title",
+    "tree",
+    "type",
+    "ver",
+    "verify",
+    "vol",
+    "where",
+    "xcopy",
+})
+"""Known cmd.exe internal commands and control words that need no PATH resolution."""
+
+
+def leading_command_token(command: str) -> str | None:
+    """Return the leading whitespace-delimited token of a shell command string.
+
+    Only the token before the first space is returned, never the full command
+    string that ``build_shell_argv`` later wraps in the platform shell. Returns
+    None for empty or whitespace-only commands.
+    """
+    stripped = command.strip()
+    if not stripped:
+        return None
+    return stripped.split(maxsplit=1)[0]
 
 
 def resolve_shell(platform: str | None = None) -> str:
@@ -91,6 +166,8 @@ class CommandOutcome:
         tail: Last TAIL_LINE_LIMIT output lines, stdout lines followed by
             drained stderr lines. Precise stdout/stderr interleaving is not
             available on the command runner port, so ordering is normalized.
+        not_found: The leading executable token that could not be resolved on
+            PATH, causing the command to be rejected before spawning.
     """
 
     label: str
@@ -98,11 +175,12 @@ class CommandOutcome:
     exit_code: int | None
     timed_out: bool
     tail: str
+    not_found: str | None = None
 
     @property
     def passed(self) -> bool:
         """A command passes only when it exited with code 0 and never timed out."""
-        return not self.timed_out and self.exit_code == 0
+        return not self.timed_out and self.exit_code == 0 and self.not_found is None
 
 
 @dataclass(frozen=True)
@@ -124,7 +202,9 @@ class VerificationReport:
 
 def _format_diagnostic(outcome: CommandOutcome, timeout_seconds: int) -> str:
     """Render one failed command block: header, status line, then the output tail."""
-    if outcome.timed_out:
+    if outcome.not_found is not None:
+        status = f"command not found: '{outcome.not_found}'"
+    elif outcome.timed_out:
         status = f"timed out after {timeout_seconds}s"
     else:
         status = f"exit code {outcome.exit_code}"
@@ -142,10 +222,12 @@ class GatekeeperCommandExecutor:
         command_runner: CommandRunner | None = None,
         cwd: Path | None = None,
         platform: str | None = None,
+        path_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self._command_runner = command_runner or SubprocessRunner()
         self._cwd = cwd
         self._platform = platform if platform is not None else sys.platform
+        self._path_resolver = path_resolver or shutil.which
 
     async def verify(self, config: VerificationConfig) -> VerificationReport:
         """Execute the configured verification commands sequentially.
@@ -192,6 +274,17 @@ class GatekeeperCommandExecutor:
         self, label: str, command: str, timeout_seconds: int
     ) -> CommandOutcome:
         """Spawn one shell command and wait for output and exit under its timeout bound."""
+        token = leading_command_token(command)
+        if token is not None and token.lower() not in CMD_BUILTINS:
+            if self._path_resolver(token) is None:
+                return CommandOutcome(
+                    label=label,
+                    command=command,
+                    exit_code=None,
+                    timed_out=False,
+                    tail="",
+                    not_found=token,
+                )
         argv = build_shell_argv(command, self._platform)
         handle = await self._command_runner.spawn(argv, cwd=self._cwd)
 

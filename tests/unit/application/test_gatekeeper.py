@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 import sys
 
@@ -21,6 +22,22 @@ from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
 
 BUILD_CMD = "npm run build"
 TEST_CMD = "pytest -q"
+
+
+def _make_executor(
+    runner: FakeCommandRunner,
+    *,
+    cwd: Path | None = None,
+    platform: str = "win32",
+    path_resolver: Callable[[str], str | None] | None = None,
+) -> GatekeeperCommandExecutor:
+    """Build an executor whose PATH resolver is scripted, independent of the host PATH."""
+    return GatekeeperCommandExecutor(
+        command_runner=runner,
+        cwd=cwd,
+        platform=platform,
+        path_resolver=path_resolver or (lambda token: rf"C:\tools\{token}.exe"),
+    )
 
 
 class _LingeringWaitHandle(FakeProcessHandle):
@@ -69,9 +86,7 @@ def test_build_runs_before_test_through_windows_shell(tmp_path: Path) -> None:
     fake_runner.register_spawn(_windows_argv(BUILD_CMD), stdout_lines=["building package"])
     fake_runner.register_spawn(_windows_argv(TEST_CMD), stdout_lines=["42 tests passed"])
 
-    executor = GatekeeperCommandExecutor(
-        command_runner=fake_runner, cwd=tmp_path, platform="win32"
-    )
+    executor = _make_executor(fake_runner, cwd=tmp_path)
     report = _verify(
         executor, VerificationConfig(build_cmd=BUILD_CMD, test_cmd=TEST_CMD)
     )
@@ -96,7 +111,7 @@ def test_posix_platform_wraps_commands_in_bin_sh() -> None:
     fake_runner = FakeCommandRunner()
     fake_runner.register_spawn(["/bin/sh", "-c", TEST_CMD])
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="linux")
+    executor = _make_executor(fake_runner, platform="linux")
     report = _verify(executor, VerificationConfig(test_cmd=TEST_CMD))
 
     assert fake_runner.spawns == [["/bin/sh", "-c", TEST_CMD]]
@@ -117,7 +132,7 @@ def test_empty_build_command_is_skipped_silently() -> None:
     fake_runner = FakeCommandRunner()
     fake_runner.register_spawn(_windows_argv(TEST_CMD))
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     report = _verify(executor, VerificationConfig(build_cmd="", test_cmd=TEST_CMD))
 
     assert len(fake_runner.spawns) == 1
@@ -128,9 +143,7 @@ def test_empty_build_command_is_skipped_silently() -> None:
 
     blank_runner = FakeCommandRunner()
     blank_runner.register_spawn(_windows_argv(TEST_CMD))
-    blank_executor = GatekeeperCommandExecutor(
-        command_runner=blank_runner, platform="win32"
-    )
+    blank_executor = _make_executor(blank_runner, platform="win32")
     blank_report = _verify(
         blank_executor, VerificationConfig(build_cmd="   ", test_cmd=TEST_CMD)
     )
@@ -153,7 +166,7 @@ def test_build_failure_skips_test_and_reports_diagnostics() -> None:
         exit_code=1,
     )
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     report = _verify(
         executor, VerificationConfig(build_cmd=BUILD_CMD, test_cmd=TEST_CMD)
     )
@@ -190,7 +203,7 @@ def test_test_failure_reports_both_command_tails() -> None:
         exit_code=2,
     )
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     report = _verify(
         executor, VerificationConfig(build_cmd=BUILD_CMD, test_cmd=TEST_CMD)
     )
@@ -223,7 +236,7 @@ def test_build_timeout_terminates_handle_and_skips_test() -> None:
         delay=5.0,
     )
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     config = VerificationConfig(
         build_cmd=BUILD_CMD, test_cmd=TEST_CMD, timeout_seconds=1
     )
@@ -254,7 +267,7 @@ def test_timeout_applies_per_command_after_build_passes() -> None:
         delay=5.0,
     )
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     config = VerificationConfig(
         build_cmd=BUILD_CMD, test_cmd=TEST_CMD, timeout_seconds=1
     )
@@ -280,7 +293,7 @@ def test_process_wait_is_bounded_even_when_stdout_closes() -> None:
     handle = _LingeringWaitHandle(wait_delay=5.0)
     fake_runner.register_spawn_handle(_windows_argv(BUILD_CMD), handle)
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     config = VerificationConfig(
         build_cmd=BUILD_CMD, test_cmd=TEST_CMD, timeout_seconds=1
     )
@@ -308,7 +321,7 @@ def test_tail_keeps_last_hundred_lines_across_stdout_then_stderr() -> None:
         _windows_argv(TEST_CMD), stdout_lines=stdout_lines, stderr=stderr, exit_code=1
     )
 
-    executor = GatekeeperCommandExecutor(command_runner=fake_runner, platform="win32")
+    executor = _make_executor(fake_runner, platform="win32")
     report = _verify(executor, VerificationConfig(test_cmd=TEST_CMD))
 
     tail_lines = report.results[0].tail.splitlines()
@@ -388,3 +401,90 @@ def test_public_result_shapes_are_constructible() -> None:
     assert report.results[0].exit_code is None
     assert report.diagnostics[0].splitlines()[1] == "timed out after 300s"
     assert report.skipped_commands == ()
+
+
+# --- T037: leading-token PATH resolution defense-in-depth ---
+
+
+def test_unresolvable_test_command_reports_command_not_found() -> None:
+    """An unresolvable leading token is surfaced as command-not-found, never spawned."""
+    fake_runner = FakeCommandRunner()
+    executor = _make_executor(
+        fake_runner,
+        platform="win32",
+        path_resolver=lambda token: None if token == "pytest" else rf"C:\tools\{token}.exe",
+    )
+    report = _verify(executor, VerificationConfig(test_cmd=TEST_CMD))
+
+    assert fake_runner.spawns == []
+    assert report.passed is False
+    assert report.skipped_commands == ()
+    assert [outcome.label for outcome in report.results] == ["test"]
+    outcome = report.results[0]
+    assert outcome.not_found == "pytest"
+    assert outcome.exit_code is None
+    assert outcome.timed_out is False
+    assert outcome.passed is False
+
+    assert len(report.diagnostics) == 1
+    diagnostic = report.diagnostics[0]
+    assert diagnostic.startswith(f"$ {TEST_CMD}")
+    assert "command not found: 'pytest'" in diagnostic
+    assert "exit code" not in diagnostic
+
+
+def test_unresolvable_build_command_skips_test_command() -> None:
+    """A command-not-found build_cmd is a failed build, so test_cmd is skipped."""
+    fake_runner = FakeCommandRunner()
+    executor = _make_executor(
+        fake_runner,
+        platform="win32",
+        path_resolver=lambda token: None if token == "npm" else rf"C:\tools\{token}.exe",
+    )
+    report = _verify(
+        executor, VerificationConfig(build_cmd=BUILD_CMD, test_cmd=TEST_CMD)
+    )
+
+    assert fake_runner.spawns == []
+    assert report.passed is False
+    assert report.skipped_commands == (TEST_CMD,)
+    assert [outcome.label for outcome in report.results] == ["build"]
+    assert report.results[0].not_found == "npm"
+    assert "command not found: 'npm'" in report.diagnostics[0]
+
+
+def test_cmd_builtin_leading_token_is_not_resolved() -> None:
+    """cmd.exe builtins/control words skip PATH resolution so they never false-positive."""
+    fake_runner = FakeCommandRunner()
+
+    def resolver(token: str) -> str | None:
+        raise AssertionError(f"resolver must not be called for builtin token '{token}'")
+
+    executor = _make_executor(fake_runner, platform="win32", path_resolver=resolver)
+    report = _verify(executor, VerificationConfig(test_cmd="exit 0"))
+
+    assert fake_runner.spawns == [_windows_argv("exit 0")]
+    assert report.passed is True
+    assert report.diagnostics == ()
+
+
+def test_only_leading_token_is_resolved_never_full_command() -> None:
+    """Resolution targets the token before the first space, never the wrapped command string."""
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(
+        _windows_argv("python -m pytest -q"), stdout_lines=["1 passed"]
+    )
+
+    resolved_tokens: list[str] = []
+    executor = _make_executor(
+        fake_runner,
+        platform="win32",
+        path_resolver=lambda token: (
+            resolved_tokens.append(token) or rf"C:\tools\{token}.exe"
+        ),
+    )
+    report = _verify(executor, VerificationConfig(test_cmd="python -m pytest -q"))
+
+    assert resolved_tokens == ["python"]
+    assert fake_runner.spawns == [_windows_argv("python -m pytest -q")]
+    assert report.passed is True

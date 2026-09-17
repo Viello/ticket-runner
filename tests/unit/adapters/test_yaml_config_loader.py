@@ -258,7 +258,7 @@ def test_load_config_example_yaml() -> None:
     assert config.project.name == "ticket-runner"
     assert config.project.branch == "agent/ticket-runner"
     assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
-    assert config.verification.test_cmd == "pytest"
+    assert config.verification.test_cmd == "python -m pytest"
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
     assert config.tokens.ceiling == 150000

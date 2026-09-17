@@ -270,7 +270,11 @@ class Scenario:
         )
 
         gateway = FakeInterventionGateway(answers=answers, decisions=decisions)
-        executor = GatekeeperCommandExecutor(command_runner=runner, cwd=root)
+        executor = GatekeeperCommandExecutor(
+            command_runner=runner,
+            cwd=root,
+            path_resolver=lambda token: rf"C:\tools\{token}.exe",
+        )
 
         return cls(
             root=root,
@@ -1734,7 +1738,7 @@ def test_build_container_end_to_end_in_process_success(tmp_path: Path) -> None:
     _register_git_fakes(sc.runner)
 
     session_id = "ses_t034Container"
-    test_cmd = "pytest -q"
+    test_cmd = "python -m pytest -q"
     shell_test_cmd = build_shell_argv(test_cmd)
 
     config = RunnerConfig(
@@ -1820,7 +1824,7 @@ def test_us10_build_container_abort_mid_loop_leaves_tree_byte_identical(tmp_path
     _register_git_fakes(sc.runner)
 
     session_id = "ses_t034Abort"
-    test_cmd = "pytest -q"
+    test_cmd = "python -m pytest -q"
     shell_test_cmd = build_shell_argv(test_cmd)
 
     config = RunnerConfig(

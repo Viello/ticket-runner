@@ -15,7 +15,7 @@ worker:
 
 verification:
   # Independent test command run by Gatekeeper to verify ticket implementation
-  test_cmd: "pytest"
+  test_cmd: "python -m pytest"
   # Optional build command run before test_cmd (e.g., "npm run build" or "")
   build_cmd: ""
   # Total Verification Attempts before the Circuit Breaker trips

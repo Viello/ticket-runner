@@ -338,3 +338,7 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Local Config Smoke Test Should Compare Against the Example, Not Hardcode
 - **Problem**: `test_load_root_config_yaml` hardcoded `verification.test_cmd == "pytest"` and other example values, but the untracked local `config.yaml` intentionally uses `python -m pytest` (bare `pytest` is not on PATH on Windows), so the test failed whenever a local config existed even though the loader behaved correctly.
 - **Solution**: Assert the untracked root config against `config.example.yaml` for the invariant fields (project identity, worker execution skill, token budget) and drop the environment-specific `test_cmd` assertion, keeping the smoke test meaningful without coupling it to a platform's PATH.
+
+### cmd.exe Shell Wrapping Inherits the Runner PATH
+- **Problem**: Gatekeeper verification commands run via `cmd.exe /d /s /c` and inherit the Runner's PATH, which may not include the Python `Scripts` directory, so bare console-script names like `pytest` report "command not found" and get mistaken for plain test failures (exit code 1).
+- **Solution**: Author verification commands with portable invocation forms (`python -m <tool>` over bare script names). The Runner resolves each command's leading token via `shutil.which` before wrapping it in the shell and reports unresolvable commands as a distinct command-not-found diagnostic at both Gatekeeper and Doctor time.
