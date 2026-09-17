@@ -37,10 +37,7 @@ SAMPLE_SPEC_EXCERPT = SpecExcerpt(
     solution="Manage worker subprocess.",
 )
 
-SAMPLE_GLOBAL_GOTCHAS = """### Windows Subprocess Executable Resolution
-- **Problem**: FileNotFoundError on Windows.
-- **Solution**: Use shutil.which().
-"""
+SAMPLE_GOTCHAS_PATH = "docs/tickets/gotchas.md"
 
 
 def test_prompt_contains_all_core_ticket_fields() -> None:
@@ -55,7 +52,7 @@ def test_prompt_contains_all_core_ticket_fields() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -73,7 +70,7 @@ def test_prompt_contains_spec_excerpt_and_link() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -84,17 +81,53 @@ def test_prompt_contains_spec_excerpt_and_link() -> None:
     assert "docs/specs/03-worker-orchestration-and-handoff.md" in prompt
 
 
-def test_prompt_contains_global_gotchas() -> None:
+def test_prompt_contains_global_gotchas_pointer() -> None:
     ticket = _make_ticket()
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert "Windows Subprocess Executable Resolution" in prompt
-    assert "Use shutil.which()." in prompt
+    assert "## Global Gotchas & Lessons Learned" in prompt
+    assert "docs/tickets/gotchas.md" in prompt
+    assert (
+        "Review and adhere to all project-wide pitfalls recorded at `docs/tickets/gotchas.md` before implementing."
+        in prompt
+    )
+    assert "Windows Subprocess Executable Resolution" not in prompt
+
+
+def test_prompt_normalizes_windows_gotchas_path_to_posix() -> None:
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=Path("docs") / "tickets" / "gotchas.md",
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert "docs/tickets/gotchas.md" in prompt
+    assert "docs\\tickets\\gotchas.md" not in prompt
+
+
+def test_prompt_retains_ticket_gotchas_inlined_under_ticket_gotchas() -> None:
+    ticket = _make_ticket(gotchas=("Specific ticket gotcha item.",))
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path="docs/tickets/gotchas.md",
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert "### Ticket Gotchas" in prompt
+    assert "- Specific ticket gotcha item." in prompt
+    assert "## Global Gotchas & Lessons Learned" in prompt
+    assert (
+        "Review and adhere to all project-wide pitfalls recorded at `docs/tickets/gotchas.md` before implementing."
+        in prompt
+    )
 
 
 def test_prompt_uses_argument_execution_skill_path_not_hardcoded() -> None:
@@ -104,7 +137,7 @@ def test_prompt_uses_argument_execution_skill_path_not_hardcoded() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=custom_skill,
     )
 
@@ -118,7 +151,7 @@ def test_prompt_forbids_git_add_and_git_commit() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -134,7 +167,7 @@ def test_prompt_ready_signal_instruction_with_real_ticket_id() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -147,7 +180,7 @@ def test_prompt_contains_diagnosing_bugs_skill_pointer() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -161,13 +194,13 @@ def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
     prompt_no_sec = build_prompt(
         ticket=ticket_no_sec,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
     prompt_sec = build_prompt(
         ticket=ticket_sec,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -182,13 +215,13 @@ def test_prompt_conditional_security_review_toggle() -> None:
     prompt_sec = build_prompt(
         ticket=ticket_sec,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
     prompt_no_sec = build_prompt(
         ticket=ticket_no_sec,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -201,21 +234,22 @@ def test_prompt_builder_invocation_variants() -> None:
     skill = ".agents/skills/implement/SKILL.md"
 
     # 1. build_prompt function
-    res1 = build_prompt(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GLOBAL_GOTCHAS, skill)
+    res1 = build_prompt(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GOTCHAS_PATH, skill)
 
     # 2. PromptBuilder instance without default
-    res2 = PromptBuilder().build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GLOBAL_GOTCHAS, skill)
+    res2 = PromptBuilder().build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GOTCHAS_PATH, skill)
 
     # 3. PromptBuilder instance with default
-    res3 = PromptBuilder(execution_skill=skill).build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GLOBAL_GOTCHAS)
+    res3 = PromptBuilder(execution_skill=skill).build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GOTCHAS_PATH)
 
     # 4. PromptBuilder classmethod
-    res4 = PromptBuilder.build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GLOBAL_GOTCHAS, skill)
+    res4 = PromptBuilder.build(ticket, SAMPLE_SPEC_EXCERPT, SAMPLE_GOTCHAS_PATH, skill)
 
     # 5. String spec_excerpt
-    res5 = build_prompt(ticket, SAMPLE_SPEC_EXCERPT.text, SAMPLE_GLOBAL_GOTCHAS, skill)
+    res5 = build_prompt(ticket, SAMPLE_SPEC_EXCERPT.text, SAMPLE_GOTCHAS_PATH, skill)
 
     assert res1 == res2 == res3 == res4 == res5
+    assert "docs/tickets/gotchas.md" in res1
 
 
 def test_prompt_builder_verbatim_ticket_markdown_passthrough() -> None:
@@ -225,7 +259,7 @@ def test_prompt_builder_verbatim_ticket_markdown_passthrough() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -237,7 +271,7 @@ def test_prompt_documents_full_ready_signal_schema() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -260,7 +294,7 @@ def test_prompt_documents_question_protocol_and_schema() -> None:
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,
-        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
@@ -276,4 +310,21 @@ def test_prompt_documents_question_protocol_and_schema() -> None:
     assert "`status`: \"pending\"" in prompt
     assert "`answer`: null" in prompt
     assert "`created_at`" in prompt
+
+
+def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() -> None:
+    from runner.adapters.opencode.opencode_worker import build_opencode_run_command
+
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path="docs/tickets/gotchas.md",
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+    cmd = build_opencode_run_command(prompt)
+    total_length = sum(len(arg) for arg in cmd) + len(cmd) - 1
+    # Windows ceiling is 32,767; prompt pointer keeps command below 4,000 chars
+    assert total_length < 5000
+    assert total_length < 32767
 

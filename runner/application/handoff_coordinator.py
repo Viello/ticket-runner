@@ -374,14 +374,20 @@ class HandoffCoordinator:
         else:
             resolved_excerpt = f"Full specification reference: `{ticket.spec_path}`"
 
-        global_gotchas = self._gotchas_store.load()
+        gotchas_path = (
+            self._gotchas_store.path.as_posix()
+            if self._gotchas_store is not None
+            else "docs/tickets/gotchas.md"
+        )
 
         return self._prompt_builder.build(
             ticket=ticket,
             spec_excerpt=resolved_excerpt,
-            global_gotchas=global_gotchas,
+            gotchas_path=gotchas_path,
             execution_skill=self._worker_config.execution_skill,
         )
+
+    build_prompt = build_initial_prompt
 
     def build_handoff_prompt(self, ticket: Ticket) -> str:
         """Build the fixed handoff instruction prompt per Spec 03."""

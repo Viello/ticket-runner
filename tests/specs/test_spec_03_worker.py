@@ -314,8 +314,9 @@ def test_spec_03_us_02_to_us_06_initial_prompt_contract(
     assert "Supervise the worker subprocess and hand off context." in prompt
     assert SPEC_REL_PATH in prompt
 
-    # US 02: global Gotchas loaded from docs/tickets/gotchas.md
-    assert PROBE_GOTCHA_TEXT in prompt
+    # US 02: global Gotchas pointer to docs/tickets/gotchas.md
+    assert "docs/tickets/gotchas.md" in prompt
+    assert PROBE_GOTCHA_TEXT not in prompt
 
     # US 03: execution skill pointer and discipline
     assert ".agents/skills/implement/SKILL.md" in prompt

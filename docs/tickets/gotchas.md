@@ -326,3 +326,8 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Holding an OS file lock across idle standby sleep loops or during operator abort exits creates persistent Windows file-sharing locks (`PermissionError` / `[WinError 32]`) that block subsequent test fixtures or CLI instances from modifying or acquiring the queue.
 - **Solution**: Explicitly release the sentinel lock immediately prior to entering standby idle watch loops, and guarantee lock release across all termination and error pathways (including `UserAbortError`) inside a `finally` block before returning exit code 2.
 
+### Scoped File Pointer for Global Gotchas Prompt Overhead
+- **Problem**: Inlining the entire `docs/tickets/gotchas.md` document verbatim into worker prompts causes prompt sizes to grow past the Windows 32,767 character command-line ceiling (`WinError 206`) and consumes thousands of redundant startup tokens on every session.
+- **Solution**: Replace verbatim document inlining with a scoped markdown file pointer (`## Global Gotchas & Lessons Learned\nReview and adhere to all project-wide pitfalls recorded at `docs/tickets/gotchas.md` before implementing.`), normalizing the path to POSIX forward slashes across platforms while retaining ticket-specific gotchas inlined under `### Ticket Gotchas`.
+
+

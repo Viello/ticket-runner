@@ -124,10 +124,10 @@ class GatekeeperTicketProcessor:
         else:
             resolved_excerpt = f"Full specification reference: `{ticket.spec_path}`"
 
-        global_gotchas = (
-            self._gotchas_store.load()
+        gotchas_path = (
+            self._gotchas_store.path.as_posix()
             if self._gotchas_store is not None
-            else ""
+            else "docs/tickets/gotchas.md"
         )
         execution_skill = (
             self._worker_config.execution_skill
@@ -138,9 +138,11 @@ class GatekeeperTicketProcessor:
         return self._prompt_builder.build(
             ticket=ticket,
             spec_excerpt=resolved_excerpt,
-            global_gotchas=global_gotchas,
+            gotchas_path=gotchas_path,
             execution_skill=execution_skill,
         )
+
+    _build_prompt = build_initial_prompt
 
     async def __call__(self, ticket: Ticket) -> TicketOutcome:
         """Execute and verify a single ticket, returning its outcome."""
