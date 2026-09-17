@@ -1,5 +1,6 @@
 # T043 — Phased skill and AGENTS.md prompt directives
-Status: pending
+Status: completed
+Completed: 2026-09-17T15:14:00Z
 Spec: docs/specs/08-worker-skill-protocol-and-telemetry.md
 Blocked by: None
 

@@ -26,7 +26,12 @@ from runner.application.handoff_coordinator import (
     WorkerRunResult,
     default_recovery_confirmation,
 )
-from runner.application.prompt_builder import PromptBuilder, build_prompt
+from runner.application.prompt_builder import (
+    DEFAULT_INVARIANTS,
+    PromptBuilder,
+    build_prompt,
+    extract_invariants,
+)
 from runner.application.queue_orchestrator import (
     QueueOrchestrator,
     TicketOutcome,
@@ -42,6 +47,7 @@ __all__ = [
     "CHECKPOINT_STALE",
     "CheckResult",
     "CommandOutcome",
+    "DEFAULT_INVARIANTS",
     "Doctor",
     "DoctorReport",
     "ESCALATED",
@@ -68,5 +74,6 @@ __all__ = [
     "build_prompt",
     "build_verification_failure_prompt",
     "default_recovery_confirmation",
+    "extract_invariants",
 ]
 

@@ -204,8 +204,10 @@ def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert "/code-review" in prompt_no_sec
-    assert "/code-review" in prompt_sec
+    assert ".agents/skills/code-review/SKILL.md" in prompt_no_sec
+    assert ".agents/skills/code-review/SKILL.md" in prompt_sec
+    assert "`/code-review`" not in prompt_no_sec
+    assert "`/code-review`" not in prompt_sec
 
 
 def test_prompt_conditional_security_review_toggle() -> None:
@@ -225,8 +227,11 @@ def test_prompt_conditional_security_review_toggle() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert "/security-review" in prompt_sec
-    assert "/security-review" not in prompt_no_sec
+    assert ".agents/skills/security-review/SKILL.md" in prompt_sec
+    assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
+    assert "`/security-review`" not in prompt_sec
+    assert "`/security-review`" not in prompt_no_sec
+    assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
 
 
 def test_prompt_builder_invocation_variants() -> None:
@@ -324,7 +329,93 @@ def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() ->
     )
     cmd = build_opencode_run_command(prompt)
     total_length = sum(len(arg) for arg in cmd) + len(cmd) - 1
-    # Windows ceiling is 32,767; prompt pointer keeps command below 4,000 chars
-    assert total_length < 5000
+    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 6,000 chars
+    assert total_length < 7000
     assert total_length < 32767
+
+
+def test_prompt_inlines_agents_md_invariants() -> None:
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert "## Invariants" in prompt
+    assert "OpenCode is invoked as a subprocess" in prompt
+    assert "Gatekeeper" in prompt
+
+
+def test_prompt_startup_section_explicit_file_reading_directives() -> None:
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    # Startup section explicitly instructs reading execution skill, followed by AGENTS.md, using file-reading tool
+    assert "read" in prompt.lower()
+    assert ".agents/skills/implement/SKILL.md" in prompt
+    assert "AGENTS.md" in prompt
+    assert "(pointer only; do not inline or modify)" not in prompt
+
+
+def test_prompt_review_section_file_reading_directives_and_self_review_notes() -> None:
+    ticket = _make_ticket(security_required=True)
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert ".agents/skills/code-review/SKILL.md" in prompt
+    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert "self_review_notes" in prompt
+    assert "`/code-review`" not in prompt
+    assert "`/security-review`" not in prompt
+
+
+def test_prompt_debugging_guidance_explicit_read_directive() -> None:
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert "read" in prompt.lower()
+    assert "consult `.agents/skills/diagnosing-bugs/SKILL.md`" not in prompt
+
+
+def test_prompt_resilient_invariants_fallback_when_agents_md_missing_or_corrupt(tmp_path: Path) -> None:
+    from runner.application.prompt_builder import extract_invariants
+
+    missing_path = tmp_path / "NON_EXISTENT_AGENTS.md"
+    extracted_missing = extract_invariants(missing_path)
+    assert "## Invariants" in extracted_missing
+    assert "Gatekeeper" in extracted_missing
+
+    corrupt_path = tmp_path / "CORRUPT_AGENTS.md"
+    corrupt_path.write_text("# Heading without invariants\nSome text\n", encoding="utf-8")
+    extracted_corrupt = extract_invariants(corrupt_path)
+    assert "## Invariants" in extracted_corrupt
+    assert "Gatekeeper" in extracted_corrupt
+
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+        agents_path=missing_path,
+    )
+    assert "## Invariants" in prompt
+
 

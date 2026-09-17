@@ -342,3 +342,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### cmd.exe Shell Wrapping Inherits the Runner PATH
 - **Problem**: Gatekeeper verification commands run via `cmd.exe /d /s /c` and inherit the Runner's PATH, which may not include the Python `Scripts` directory, so bare console-script names like `pytest` report "command not found" and get mistaken for plain test failures (exit code 1).
 - **Solution**: Author verification commands with portable invocation forms (`python -m <tool>` over bare script names). The Runner resolves each command's leading token via `shutil.which` before wrapping it in the shell and reports unresolvable commands as a distinct command-not-found diagnostic at both Gatekeeper and Doctor time.
+
+### Resilient Markdown Header Extraction and Fallback Invariants
+- **Problem**: Extracting specific sections (such as `## Invariants`) from markdown files like `AGENTS.md` can fail if the file is missing, permission-locked, or reworded without standard headings, causing unhandled exceptions during worker prompt generation.
+- **Solution**: Wrap filesystem reads in defensive error handling and fall back to hardcoded canonical core invariants whenever the heading or file is absent, guaranteeing resilient prompt rendering.
+
+### Token Budgeting for Inlined Markdown Guardrails
+- **Problem**: Inlining operational guardrails into prompt strings risks ballooning command-line argument lengths past the Windows 32,767 character ceiling if entire documents are embedded verbatim.
+- **Solution**: Restrict inlining strictly to targeted high-impact sections (`## Invariants`, ~250 tokens), pair with explicit file-reading directives (`read`) for broader documentation, and verify total command length in automated tests.
+
