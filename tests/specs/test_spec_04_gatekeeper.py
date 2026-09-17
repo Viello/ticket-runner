@@ -31,6 +31,13 @@ from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.gotchas_store import GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.opencode.opencode_worker import OpenCodeEvent
+from runner.application.gatekeeper import (
+    GatekeeperCommandExecutor,
+    VerificationLoop,
+    VerificationLoopResult,
+    VerificationLoopStatus,
+    build_shell_argv,
+)
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import (
     EscalationNotice,
@@ -45,12 +52,20 @@ from runner.application.worker_supervisor import (
     SessionRunResult,
     WorkerSupervisor,
 )
-from runner.domain.config import WorkerConfig
+from runner.domain.config import VerificationConfig, WorkerConfig
+from runner.domain.exceptions import UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import QuestionSignal, ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
+from runner.ports.intervention import InterventionAction, InterventionDecision
 from runner.ports.signal_repository import SignalRepository
-from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
+from tests.fakes.fake_command_runner import (
+    CommandInvocation,
+    FakeCommandRunner,
+    FakeProcessHandle,
+)
+from tests.fakes.fake_intervention import FakeInterventionGateway
+import pytest
 
 SPEC_SLUG = "04-signal-protocol-and-gatekeeper"
 SPEC_REL_PATH = f"docs/specs/{SPEC_SLUG}.md"
@@ -133,6 +148,8 @@ class Scenario:
     coordinator: HandoffCoordinator
     clock_time: list[float]
     notices: list[str | EscalationNotice] = field(default_factory=list)
+    gateway: FakeInterventionGateway = field(default_factory=FakeInterventionGateway)
+    executor: GatekeeperCommandExecutor | None = None
 
     @property
     def ready_signal_path(self) -> Path:
@@ -142,6 +159,22 @@ class Scenario:
     def question_path(self) -> Path:
         return self.runtime_paths.question_path(self.ticket.id)
 
+    def make_loop(
+        self,
+        max_attempts: int = 3,
+        verification_config: VerificationConfig | None = None,
+    ) -> VerificationLoop:
+        assert self.executor is not None
+        return VerificationLoop(
+            ticket=self.ticket,
+            cycle_runner=self.coordinator.run_cycle,
+            signal_repository=self.signals,
+            executor=self.executor,
+            intervention_gateway=self.gateway,
+            verification_config=verification_config or VerificationConfig(test_cmd="pytest -q"),
+            max_attempts=max_attempts,
+        )
+
     @classmethod
     def assemble(
         cls,
@@ -149,6 +182,8 @@ class Scenario:
         *,
         ticket_id: str = "T030",
         clock_start: float = 0.0,
+        answers: list[str] | None = None,
+        decisions: list[InterventionDecision | str] | None = None,
     ) -> Scenario:
         _write_workspace(root)
         ticket = _scaffold_ticket(ticket_id)
@@ -183,6 +218,9 @@ class Scenario:
             signal_repository=signals,
         )
 
+        gateway = FakeInterventionGateway(answers=answers, decisions=decisions)
+        executor = GatekeeperCommandExecutor(command_runner=runner, cwd=root)
+
         return cls(
             root=root,
             ticket=ticket,
@@ -193,6 +231,8 @@ class Scenario:
             coordinator=coordinator,
             clock_time=clock_time,
             notices=notices,
+            gateway=gateway,
+            executor=executor,
         )
 
 
@@ -405,3 +445,451 @@ def test_us03_supervisor_reused_resets_grace_state_across_runs(tmp_path: Path) -
     # Run 2: starts fresh, no signals present, runs cleanly
     res2 = asyncio.run(sc.supervisor.run("T030", prompt="prompt 2"))
     assert res2.reason == RunTerminationReason.EXITED
+
+
+# --- US 06 - US 10: Verification Loop, Diagnostics, & Circuit Breaker Behavioral Tests ---
+
+
+def test_us06_failed_verification_reinvokes_session_with_diagnostics_and_passes(tmp_path: Path) -> None:
+    """US 06: Failed verification re-invokes the active Worker session with trailing diagnostics tail.
+
+    Worker fixes the issue on the second cycle and Gatekeeper accepts the Ticket.
+    """
+    sc = Scenario.assemble(tmp_path, ticket_id="T031")
+    session_id = "ses_us06Active"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class Session1Handle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8101)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/core.py"],
+                    "self_review_notes": "First attempt implementation.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("text", session_id=session_id, text="Ready signal emitted") + "\n"
+            yield _event("step_finish", session_id=session_id, tokens=20000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    class Session2Handle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8102)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/core.py", "tests/test_core.py"],
+                    "self_review_notes": "Fixed failure diagnostics.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("text", session_id=session_id, text="Ready signal emitted again") + "\n"
+            yield _event("step_finish", session_id=session_id, tokens=25000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        Session1Handle(),
+    )
+
+    # Gatekeeper verification sequence for test_cmd:
+    # 1. Fails with trailing output
+    sc.runner.register_spawn(
+        shell_test_cmd,
+        stdout_lines=["running test suite..."],
+        stderr="FAILED tests/test_core.py - AssertionError: expected 1 got 0",
+        exit_code=1,
+    )
+    # 2. Passes on second cycle
+    sc.runner.register_spawn(
+        shell_test_cmd,
+        stdout_lines=["running test suite...", "1 passed"],
+        exit_code=0,
+    )
+
+    # Allow session 2 to receive any resume prompt
+    def _dynamic_spawn(cmd: list[str], **kwargs: Any) -> FakeProcessHandle | None:
+        if len(cmd) >= 6 and cmd[:4] == ["opencode", "run", "--format", "json"] and cmd[4] == "--session":
+            return Session2Handle()
+        return None
+
+    # Custom spawn interceptor on sc.runner
+    original_spawn = sc.runner.spawn
+
+    async def _intercepting_spawn(cmd: list[str], **kwargs: Any) -> Any:
+        dynamic = _dynamic_spawn(cmd, **kwargs)
+        if dynamic is not None:
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return dynamic
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercepting_spawn  # type: ignore
+
+    loop = sc.make_loop(max_attempts=3)
+    result = asyncio.run(loop.run())
+
+    assert result.is_passed is True
+    assert result.attempts == 2
+    assert not sc.ready_signal_path.exists()
+
+    # Verify session 2 was invoked with the diagnostics in the prompt
+    assert len(sc.runner.spawn_invocations) >= 4  # opencode 1, pytest 1, opencode 2, pytest 2
+    opencode_invocations = [inv for inv in sc.runner.spawn_invocations if inv.cmd[0] == "opencode"]
+    assert len(opencode_invocations) == 2
+    resumed_cmd = opencode_invocations[1].cmd
+    assert resumed_cmd[4] == "--session"
+    assert resumed_cmd[5] == session_id
+    assert "FAILED tests/test_core.py - AssertionError: expected 1 got 0" in resumed_cmd[7]
+
+
+def test_us07_circuit_breaker_trips_after_max_attempts(tmp_path: Path) -> None:
+    """US 07: Circuit breaker trips after verification.max_attempts failed attempts."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T031",
+        decisions=[InterventionDecision(action=InterventionAction.SKIP)],
+    )
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class AlwaysReadyHandle(FakeProcessHandle):
+        def __init__(self, run_index: int) -> None:
+            super().__init__(pid=8200 + run_index)
+            self._run_index = run_index
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=f"ses_{self._run_index}") + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": f"Run {self._run_index}",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=f"ses_{self._run_index}", tokens=10000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        AlwaysReadyHandle(1),
+    )
+
+    run_counter = [1]
+
+    original_spawn = sc.runner.spawn
+
+    async def _intercepting_spawn(cmd: list[str], **kwargs: Any) -> Any:
+        if len(cmd) >= 6 and cmd[:4] == ["opencode", "run", "--format", "json"]:
+            run_counter[0] += 1
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return AlwaysReadyHandle(run_counter[0])
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercepting_spawn  # type: ignore
+
+    # Register 3 failing test spawns for Gatekeeper
+    for i in range(1, 4):
+        sc.runner.register_spawn(
+            shell_test_cmd,
+            stderr=f"Test failure attempt {i}",
+            exit_code=1,
+        )
+
+    loop = sc.make_loop(max_attempts=3)
+    result = asyncio.run(loop.run())
+
+    assert result.is_skipped is True
+    assert result.attempts == 3
+    assert len(sc.gateway.request_records) == 1
+    record = sc.gateway.request_records[0]
+    assert record.attempt == 3
+    assert "Test failure attempt 3" in record.diagnostics
+
+
+def test_us08_retry_with_hint_restores_budget_and_injects_advice(tmp_path: Path) -> None:
+    """US 08: [R]etry [hint] restores budget and injects advice directly into Worker session."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T031",
+        decisions=[
+            InterventionDecision(action=InterventionAction.RETRY, hint="Use relative path importing"),
+        ],
+    )
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class WorkerHandle(FakeProcessHandle):
+        def __init__(self, idx: int) -> None:
+            super().__init__(pid=8300 + idx)
+            self._idx = idx
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id="ses_retryDemo") + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": f"Attempt {self._idx}",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id="ses_retryDemo", tokens=10000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        WorkerHandle(1),
+    )
+
+    run_counter = [1]
+    captured_prompts: list[str] = []
+    original_spawn = sc.runner.spawn
+
+    async def _intercepting_spawn(cmd: list[str], **kwargs: Any) -> Any:
+        if "--session" in cmd and cmd[:4] == ["opencode", "run", "--format", "json"]:
+            run_counter[0] += 1
+            captured_prompts.append(cmd[-1])
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return WorkerHandle(run_counter[0])
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercepting_spawn  # type: ignore
+
+    # Attempt 1: fails -> max_attempts=1 trips breaker
+    sc.runner.register_spawn(shell_test_cmd, stderr="ModuleNotFoundError: no module 'core'", exit_code=1)
+    # Attempt 2 (after retry): passes!
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    loop = sc.make_loop(max_attempts=1)
+    result = asyncio.run(loop.run())
+
+    assert result.is_passed is True
+    assert result.attempts == 1  # 1 attempt consumed in the fresh budget
+    assert len(sc.gateway.request_records) == 1
+
+    # Verify hint was injected into the prompt
+    assert len(captured_prompts) == 1
+    assert "Operator hint: Use relative path importing" in captured_prompts[0]
+    assert "ModuleNotFoundError: no module 'core'" in captured_prompts[0]
+
+
+def test_us09_skip_after_budget_exhaustion_returns_skipped_result(tmp_path: Path) -> None:
+    """US 09: [S]kip returns skip result with diagnostics without modifying the working tree."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T031",
+        decisions=[InterventionDecision(action=InterventionAction.SKIP)],
+    )
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class Handle(FakeProcessHandle):
+        async def stdout_lines(self):
+            yield _event("step_start", session_id="ses_skip") + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["foo.py"],
+                    "self_review_notes": "Ready",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id="ses_skip", tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        Handle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stderr="Unfixable test failure", exit_code=1)
+
+    loop = sc.make_loop(max_attempts=1)
+    result = asyncio.run(loop.run())
+
+    assert result.is_skipped is True
+    assert "Unfixable test failure" in (result.diagnostics or "")
+    # Gatekeeper loop did not commit or reset git
+    assert not any(cmd[:2] == ["git", "reset"] for cmd in sc.runner.commands)
+
+
+def test_us10_abort_raises_user_abort_error_preserving_working_tree(tmp_path: Path) -> None:
+    """US 10: [A]bort cleanly halts raising UserAbortError and preserving working tree for direct debugging."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T031",
+        decisions=[InterventionDecision(action=InterventionAction.ABORT)],
+    )
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    # Worker leaves an uncommitted file on disk
+    workspace_file = tmp_path / "work_in_progress.py"
+    workspace_file.write_text("print('debug me on PC')", encoding="utf-8")
+
+    class Handle(FakeProcessHandle):
+        async def stdout_lines(self):
+            yield _event("step_start", session_id="ses_abort") + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["work_in_progress.py"],
+                    "self_review_notes": "Needs debugging",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id="ses_abort", tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        Handle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stderr="Hard bug requiring PC debugging", exit_code=1)
+
+    loop = sc.make_loop(max_attempts=1)
+
+    with pytest.raises(UserAbortError, match="Execution aborted by operator"):
+        asyncio.run(loop.run())
+
+    # Working tree file was preserved!
+    assert workspace_file.is_file()
+    assert workspace_file.read_text(encoding="utf-8") == "print('debug me on PC')"
+
+
+def test_us11_question_interruption_preserves_budget_and_resumes_session(tmp_path: Path) -> None:
+    """US 02 / US 11: Question interrupts with 0 budget consumed, and re-entry continues with answer."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T031")
+    session_id = "ses_us11Q"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    # Session 1: asks a clarification question
+    class QuestionHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8401)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.question_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "question": "Which architecture pattern should be used?",
+                    "type": "text",
+                    "options": None,
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("text", session_id=session_id, text="Question written") + "\n"
+            yield _event("step_finish", session_id=session_id, tokens=5000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    # Session 2: after answer is provided, finishes and writes ready signal
+    class AnsweredHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8402)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["arch.py"],
+                    "self_review_notes": "Implemented with chosen pattern.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=8000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        QuestionHandle(),
+    )
+
+    original_spawn = sc.runner.spawn
+
+    async def _intercepting_spawn(cmd: list[str], **kwargs: Any) -> Any:
+        if "--session" in cmd and cmd[:4] == ["opencode", "run", "--format", "json"]:
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return AnsweredHandle()
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercepting_spawn  # type: ignore
+
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    loop = sc.make_loop(max_attempts=2)
+
+    # 1. First run: interrupted by pending question
+    res1 = asyncio.run(loop.run())
+    assert res1.is_question_pending is True
+    assert res1.session_id == session_id
+    assert res1.attempts == 0
+    assert loop.attempts == 0
+
+    # 2. Re-entry with answer prompt
+    res2 = asyncio.run(loop.run(prompt="Use Clean Architecture ports and adapters."))
+    assert res2.is_passed is True
+    assert res2.attempts == 1  # Passed on 1st verification attempt

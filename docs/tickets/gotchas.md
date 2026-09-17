@@ -290,4 +290,18 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When a Worker emits a clarification question and exits cleanly or is signal-killed, downstream handoff recovery paths (exit-0 nudge or crash retry) re-invoke the session with nudge/retry prompts, clobbering the question workflow or advancing attempt budgets prematurely.
 - **Solution**: In `HandoffCoordinator.run_cycle`, evaluate pending question Signals before crash or nudge recovery branches; if `read_pending_question` returns non-None, immediately yield `SingleCycleStatus.QUESTION_PENDING` with the active session ID populated, leaving the on-disk question artifact untouched for human/gateway interaction.
 
+### Python Special Method Lookup Bypasses Instance Attributes in Test Doubles
+- **Problem**: Overriding special methods like `__call__` on an existing instance (`cr.__call__ = wrapped`) does not intercept invocations because Python resolves dunder methods exclusively on the class/type, not the instance dictionary (`type(cr).__call__(cr, ...)`).
+- **Solution**: Design test doubles with explicit hook callbacks (e.g. `on_call: Callable[[Ticket, int], None] | None = None`) or provide a lightweight wrapper class delegating `__call__` dynamically so test scenarios can intercept cycle runs without mutating class types.
 
+### Single-Use Signal Lifecycle and Stale Artifact Prevention
+- **Problem**: If a Worker emits a ready signal but fails downstream verification or signal validation, leaving the ready signal on disk allows subsequent cycles or retry runs to re-consume stale ready signals without the Worker actively signaling readiness again.
+- **Solution**: Treat ready signals as single-use consumables: delete the signal artifact immediately upon consumption or verification failure before feeding diagnostics into the worker resume prompt.
+
+### Diagnostic Resume Prompt Tail Bounding
+- **Problem**: In verification loops where test failure tails or escalation traces feed back to the worker session as resume prompts, unbounded failure logs can exhaust model context budgets across successive verification attempts.
+- **Solution**: Enforce a strict line ceiling (`MAX_DIAGNOSTIC_LINES = 100`) on diagnostics injected into resume prompts, truncating to the most recent log tail while clearly indicating line counts in the resume instruction.
+
+### Per-Ticket Verification Budget Survival Across Question Interleaves
+- **Problem**: When a worker asks a clarifying question mid-attempt, returning to the runner/gateway could inadvertently reset or advance the verification attempt counter if attempt tracking is stored per invocation rather than per Ticket.
+- **Solution**: Maintain the verification attempt counter on the stateful `VerificationLoop` instance per Ticket; return `QUESTION_PENDING` immediately without incrementing the budget counter, ensuring re-entry resumes with the exact remaining attempts intact.

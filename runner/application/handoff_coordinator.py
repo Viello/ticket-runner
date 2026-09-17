@@ -621,6 +621,7 @@ class HandoffCoordinator:
         self,
         ticket: Ticket,
         *,
+        prompt: str | None = None,
         spec_excerpt: SpecExcerpt | str | None = None,
         session_id: str | None = None,
         max_consecutive_handoffs: int | None = None,
@@ -629,6 +630,7 @@ class HandoffCoordinator:
 
         Args:
             ticket: Active Ticket domain entity.
+            prompt: Optional pre-rendered prompt or resume prompt with failure diagnostics.
             spec_excerpt: Optional pre-parsed or mock SpecExcerpt.
             session_id: Optional existing session ID when resuming an ongoing session.
             max_consecutive_handoffs: Optional override for consecutive handoff limit.
@@ -675,8 +677,10 @@ class HandoffCoordinator:
 
         active_supervisor.on_budget_action = _handle_budget_action
 
-        current_prompt = self.build_initial_prompt(
-            ticket, spec_excerpt=spec_excerpt
+        current_prompt = (
+            prompt
+            if prompt is not None
+            else self.build_initial_prompt(ticket, spec_excerpt=spec_excerpt)
         )
         current_session_id = session_id
 

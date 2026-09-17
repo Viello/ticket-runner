@@ -58,3 +58,8 @@ class NonInteractiveError(TicketRunnerError):
     """Raised when human contact requires an interactive stdin that is unavailable."""
     pass
 
+
+class UserAbortError(TicketRunnerError):
+    """Raised when an operator aborts execution via the intervention menu."""
+    pass
+

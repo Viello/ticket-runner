@@ -23,6 +23,7 @@ from runner.domain.exceptions import (
     SpecFormatError,
     TicketFormatError,
     TicketRunnerError,
+    UserAbortError,
 )
 from runner.domain.runtime_paths import DEFAULT_AGENT_DIR, RuntimePaths
 from runner.domain.signal import (
@@ -68,6 +69,7 @@ __all__ = [
     "TicketStatus",
     "TokenBudgetConfig",
     "TokenUsage",
+    "UserAbortError",
     "VerificationConfig",
     "WorkerConfig",
     "effective_ceiling",

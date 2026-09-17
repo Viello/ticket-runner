@@ -4,15 +4,29 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import Enum
+import inspect
 import os
 from pathlib import Path
 import sys
+from typing import Any, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.domain.config import VerificationConfig
+from runner.domain.exceptions import SignalFormatError, UserAbortError
+from runner.domain.signal import ReadySignal
+from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner
+from runner.ports.intervention import (
+    InterventionAction,
+    InterventionDecision,
+    InterventionGateway,
+)
+from runner.ports.signal_repository import SignalRepository
 
 TAIL_LINE_LIMIT: int = 100
 """Number of trailing output lines retained per command and injected as diagnostics."""
@@ -227,3 +241,377 @@ class GatekeeperCommandExecutor:
             timed_out=timed_out,
             tail="\n".join(tail_source[-TAIL_LINE_LIMIT:]),
         )
+
+
+MAX_DIAGNOSTIC_LINES: int = 100
+"""Maximum number of diagnostic output lines embedded in resume prompts to bound context."""
+
+
+def build_verification_failure_prompt(
+    ticket: Ticket,
+    diagnostics: str,
+    hint: str | None = None,
+    max_lines: int = MAX_DIAGNOSTIC_LINES,
+) -> str:
+    """Format an actionable diagnostic resume prompt with bounded error tail and optional operator hint.
+
+    Args:
+        ticket: Active Ticket being verified.
+        diagnostics: Captured diagnostic output (failed test tail, signal error, or escalation).
+        hint: Optional operator guidance from the intervention menu.
+        max_lines: Maximum lines of diagnostics retained (default 100).
+
+    Returns:
+        Rendered resume prompt string.
+    """
+    raw_lines = diagnostics.strip().splitlines()
+    if len(raw_lines) > max_lines:
+        bounded = "\n".join(raw_lines[-max_lines:])
+    else:
+        bounded = "\n".join(raw_lines)
+
+    parts = [
+        f"Gatekeeper verification failed for ticket {ticket.id}.",
+        "",
+        "Diagnostics:",
+        "```",
+        bounded,
+        "```",
+    ]
+    if hint and hint.strip():
+        parts.extend([
+            "",
+            f"Operator hint: {hint.strip()}",
+        ])
+    parts.extend([
+        "",
+        f"Please address the failure, verify your changes locally, and emit `.agent/signals/{ticket.id}_ready.json` when complete.",
+    ])
+    return "\n".join(parts)
+
+
+class VerificationLoopStatus(str, Enum):
+    """Outcome status of a verification loop run."""
+
+    PASSED = "passed"
+    SKIPPED = "skipped"
+    QUESTION_PENDING = "question_pending"
+
+
+@dataclass(frozen=True)
+class VerificationLoopResult:
+    """Outcome of driving Gatekeeper verification across attempt budgets."""
+
+    status: VerificationLoopStatus
+    ready_signal: ReadySignal | None = None
+    verification_report: VerificationReport | None = None
+    diagnostics: str | None = None
+    session_id: str | None = None
+    attempts: int = 0
+
+    @property
+    def is_passed(self) -> bool:
+        """True when all Gatekeeper commands passed for a valid ready Signal."""
+        return self.status == VerificationLoopStatus.PASSED
+
+    @property
+    def is_skipped(self) -> bool:
+        """True when operator selected skip after budget exhaustion."""
+        return self.status == VerificationLoopStatus.SKIPPED
+
+    @property
+    def is_question_pending(self) -> bool:
+        """True when a Worker question interrupted verification."""
+        return self.status == VerificationLoopStatus.QUESTION_PENDING
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (str, VerificationLoopStatus)):
+            val = other.value if isinstance(other, VerificationLoopStatus) else other
+            return self.status.value == val
+        return super().__eq__(other)
+
+    @classmethod
+    def passed(
+        cls,
+        ready_signal: ReadySignal,
+        report: VerificationReport,
+        attempts: int,
+        session_id: str | None = None,
+    ) -> VerificationLoopResult:
+        return cls(
+            status=VerificationLoopStatus.PASSED,
+            ready_signal=ready_signal,
+            verification_report=report,
+            attempts=attempts,
+            session_id=session_id,
+        )
+
+    @classmethod
+    def skipped(
+        cls,
+        diagnostics: str,
+        attempts: int,
+        session_id: str | None = None,
+    ) -> VerificationLoopResult:
+        return cls(
+            status=VerificationLoopStatus.SKIPPED,
+            diagnostics=diagnostics,
+            attempts=attempts,
+            session_id=session_id,
+        )
+
+    @classmethod
+    def question_pending(
+        cls,
+        session_id: str | None,
+        attempts: int,
+    ) -> VerificationLoopResult:
+        return cls(
+            status=VerificationLoopStatus.QUESTION_PENDING,
+            session_id=session_id,
+            attempts=attempts,
+        )
+
+
+@runtime_checkable
+class WorkerCycleRunner(Protocol):
+    """Protocol for driving a single Worker execution cycle."""
+
+    async def __call__(
+        self,
+        ticket: Ticket,
+        *,
+        session_id: str | None = None,
+        prompt: str | None = None,
+    ) -> WorkerRunResult:
+        ...
+
+
+class VerificationLoop:
+    """Supervises Worker execution cycles and Gatekeeper verification against an attempt budget (T031)."""
+
+    def __init__(
+        self,
+        ticket: Ticket,
+        cycle_runner: WorkerCycleRunner | Callable[..., Awaitable[WorkerRunResult]],
+        signal_repository: SignalRepository,
+        executor: GatekeeperCommandExecutor,
+        intervention_gateway: InterventionGateway,
+        verification_config: VerificationConfig | None = None,
+        max_attempts: int | None = None,
+        initial_prompt: str | None = None,
+        initial_session_id: str | None = None,
+    ) -> None:
+        self._ticket = ticket
+        self._cycle_runner = cycle_runner
+        self._signal_repository = signal_repository
+        self._executor = executor
+        self._intervention_gateway = intervention_gateway
+        self._verification_config = verification_config or VerificationConfig(test_cmd="pytest -q")
+        if max_attempts is not None:
+            self._max_attempts = max_attempts
+        else:
+            self._max_attempts = self._verification_config.max_attempts
+        self._initial_prompt = initial_prompt
+        self._active_session_id = initial_session_id
+        self._attempts: int = 0
+        self._pending_prompt: str | None = initial_prompt
+        self._last_diagnostics: str = ""
+
+    @property
+    def ticket(self) -> Ticket:
+        """Active Ticket being verified."""
+        return self._ticket
+
+    @property
+    def attempts(self) -> int:
+        """Current count of consumed verification attempts."""
+        return self._attempts
+
+    @property
+    def max_attempts(self) -> int:
+        """Verification attempts ceiling before tripping the circuit breaker."""
+        return self._max_attempts
+
+    @property
+    def active_session_id(self) -> str | None:
+        """Active Worker session identifier."""
+        return self._active_session_id
+
+    @property
+    def last_diagnostics(self) -> str:
+        """Last captured failure diagnostics."""
+        return self._last_diagnostics
+
+    async def run(
+        self,
+        *,
+        prompt: str | None = None,
+    ) -> VerificationLoopResult:
+        """Drive the verification loop until acceptance, skip, or question interruption.
+
+        Args:
+            prompt: Optional prompt override (e.g. for question answer resume).
+
+        Returns:
+            VerificationLoopResult indicating PASSED, SKIPPED, or QUESTION_PENDING.
+
+        Raises:
+            UserAbortError: When the operator selects abort from the intervention menu.
+        """
+        if prompt is not None:
+            self._pending_prompt = prompt
+
+        while True:
+            current_prompt = self._pending_prompt
+            current_session = self._active_session_id
+
+            # 1. Execute worker cycle run
+            kwargs: dict[str, Any] = {}
+            try:
+                sig = inspect.signature(self._cycle_runner)
+                params = sig.parameters
+                has_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                if "session_id" in params or has_var:
+                    kwargs["session_id"] = current_session
+                if "prompt" in params or has_var:
+                    kwargs["prompt"] = current_prompt
+            except (ValueError, TypeError):
+                kwargs = {"session_id": current_session, "prompt": current_prompt}
+
+            run_result = await self._cycle_runner(self._ticket, **kwargs)
+
+            if run_result.session_id:
+                self._active_session_id = run_result.session_id
+
+            # Reset pending prompt since it has been consumed
+            self._pending_prompt = None
+
+            # 2. Check for question interruption (0 budget consumed!)
+            if (
+                run_result.status == SingleCycleStatus.QUESTION_PENDING
+                or run_result.is_question_pending
+            ):
+                return VerificationLoopResult.question_pending(
+                    session_id=self._active_session_id,
+                    attempts=self._attempts,
+                )
+
+            # 3. Check for worker-phase non-READY failure
+            if run_result.status != SingleCycleStatus.READY:
+                diagnostics = (
+                    run_result.escalation_details
+                    or (run_result.escalation.reason if run_result.escalation else run_result.status.value)
+                )
+                self._signal_repository.consume_ready(self._ticket.id)
+                self._attempts += 1
+                self._last_diagnostics = diagnostics
+                action = await self._handle_failure(diagnostics)
+                if action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics=self._last_diagnostics,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+                continue
+
+            # 4. Ready signal validation
+            try:
+                ready_signal = self._signal_repository.read_ready(self._ticket.id)
+            except SignalFormatError as exc:
+                self._signal_repository.consume_ready(self._ticket.id)
+                diagnostics = str(exc)
+                self._attempts += 1
+                self._last_diagnostics = diagnostics
+                action = await self._handle_failure(diagnostics)
+                if action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics=self._last_diagnostics,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+                continue
+
+            if ready_signal is None:
+                diagnostics = (
+                    f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
+                )
+                self._attempts += 1
+                self._last_diagnostics = diagnostics
+                action = await self._handle_failure(diagnostics)
+                if action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics=self._last_diagnostics,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+                continue
+
+            # 5. Consume ready signal (single-use lifecycle)
+            self._signal_repository.consume_ready(self._ticket.id)
+
+            # 6. Execute Gatekeeper independent verification commands
+            report = await self._executor.verify(self._verification_config)
+            if report.passed:
+                self._attempts += 1
+                return VerificationLoopResult.passed(
+                    ready_signal=ready_signal,
+                    report=report,
+                    attempts=self._attempts,
+                    session_id=self._active_session_id,
+                )
+
+            # 7. Verification failed
+            diagnostics = "\n\n".join(report.diagnostics)
+            self._attempts += 1
+            self._last_diagnostics = diagnostics
+            action = await self._handle_failure(diagnostics)
+            if action == InterventionAction.SKIP:
+                return VerificationLoopResult.skipped(
+                    diagnostics=self._last_diagnostics,
+                    attempts=self._attempts,
+                    session_id=self._active_session_id,
+                )
+            continue
+
+    async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
+        """Handle attempt failure, evaluating budget exhaustion and intervention menu."""
+        if self._attempts >= self._max_attempts:
+            decision = self._intervention_gateway.request_intervention(
+                ticket=self._ticket,
+                diagnostics=diagnostics,
+                attempt=self._attempts,
+            )
+            if inspect.iscoroutine(decision):
+                decision = await decision
+
+            if decision.action == InterventionAction.ABORT:
+                raise UserAbortError(
+                    f"Execution aborted by operator for ticket '{self._ticket.id}'."
+                )
+
+            if decision.action == InterventionAction.RETRY:
+                # Reset attempt counter to full fresh budget
+                self._attempts = 0
+                self._pending_prompt = build_verification_failure_prompt(
+                    ticket=self._ticket,
+                    diagnostics=diagnostics,
+                    hint=decision.hint,
+                )
+                return InterventionAction.RETRY
+
+            if decision.action == InterventionAction.SKIP:
+                return InterventionAction.SKIP
+
+            raise ValueError(f"Unsupported intervention action: {decision.action}")
+
+        # Budget not yet exhausted: prepare resume prompt with diagnostics for next attempt
+        self._pending_prompt = build_verification_failure_prompt(
+            ticket=self._ticket,
+            diagnostics=diagnostics,
+            hint=None,
+        )
+        return None
+
+
+GatekeeperVerificationLoop = VerificationLoop
