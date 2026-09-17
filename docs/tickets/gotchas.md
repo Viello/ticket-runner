@@ -331,3 +331,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Solution**: Replace verbatim document inlining with a scoped markdown file pointer (`## Global Gotchas & Lessons Learned\nReview and adhere to all project-wide pitfalls recorded at `docs/tickets/gotchas.md` before implementing.`), normalizing the path to POSIX forward slashes across platforms while retaining ticket-specific gotchas inlined under `### Ticket Gotchas`.
 
 
+### Queue Orchestrator Unit Tests Must Inject an Isolated Lock Path
+- **Problem**: Constructing `QueueOrchestrator` without `lock_path` falls back to the live `docs/tickets/.queue.lock`, so unit tests raise `QueueLockError` whenever a real `ticket_runner.py` instance holds the sentinel, turning the full suite red on any actively running queue.
+- **Solution**: Inject `lock_path=tmp_path / ".queue.lock"` into `QueueOrchestrator` in unit tests so lock acquisition stays confined to the pytest `tmp_path`, mirroring the keyword-only adapter overrides on `build_container`.
+
+### Local Config Smoke Test Should Compare Against the Example, Not Hardcode
+- **Problem**: `test_load_root_config_yaml` hardcoded `verification.test_cmd == "pytest"` and other example values, but the untracked local `config.yaml` intentionally uses `python -m pytest` (bare `pytest` is not on PATH on Windows), so the test failed whenever a local config existed even though the loader behaved correctly.
+- **Solution**: Assert the untracked root config against `config.example.yaml` for the invariant fields (project identity, worker execution skill, token budget) and drop the environment-specific `test_cmd` assertion, keeping the smoke test meaningful without coupling it to a platform's PATH.

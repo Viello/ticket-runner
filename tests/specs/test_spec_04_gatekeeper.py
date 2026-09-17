@@ -1724,11 +1724,11 @@ def test_us11_orchestrator_ready_wins_precedence_when_stale_question_exists(tmp_
     assert relocated.is_file()
 
 
-# --- US 10 / US 12: Composition Root & Abort Handling Behavioral Tests ---
+# --- T034: Composition Root End-to-End & Abort Handling Behavioral Tests ---
 
 
-def test_us12_build_container_end_to_end_in_process_success(tmp_path: Path) -> None:
-    """T034 / US 12: build_container wires real pipeline and processes a Ticket end-to-end in-process."""
+def test_build_container_end_to_end_in_process_success(tmp_path: Path) -> None:
+    """T034: build_container wires real pipeline and processes a Ticket end-to-end in-process."""
     sc = Scenario.assemble(tmp_path, ticket_id="T034")
     ticket_file = _write_ticket_file(sc.root, sc.ticket)
     _register_git_fakes(sc.runner)

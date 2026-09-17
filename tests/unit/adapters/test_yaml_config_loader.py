@@ -271,15 +271,15 @@ def test_load_root_config_yaml() -> None:
 
     loader = YamlConfigLoader()
     config = loader.load(root_config_path)
+    example = loader.load(Path("config.example.yaml"))
 
     assert isinstance(config, RunnerConfig)
-    assert config.project.name == "ticket-runner"
-    assert config.project.branch == "agent/ticket-runner"
-    assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
-    assert config.verification.test_cmd == "pytest"
-    assert config.tokens.warn == 120000
-    assert config.tokens.handoff == 135000
-    assert config.tokens.ceiling == 150000
+    assert config.project.name == example.project.name
+    assert config.project.branch == example.project.branch
+    assert config.worker.execution_skill == example.worker.execution_skill
+    assert config.tokens.warn == example.tokens.warn
+    assert config.tokens.handoff == example.tokens.handoff
+    assert config.tokens.ceiling == example.tokens.ceiling
 
 
 @pytest.mark.parametrize(

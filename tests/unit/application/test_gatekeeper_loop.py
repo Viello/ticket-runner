@@ -644,7 +644,7 @@ def test_diagnostics_are_bounded_in_resume_prompt() -> None:
     assert "Operator hint: My operator hint" in prompt
 
 
-def test_orchestrator_outcome_aborted_and_user_abort_error() -> None:
+def test_orchestrator_outcome_aborted_and_user_abort_error(tmp_path: Path) -> None:
     """Orchestrator outcome enum has ABORTED and run_next releases lock and raises UserAbortError."""
     assert TicketOutcomeStatus.ABORTED == "aborted"
     outcome = TicketOutcome.aborted(details="Intervention abort")
@@ -656,6 +656,7 @@ def test_orchestrator_outcome_aborted_and_user_abort_error() -> None:
     orchestrator = QueueOrchestrator(
         ticket_store=ticket_repo,
         processor=lambda t: asyncio.sleep(0, result=TicketOutcome.aborted(details="Operator abort")),
+        lock_path=tmp_path / ".queue.lock",
     )
 
     # When run_next processes an aborted outcome, it releases the lock and raises UserAbortError
