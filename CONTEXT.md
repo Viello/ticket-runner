@@ -76,4 +76,9 @@ _Avoid_: Requirement doc, PRD, epic, design doc
 The concise summary (`## Problem Statement` and `## Solution`) extracted from a Spec and injected into the Worker prompt to ground ticket implementation in high-level intent without context bloat.
 _Avoid_: Summary, abstract, snippet
 
+**Worker Skill**:
+A structured methodology handbook stored as a markdown file under `.agents/skills/<name>/SKILL.md` that guides Worker discipline across lifecycle phases (implementation, pre-signal review, security, and debugging) via direct file reads.
+_Avoid_: Plugin, slash command, agent tool
+
+
 
