@@ -15,6 +15,7 @@ from runner.application.handoff_coordinator import (
     EscalationNotice,
     HandoffCoordinator,
     MAX_CONSECUTIVE_HANDOFFS,
+    QUESTION_PENDING,
     SingleCycleResult,
     SingleCycleStatus,
     WorkerRunResult,
@@ -25,9 +26,11 @@ from runner.application.worker_supervisor import RunTerminationReason, WorkerSup
 from runner.domain.config import TokenBudgetConfig, WorkerConfig
 from runner.domain.exceptions import TicketFormatError
 from runner.domain.runtime_paths import RuntimePaths
+from runner.domain.signal import QuestionSignal, ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
 from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
+from tests.fakes.fake_signal_repository import FakeSignalRepository
 
 
 def _make_ticket(
@@ -1688,4 +1691,252 @@ def test_security_loop_termination_is_guaranteed_and_bounded(tmp_path: Path) -> 
     assert len(result.session_ids) == 5
     # Strict bound: no more than 10 spawns (5 sessions + 5 handoffs)
     assert len(fake_runner.spawns) == 10
+
+
+# --- T030: Question-Aware Handoff Coordinator Tests ---
+
+
+def test_question_pending_returns_status_and_active_session_without_nudge(tmp_path: Path) -> None:
+    """When a Session Run ends with a pending question Signal, coordinator returns QUESTION_PENDING.
+
+    The active session ID is populated, the question file is untouched, and no nudge prompt is run.
+    """
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_questions_dir()
+    ticket = _make_ticket("T030")
+    session_id = "ses_questionSession1"
+
+    question_content = json.dumps({
+        "ticket_id": "T030",
+        "question": "Should we support SQLite or PostgreSQL?",
+        "type": "choice",
+        "options": ["sqlite", "postgresql"],
+        "status": "pending",
+        "answer": None,
+        "created_at": "2026-09-17T00:00:00+00:00",
+    })
+    question_path = runtime_paths.question_path("T030")
+    question_path.write_text(question_content, encoding="utf-8")
+
+    session_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "Asking question."}}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 20000}}}) + "\n",
+    ]
+
+    coordinator = HandoffCoordinator(
+        supervisor=WorkerSupervisor(
+            command_runner=fake_runner,
+            runtime_paths=runtime_paths,
+        ),
+        runtime_paths=runtime_paths,
+    )
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_lines,
+        exit_code=0,
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    # Returns QUESTION_PENDING with active session id populated
+    assert result.status == SingleCycleStatus.QUESTION_PENDING
+    assert result == QUESTION_PENDING
+    assert result.session_id == session_id
+    assert result.is_question_pending is True
+    assert result.ready_signal_present is False
+
+    # Question file remains untouched on disk
+    assert question_path.read_text(encoding="utf-8") == question_content
+
+    # Exactly 1 spawn occurred: initial run only, NO nudge prompt executed
+    assert len(fake_runner.spawns) == 1
+    assert "nudge" not in fake_runner.spawns[0][0][-1].lower()
+
+
+def test_answered_question_does_not_trigger_question_pending(tmp_path: Path) -> None:
+    """An answered question Signal does not trigger QUESTION_PENDING; absent ready signal triggers nudge."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_questions_dir()
+    ticket = _make_ticket("T030")
+    session_id = "ses_answeredQSession"
+
+    # Write answered question file
+    question_path = runtime_paths.question_path("T030")
+    question_path.write_text(
+        json.dumps({
+            "ticket_id": "T030",
+            "question": "Which db?",
+            "type": "text",
+            "options": None,
+            "status": "answered",
+            "answer": "sqlite",
+            "created_at": "2026-09-17T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+
+    session_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 20000}}}) + "\n",
+    ]
+
+    coordinator = HandoffCoordinator(
+        supervisor=WorkerSupervisor(
+            command_runner=fake_runner,
+            runtime_paths=runtime_paths,
+        ),
+        runtime_paths=runtime_paths,
+    )
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+    nudge_prompt = coordinator.build_nudge_prompt(ticket)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_lines,
+        exit_code=0,
+    )
+    # Nudge run that writes ready signal
+    class NudgeHandle(FakeProcessHandle):
+        async def wait(self) -> int:
+            runtime_paths.ensure_signals_dir()
+            runtime_paths.ready_signal_path("T030").write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": "Done.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            return 0
+
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--session", session_id, "--auto", nudge_prompt],
+        NudgeHandle(stdout_lines=[json.dumps({"type": "step_start", "sessionID": session_id}) + "\n"]),
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    # Did NOT stop at QUESTION_PENDING; progressed through nudge to READY
+    assert result.status == SingleCycleStatus.READY
+    assert len(fake_runner.spawns) == 2
+
+
+def test_ready_signal_takes_precedence_over_stale_question(tmp_path: Path) -> None:
+    """When both a valid ready Signal and a question Signal exist, ready takes precedence."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    ticket = _make_ticket("T030")
+    session_id = "ses_readyWinsOverQ"
+
+    runtime_paths.question_path("T030").write_text(
+        json.dumps({
+            "ticket_id": "T030",
+            "question": "Stale question?",
+            "type": "text",
+            "options": None,
+            "status": "pending",
+            "answer": None,
+            "created_at": "2026-09-17T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+    runtime_paths.ready_signal_path("T030").write_text(
+        json.dumps({
+            "ticket_id": "T030",
+            "status": "ready_for_verification",
+            "modified_files": [],
+            "self_review_notes": "Ready notes.",
+            "new_gotchas": [],
+            "timestamp": "2026-09-17T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+
+    session_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 20000}}}) + "\n",
+    ]
+
+    coordinator = HandoffCoordinator(
+        supervisor=WorkerSupervisor(
+            command_runner=fake_runner,
+            runtime_paths=runtime_paths,
+        ),
+        runtime_paths=runtime_paths,
+    )
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_lines,
+        exit_code=0,
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.READY
+    assert result.is_ready is True
+    assert result.ready_signal_present is True
+
+
+def test_question_pending_with_injected_fake_signal_repository(tmp_path: Path) -> None:
+    """FakeSignalRepository seam injects a pending question; coordinator returns QUESTION_PENDING."""
+    fake_runner = FakeCommandRunner()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    fake_signal_repo = FakeSignalRepository()
+    ticket = _make_ticket("T030")
+    session_id = "ses_fakeRepoQ"
+
+    fake_signal_repo.seed_question(
+        QuestionSignal(
+            ticket_id="T030",
+            question="Which approach?",
+            type="text",
+            options=None,
+            status=SignalStatus.PENDING,
+            answer=None,
+            created_at="2026-09-17T00:00:00+00:00",
+        )
+    )
+
+    session_lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 10000}}}) + "\n",
+    ]
+
+    coordinator = HandoffCoordinator(
+        supervisor=WorkerSupervisor(
+            command_runner=fake_runner,
+            runtime_paths=runtime_paths,
+            signal_repository=fake_signal_repo,
+        ),
+        runtime_paths=runtime_paths,
+        signal_repository=fake_signal_repo,
+    )
+    initial_prompt = coordinator.build_initial_prompt(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT)
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        stdout_lines=session_lines,
+        exit_code=0,
+    )
+
+    result = asyncio.run(coordinator.run_cycle(ticket, spec_excerpt=SAMPLE_SPEC_EXCERPT))
+
+    assert result.status == SingleCycleStatus.QUESTION_PENDING
+    assert result.session_id == session_id
+    assert len(fake_runner.spawns) == 1
+    # Question was NOT answered or modified
+    assert len(fake_signal_repo.write_answer_calls) == 0
+
 

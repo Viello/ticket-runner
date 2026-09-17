@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 import io
+import json
 from pathlib import Path
 import sys
 import time
@@ -23,10 +24,12 @@ from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.telemetry import BudgetAction, BudgetMonitor
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner, ProcessHandle
+from runner.ports.signal_repository import SignalRepository
 
 
 STALL_SILENCE_SECONDS: float = 900.0
 BOUNDED_RUN_TIMEOUT_SECONDS: float = 300.0
+SIGNAL_GRACE_SECONDS: float = 10.0
 
 
 class _AwaitableNone:
@@ -46,6 +49,7 @@ class RunTerminationReason(str, Enum):
     KILLED_CEILING = "KILLED_CEILING"
     STALLED = "STALLED"
     DROPPED = "DROPPED"
+    KILLED_SIGNAL = "KILLED_SIGNAL"
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,8 @@ class SessionRunResult:
     @property
     def is_crash(self) -> bool:
         """Whether this session run suffered a crash (non-zero exit or stream error event)."""
+        if self.reason == RunTerminationReason.KILLED_SIGNAL:
+            return False
         return self.exit_code != 0 or self.has_error_event
 
 
@@ -116,6 +122,8 @@ class WorkerSupervisor:
         clock: Callable[[], float] = time.monotonic,
         on_event: Callable[[OpenCodeEvent], None] | None = None,
         on_budget_action: Callable[[BudgetAction, int], None] | None = None,
+        signal_grace_timeout: float = SIGNAL_GRACE_SECONDS,
+        signal_repository: SignalRepository | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -130,10 +138,28 @@ class WorkerSupervisor:
         self._clock = clock
         self._on_event = on_event
         self._on_budget_action = on_budget_action
+        self._signal_grace_timeout = float(signal_grace_timeout)
+        self._signal_repository = signal_repository
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
+        self._signal_first_seen_at: float | None = None
+
+    @property
+    def signal_grace_timeout(self) -> float:
+        """Configured grace period in seconds before terminating a lingering Worker after Signal emission."""
+        return self._signal_grace_timeout
+
+    @property
+    def signal_repository(self) -> SignalRepository | None:
+        """Configured or injected SignalRepository port."""
+        return self._signal_repository
+
+    @property
+    def signal_first_seen_at(self) -> float | None:
+        """Timestamp when the active Ticket's Signal was first detected during this run."""
+        return self._signal_first_seen_at
 
     @property
     def runtime_paths(self) -> RuntimePaths:
@@ -197,6 +223,33 @@ class WorkerSupervisor:
         except Exception:
             pass
 
+    def _is_signal_present(self, ticket_id: str) -> bool:
+        """Check whether either the ready Signal or a pending/new question Signal exists."""
+        if self._runtime_paths.ready_signal_path(ticket_id).is_file():
+            return True
+        if self._signal_repository is not None:
+            try:
+                if self._signal_repository.read_ready(ticket_id) is not None:
+                    return True
+            except Exception:
+                return True
+            try:
+                if self._signal_repository.read_pending_question(ticket_id) is not None:
+                    return True
+            except Exception:
+                if self._runtime_paths.question_path(ticket_id).is_file():
+                    return True
+        qpath = self._runtime_paths.question_path(ticket_id)
+        if qpath.is_file():
+            try:
+                data = json.loads(qpath.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("status") == "answered":
+                    return False
+            except Exception:
+                pass
+            return True
+        return False
+
     async def run(
         self,
         ticket: Ticket | str,
@@ -222,6 +275,7 @@ class WorkerSupervisor:
         self._current_handle = handle
         self._kill_reason = None
         self._kill_event = asyncio.Event()
+        self._signal_first_seen_at = None
 
         active_session_id: str | None = session_id
         diagnostics: list[str] = []
@@ -280,6 +334,16 @@ class WorkerSupervisor:
                         termination_reason = RunTerminationReason.STALLED
                         break
 
+                if self._signal_first_seen_at is None:
+                    if self._is_signal_present(ticket_id):
+                        self._signal_first_seen_at = now
+
+                if self._signal_first_seen_at is not None:
+                    elapsed_signal = now - self._signal_first_seen_at
+                    if elapsed_signal >= self._signal_grace_timeout:
+                        termination_reason = RunTerminationReason.KILLED_SIGNAL
+                        break
+
                 remaining_stall = max(0.0, self._stall_timeout - elapsed_stall)
                 if bounded:
                     remaining_bounded = max(0.0, self._bounded_timeout - (now - start_time))
@@ -287,8 +351,18 @@ class WorkerSupervisor:
                 else:
                     step_timeout = remaining_stall
 
+                if self._signal_first_seen_at is not None:
+                    remaining_signal = max(0.0, self._signal_grace_timeout - (now - self._signal_first_seen_at))
+                    step_timeout = min(step_timeout, remaining_signal)
+
                 if step_timeout <= 0:
-                    termination_reason = RunTerminationReason.STALLED
+                    if (
+                        self._signal_first_seen_at is not None
+                        and (now - self._signal_first_seen_at) >= self._signal_grace_timeout
+                    ):
+                        termination_reason = RunTerminationReason.KILLED_SIGNAL
+                    else:
+                        termination_reason = RunTerminationReason.STALLED
                     break
 
                 next_line_task = asyncio.ensure_future(iterator.__anext__())
@@ -322,7 +396,18 @@ class WorkerSupervisor:
                     break
 
                 if not done:
-                    termination_reason = RunTerminationReason.STALLED
+                    now_timeout = self._clock()
+                    if (
+                        self._signal_first_seen_at is not None
+                        and (now_timeout - self._signal_first_seen_at) >= self._signal_grace_timeout
+                    ):
+                        termination_reason = RunTerminationReason.KILLED_SIGNAL
+                    elif bounded and (now_timeout - start_time) >= self._bounded_timeout:
+                        termination_reason = RunTerminationReason.STALLED
+                    elif (now_timeout - last_line_time) >= self._stall_timeout:
+                        termination_reason = RunTerminationReason.STALLED
+                    else:
+                        termination_reason = RunTerminationReason.STALLED
                     break
 
                 if kill_task in done:
@@ -334,6 +419,12 @@ class WorkerSupervisor:
                 except StopAsyncIteration:
                     break
 
+                if log_file is not None:
+                    log_file.write(line + "\n")
+                    log_file.flush()
+                elif not log_skipped:
+                    line_buffer.append(line)
+
                 arrival_time = self._clock()
                 if arrival_time - last_line_time >= self._stall_timeout:
                     termination_reason = RunTerminationReason.STALLED
@@ -343,13 +434,16 @@ class WorkerSupervisor:
                     termination_reason = RunTerminationReason.STALLED
                     break
 
-                last_line_time = arrival_time
+                if self._signal_first_seen_at is None:
+                    if self._is_signal_present(ticket_id):
+                        self._signal_first_seen_at = arrival_time
 
-                if log_file is not None:
-                    log_file.write(line + "\n")
-                    log_file.flush()
-                elif not log_skipped:
-                    line_buffer.append(line)
+                if self._signal_first_seen_at is not None:
+                    if (arrival_time - self._signal_first_seen_at) >= self._signal_grace_timeout:
+                        termination_reason = RunTerminationReason.KILLED_SIGNAL
+                        break
+
+                last_line_time = arrival_time
 
                 event = decode_event(line)
                 if event is None:
@@ -418,7 +512,13 @@ class WorkerSupervisor:
             with stderr_target_path.open("a", encoding="utf-8") as sf:
                 sf.write(handle.stderr)
 
-        ready_signal_present = self._runtime_paths.ready_signal_path(ticket_id).is_file()
+        ready_signal_present = (
+            self._runtime_paths.ready_signal_path(ticket_id).is_file()
+            or (
+                self._signal_repository is not None
+                and self._signal_repository.read_ready(ticket_id) is not None
+            )
+        )
 
         raw_stderr = handle.stderr.strip()
         if raw_stderr:

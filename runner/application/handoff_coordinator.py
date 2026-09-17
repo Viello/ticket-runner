@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.adapters.markdown.gotchas_store import GotchasStore
 from runner.adapters.markdown.spec_parser import SpecExcerpt, SpecMarkdownParser
@@ -30,6 +31,7 @@ from runner.domain.runtime_paths import (
 )
 from runner.domain.telemetry import BudgetAction
 from runner.domain.ticket import Ticket
+from runner.ports.signal_repository import SignalRepository
 
 CLOCK_SLACK_SECONDS: float = 2.0
 """Clock slack in seconds for checkpoint freshness validation (ADR 0014).
@@ -70,6 +72,7 @@ class SingleCycleStatus(str, Enum):
     STALLED = "STALLED"
     FAILED = "FAILED"
     ESCALATED = "ESCALATED"
+    QUESTION_PENDING = "QUESTION_PENDING"
 
 
 # Module-level aliases for direct comparison convenience
@@ -78,6 +81,7 @@ CEILING = SingleCycleStatus.CEILING
 CHECKPOINT_MISSING = SingleCycleStatus.CHECKPOINT_MISSING
 CHECKPOINT_STALE = SingleCycleStatus.CHECKPOINT_STALE
 ESCALATED = SingleCycleStatus.ESCALATED
+QUESTION_PENDING = SingleCycleStatus.QUESTION_PENDING
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,7 @@ class WorkerRunResult:
     # Module-level enum member convenience on class
     ESCALATED: SingleCycleStatus = SingleCycleStatus.ESCALATED
     READY: SingleCycleStatus = SingleCycleStatus.READY
+    QUESTION_PENDING: SingleCycleStatus = SingleCycleStatus.QUESTION_PENDING
 
     def __post_init__(self) -> None:
         if self.handoffs == 0 and self.handoff_requested_at is not None:
@@ -177,6 +182,11 @@ class WorkerRunResult:
     def is_ready(self) -> bool:
         """Whether the cycle ended with an accepted ready signal."""
         return self.status == SingleCycleStatus.READY
+
+    @property
+    def is_question_pending(self) -> bool:
+        """Whether the cycle ended with a pending question signal."""
+        return self.status == SingleCycleStatus.QUESTION_PENDING
 
     @property
     def is_escalated(self) -> bool:
@@ -269,12 +279,24 @@ class HandoffCoordinator:
         git_operations: GitOperations | None = None,
         confirm_recovery: Callable[[EscalationNotice], bool | Awaitable[bool]] | None = None,
         max_consecutive_handoffs: int = MAX_CONSECUTIVE_HANDOFFS,
+        signal_repository: SignalRepository | None = None,
     ) -> None:
-        self._supervisor = supervisor or WorkerSupervisor(
-            runtime_paths=runtime_paths, notify=notify, budget_config=budget_config
+        self._runtime_paths = runtime_paths or (
+            supervisor.runtime_paths if supervisor else RuntimePaths()
         )
+        self._signal_repository = signal_repository or FilesystemSignalRepository(
+            self._runtime_paths
+        )
+        self._supervisor = supervisor or WorkerSupervisor(
+            runtime_paths=self._runtime_paths,
+            notify=notify,
+            budget_config=budget_config,
+            signal_repository=self._signal_repository,
+        )
+        if supervisor is not None and getattr(supervisor, "_signal_repository", None) is None:
+            supervisor._signal_repository = self._signal_repository
+
         self._prompt_builder = prompt_builder or PromptBuilder()
-        self._runtime_paths = runtime_paths or self._supervisor.runtime_paths
         self._gotchas_store = gotchas_store or GotchasStore()
         self._spec_parser = spec_parser or SpecMarkdownParser()
         self._worker_config = worker_config or WorkerConfig(
@@ -293,6 +315,11 @@ class HandoffCoordinator:
             else default_recovery_confirmation
         )
         self._max_consecutive_handoffs = max_consecutive_handoffs
+
+    @property
+    def signal_repository(self) -> SignalRepository:
+        """SignalRepository port used by this coordinator."""
+        return self._signal_repository
 
     @property
     def max_consecutive_handoffs(self) -> int:
@@ -840,10 +867,17 @@ class HandoffCoordinator:
                     continue
 
                 # 5. Check if ready signal is present
-                if (
+                is_ready_signal = (
                     result.ready_signal_present
                     or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-                ):
+                )
+                if not is_ready_signal and self._signal_repository is not None:
+                    try:
+                        is_ready_signal = self._signal_repository.read_ready(ticket.id) is not None
+                    except Exception:
+                        pass
+
+                if is_ready_signal:
                     return WorkerRunResult(
                         status=SingleCycleStatus.READY,
                         session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
@@ -852,6 +886,35 @@ class HandoffCoordinator:
                         handoffs=consecutive_handoffs,
                         occupancy=current_occupancy,
                         ready_signal_present=True,
+                        handoff_requested_at=last_handoff_requested_at,
+                        checkpoint_path=last_checkpoint_path,
+                        run_results=tuple(session_runs),
+                    )
+
+                # 5.5. Check if pending question signal exists
+                pending_question = None
+                if self._signal_repository is not None:
+                    try:
+                        pending_question = self._signal_repository.read_pending_question(ticket.id)
+                    except Exception:
+                        pass
+
+                if pending_question is not None:
+                    active_sid = source_session_id or (
+                        observed_session_ids[-1] if observed_session_ids else None
+                    )
+                    return WorkerRunResult(
+                        status=SingleCycleStatus.QUESTION_PENDING,
+                        session_id=active_sid or (
+                            observed_session_ids[0] if observed_session_ids else None
+                        ),
+                        resumed_session_id=(
+                            observed_session_ids[-1] if len(observed_session_ids) > 1 else None
+                        ),
+                        session_ids=tuple(observed_session_ids),
+                        handoffs=consecutive_handoffs,
+                        occupancy=current_occupancy,
+                        ready_signal_present=False,
                         handoff_requested_at=last_handoff_requested_at,
                         checkpoint_path=last_checkpoint_path,
                         run_results=tuple(session_runs),

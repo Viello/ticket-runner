@@ -278,3 +278,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Using `input` (or `print`) as a default argument value in a class `__init__` binds the builtin at import time, so monkeypatching `builtins.input` in tests has no effect on instances created afterward and "defaults to the builtin" is untestable.
 - **Solution**: Give injectable seam parameters `None` defaults and resolve the builtin inside `__init__` (`self._input_fn = input_fn if input_fn is not None else input`) so the default resolves at instantiation time and remains swappable via monkeypatch.
 
+### Signal-Armed Termination Grace Clock Sampling in Streaming Test Doubles
+- **Problem**: In mock streaming process handles where stdout lines are yielded sequentially, authoring the Signal file and advancing the injected clock in the same yield block causes the supervisor to observe the Signal for the first time *after* the clock has already advanced, setting `signal_first_seen_at` to the advanced timestamp (`now`) and masking the elapsed grace duration before the handle generator closes cleanly with `StopAsyncIteration` (`EXITED`).
+- **Solution**: Emit an intermediate progress line at `t=0` after authoring the Signal file so the supervisor registers the initial file presence timestamp before the mock stream advances the clock past the 10-second grace threshold.
+
+### Signal-Killed Process Exit Code Non-Zero Classification
+- **Problem**: Force-killing a lingering subprocess via `taskkill /T /F` or OS process ladder returns non-zero termination exit codes (e.g. -15, 1, or 128+9), which causes naive crash detection (`exit_code != 0`) to falsely classify an intentional signal-armed kill as an unexpected process crash and trigger unwanted crash retries.
+- **Solution**: Classify crashes strictly by termination reason: explicitly exempt `RunTerminationReason.KILLED_SIGNAL` from `SessionRunResult.is_crash` (`False`), allowing downstream verification to proceed directly with ready signal inspection.
+
+### Untouched Question File Preservation Across Handoff Cycles
+- **Problem**: When a Worker emits a clarification question and exits cleanly or is signal-killed, downstream handoff recovery paths (exit-0 nudge or crash retry) re-invoke the session with nudge/retry prompts, clobbering the question workflow or advancing attempt budgets prematurely.
+- **Solution**: In `HandoffCoordinator.run_cycle`, evaluate pending question Signals before crash or nudge recovery branches; if `read_pending_question` returns non-None, immediately yield `SingleCycleStatus.QUESTION_PENDING` with the active session ID populated, leaving the on-disk question artifact untouched for human/gateway interaction.
+
+

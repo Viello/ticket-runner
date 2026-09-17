@@ -982,3 +982,469 @@ def test_security_no_process_survives_run_return_on_exception(tmp_path: Path) ->
     )
 
 
+# --- T030: Signal-Armed Termination Tests ---
+
+
+def test_signal_armed_termination_kills_streaming_worker_after_grace(tmp_path: Path) -> None:
+    """A Worker that writes the ready Signal and keeps streaming is killed after exactly 10s grace.
+
+    Classification records reason=KILLED_SIGNAL, is_crash=False, and ready_signal_present=True.
+    """
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_signalGrace1"
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T030")
+
+    class StreamingAfterSignalHandle:
+        def __init__(self) -> None:
+            self.pid = 7788
+            self.stderr = "worker trace\n"
+            self.terminated = False
+
+        async def stdout_lines(self):
+            # Line 1: worker starts
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            # Worker writes ready signal to disk while clock is at 0.0
+            ready_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/domain/test.py"],
+                    "self_review_notes": "Clean self review.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            # Worker emits progress event at t=0 so supervisor observes signal presence
+            yield json.dumps({
+                "type": "text",
+                "sessionID": session_id,
+                "part": {"text": "Ready signal written"},
+            })
+            # Now worker keeps streaming, clock advances past 10s grace
+            clock_time[0] = 10.0
+            await asyncio.sleep(0.001)
+            # Line 3: worker keeps streaming beyond grace
+            yield json.dumps({
+                "type": "text",
+                "sessionID": session_id,
+                "part": {"text": "I am still working after ready signal"},
+            })
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = StreamingAfterSignalHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "signal prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    result = asyncio.run(supervisor.run("T030", prompt="signal prompt"))
+
+    assert result.reason == RunTerminationReason.KILLED_SIGNAL
+    assert result.is_crash is False
+    assert result.ready_signal_present is True
+    assert handle.terminated is True
+    assert any(
+        cmd == ["taskkill", "/PID", "7788", "/T", "/F"]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_worker_exiting_within_signal_grace_keeps_reason_exited_and_is_not_killed(tmp_path: Path) -> None:
+    """A Worker that writes the ready Signal and exits within 10s grace is not killed and keeps EXITED."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_graceExitOk"
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T030")
+
+    class CleanExitHandle:
+        def __init__(self) -> None:
+            self.pid = 7789
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            ready_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": "Done.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            # Advance clock by 4 seconds (well within 10s grace)
+            clock_time[0] = 4.0
+            await asyncio.sleep(0.001)
+            # Worker process exits cleanly without producing further lines
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = CleanExitHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    result = asyncio.run(supervisor.run("T030", prompt="prompt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.is_crash is False
+    assert result.ready_signal_present is True
+    assert handle.terminated is False
+    assert not any(
+        cmd[:2] == ["taskkill", "/PID"]
+        for cmd in fake_runner.commands
+    )
+
+
+def test_signal_armed_termination_with_question_signal(tmp_path: Path) -> None:
+    """A Worker that writes a pending question Signal and lingers past 10s grace is killed with KILLED_SIGNAL."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_questionLingers"
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_questions_dir()
+    question_file = runtime_paths.question_path("T030")
+
+    class LingeringQuestionHandle:
+        def __init__(self) -> None:
+            self.pid = 7790
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            question_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "question": "Which database engine should be targeted?",
+                    "type": "choice",
+                    "options": ["sqlite", "postgres"],
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            # Emit text at t=0 so supervisor sees the question signal
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "Question written"}})
+            # Advance clock past 10s grace
+            clock_time[0] = 12.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "Waiting..."}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = LingeringQuestionHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "question prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    result = asyncio.run(supervisor.run("T030", prompt="question prompt"))
+
+    assert result.reason == RunTerminationReason.KILLED_SIGNAL
+    assert result.is_crash is False
+    assert handle.terminated is True
+
+
+def test_supervisor_reused_resets_signal_grace_state_per_run(tmp_path: Path) -> None:
+    """A WorkerSupervisor reused across chained runs resets its signal grace state per run."""
+    fake_runner = FakeCommandRunner()
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T030")
+
+    class FirstRunHandle:
+        def __init__(self) -> None:
+            self.pid = 1101
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": "ses_run1"})
+            ready_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": "Done.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield json.dumps({"type": "text", "sessionID": "ses_run1", "part": {"text": "signal emitted"}})
+            clock_time[0] = 10.5
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "text", "sessionID": "ses_run1", "part": {"text": "after ready"}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    class SecondRunHandle:
+        def __init__(self) -> None:
+            self.pid = 1102
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            # Run 2 starts at clock=100.0 without any signals present
+            yield json.dumps({"type": "step_start", "sessionID": "ses_run2"})
+            clock_time[0] = 120.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "step_finish", "sessionID": "ses_run2", "part": {"tokens": {"total": 5000}}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    h1 = FirstRunHandle()
+    h2 = SecondRunHandle()
+
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "prompt 1"],
+        h1,
+    )
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "prompt 2"],
+        h2,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    # Run 1: gets killed after 10s grace
+    res1 = asyncio.run(supervisor.run("T030", prompt="prompt 1"))
+    assert res1.reason == RunTerminationReason.KILLED_SIGNAL
+
+    # Remove ready file for Run 2
+    ready_file.unlink()
+    clock_time[0] = 100.0
+
+    # Run 2: grace state is reset, runs cleanly and exits EXITED
+    res2 = asyncio.run(supervisor.run("T030", prompt="prompt 2"))
+    assert res2.reason == RunTerminationReason.EXITED
+    assert h2.terminated is False
+
+
+def test_bounded_run_enforces_signal_grace(tmp_path: Path) -> None:
+    """A bounded run (bounded=True) monitors signals and kills worker when grace elapses."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_boundedSignal"
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T030")
+
+    class BoundedSignalHandle:
+        def __init__(self) -> None:
+            self.pid = 9988
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            ready_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": "Done.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "signal ready"}})
+            clock_time[0] = 10.0
+            await asyncio.sleep(0.001)
+            yield json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "still alive"}})
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = BoundedSignalHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "bounded prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    result = asyncio.run(supervisor.run("T030", prompt="bounded prompt", bounded=True))
+    assert result.reason == RunTerminationReason.KILLED_SIGNAL
+    assert result.is_crash is False
+    assert handle.terminated is True
+
+
+def test_ceiling_takes_precedence_over_signal_grace(tmp_path: Path) -> None:
+    """If ceiling is breached after signal appears, KILLED_CEILING takes priority."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_ceilingWins"
+    clock_time = [0.0]
+
+    def fake_clock() -> float:
+        return clock_time[0]
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T030")
+
+    class CeilingHandle:
+        def __init__(self) -> None:
+            self.pid = 9977
+            self.stderr = ""
+            self.terminated = False
+
+        async def stdout_lines(self):
+            yield json.dumps({"type": "step_start", "sessionID": session_id})
+            ready_file.write_text(
+                json.dumps({
+                    "ticket_id": "T030",
+                    "status": "ready_for_verification",
+                    "modified_files": [],
+                    "self_review_notes": "Done.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            # Advance clock by only 2 seconds (well within 10s grace)
+            clock_time[0] = 2.0
+            await asyncio.sleep(0.001)
+            # Step finish crossing ceiling (150k)
+            yield json.dumps({
+                "type": "step_finish",
+                "sessionID": session_id,
+                "part": {"tokens": {"total": 150000}},
+            })
+
+        def __aiter__(self):
+            return self.stdout_lines()
+
+        async def wait(self) -> int:
+            return -15
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    handle = CeilingHandle()
+    fake_runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", "prompt"],
+        handle,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        clock=fake_clock,
+    )
+
+    def _on_action(action, occ):
+        if action in ("ceiling", "CEILING"):
+            supervisor.request_kill(RunTerminationReason.KILLED_CEILING)
+
+    supervisor.on_budget_action = _on_action
+
+    result = asyncio.run(supervisor.run("T030", prompt="prompt"))
+    assert result.reason == RunTerminationReason.KILLED_CEILING
+    assert handle.terminated is True
+
+
+
+
