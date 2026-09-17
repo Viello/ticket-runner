@@ -8,10 +8,12 @@ from typing import Any
 import pytest
 
 from runner.application.doctor import CheckResult, Doctor, DoctorReport
+from runner.application.git_operations import GitOperations
 from runner.application.queue_orchestrator import (
     QueueOrchestrator,
     TicketOutcome,
 )
+from runner.container import build_container
 from runner.domain.config import (
     DiscordConfig,
     GitConfig,
@@ -123,11 +125,12 @@ def test_cli_start_threads_config_path(
     assert received_config_path == Path("custom.yaml")
 
 
-def test_cli_start_with_pending_tickets_and_no_processor_reports_spec_04(
+def test_cli_start_with_pending_tickets_processes_through_container(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    fake_doc = FakeDoctorPassing()
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
     monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
 
     pending_ticket = Ticket(
@@ -141,15 +144,57 @@ def test_cli_start_with_pending_tickets_and_no_processor_reports_spec_04(
         path=Path("docs/tickets/test/T001-pending.md"),
     )
     ticket_repo = FakeTicketRepository([pending_ticket])
-    orchestrator = QueueOrchestrator(ticket_store=ticket_repo, processor=None)
-    monkeypatch.setattr(ticket_runner, "QueueOrchestrator", lambda *args, **kwargs: orchestrator)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register(["git", "add", "."], stdout="")
+    fake_runner.register(["git", "commit", "-m"], stdout="")
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="a" * 40 + "\n")
+    fake_git_ops = GitOperations(runner=fake_runner)
+
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        git_operations=fake_git_ops,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
 
     code = ticket_runner.main(["start", "--local-only"])
-    assert code == 1
+    assert code == 0
     captured = capsys.readouterr()
-    assert "Worker execution will arrive in Spec 03" not in captured.out
-    assert "Spec 04" in captured.out
-    # Repository was untouched
+    assert "Queue complete" in captured.out
+    assert pending_ticket.status == TicketStatus.COMPLETED
+
+
+def test_cli_start_aborted_by_operator_exits_with_code_2(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Pending Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-pending.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.aborted(details="Intervention abort")),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "Aborted" in captured.out or "aborted" in captured.out.lower()
     assert pending_ticket.status == TicketStatus.PENDING
 
 
@@ -162,8 +207,8 @@ def test_cli_start_empty_queue_terminates_cleanly(
     monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
 
     ticket_repo = FakeTicketRepository([])
-    orchestrator = QueueOrchestrator(ticket_store=ticket_repo)
-    monkeypatch.setattr(ticket_runner, "QueueOrchestrator", lambda *args, **kwargs: orchestrator)
+    fake_container = build_container(dummy_config, ticket_store=ticket_repo)
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
 
     code = ticket_runner.main(["start", "--local-only"])
     assert code == 0
@@ -180,10 +225,10 @@ def test_cli_start_empty_queue_standby_with_injected_stop(
     monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
 
     ticket_repo = FakeTicketRepository([])
-    orchestrator = QueueOrchestrator(ticket_store=ticket_repo)
-    monkeypatch.setattr(ticket_runner, "QueueOrchestrator", lambda *args, **kwargs: orchestrator)
+    fake_container = build_container(dummy_config, ticket_store=ticket_repo)
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
 
-    # Inject max_standby_iterations=1 so standby exits after 1 check
+    orchestrator = fake_container.orchestrator
     original_run_lifecycle = orchestrator.run_lifecycle
 
     async def patched_run_lifecycle(*args: Any, **kwargs: Any) -> int:

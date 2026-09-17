@@ -317,3 +317,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Session ID Continuity Across Question Resume
 - **Problem**: Resuming an answered question in OpenCode with a fresh session ID breaks conversational context, forcing the model to re-analyze the codebase from scratch.
 - **Solution**: Preserve `active_session_id` on the `VerificationLoop` across question interruptions and resume the Worker with the identical session identifier carrying `"User answered: <answer>. Proceed with implementation."`.
+
+### Composition Root Overrides for In-Process Test Isolation
+- **Problem**: When `build_container` initializes real adapters by default, behavioral tests running in-process can inadvertently trigger real subprocess executions, scan production ticket queues, or attempt live git commits against the host working tree.
+- **Solution**: Provide keyword-only optional overrides on `build_container` for all I/O adapters and interactors (`command_runner`, `intervention_gateway`, `ticket_store`, `gotchas_store`, `lock`, `git_operations`, `runtime_paths`), allowing tests to inject in-memory doubles in one call.
+
+### Sentinel Lock Release Before Idle Standby and on Abort Paths
+- **Problem**: Holding an OS file lock across idle standby sleep loops or during operator abort exits creates persistent Windows file-sharing locks (`PermissionError` / `[WinError 32]`) that block subsequent test fixtures or CLI instances from modifying or acquiring the queue.
+- **Solution**: Explicitly release the sentinel lock immediately prior to entering standby idle watch loops, and guarantee lock release across all termination and error pathways (including `UserAbortError`) inside a `finally` block before returning exit code 2.
+

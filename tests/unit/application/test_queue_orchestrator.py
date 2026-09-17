@@ -16,6 +16,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
 )
 from runner.domain.config import LifecycleConfig
+from runner.domain.exceptions import UserAbortError
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_ticket_repository import FakeTicketRepository
@@ -608,7 +609,7 @@ def test_run_lifecycle_pending_without_processor_raises_before_lock(
         processor=None,
     )
 
-    with pytest.raises(RuntimeError, match="No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."):
+    with pytest.raises(RuntimeError, match="No ticket processor configured."):
         asyncio.run(orchestrator.run_lifecycle())
 
     # Invariants: lock not acquired, no git commands executed, ticket untouched
@@ -645,7 +646,7 @@ def test_run_lifecycle_standby_raises_when_ticket_appears_without_processor(
         await add_task
         await run_task
 
-    with pytest.raises(RuntimeError, match="No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."):
+    with pytest.raises(RuntimeError, match="No ticket processor configured."):
         asyncio.run(scenario())
 
     assert orchestrator.is_locked is False
@@ -707,3 +708,106 @@ def test_run_lifecycle_clean_slate_always_on_queue_exhaustion(
 
     assert exit_code == 0
     assert clean_slate_invoked == ["02-clean"]
+
+
+def test_run_lifecycle_abort_records_outcome_releases_lock_and_returns_code_2(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    ticket = _make_ticket("T001")
+    ticket_repo = FakeTicketRepository([ticket])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.aborted(details="Operator abort requested")),
+    )
+
+    exit_code = asyncio.run(orchestrator.run_lifecycle(lifecycle="terminate"))
+
+    assert exit_code == 2
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert orchestrator.last_outcome is not None
+    assert orchestrator.last_outcome.is_aborted is True
+    assert orchestrator.last_outcome.status == TicketOutcomeStatus.ABORTED
+    assert "Operator abort requested" in str(orchestrator.last_outcome.details)
+
+    # Invariants: no finalize (ticket remains pending), no git reset, no commit
+    assert ticket.status == TicketStatus.PENDING
+    assert ticket_repo.select_next_pending() is not None
+    assert ticket_repo.select_next_pending().id == "T001"
+    for invocation in fake_runner.invocations:
+        assert "commit" not in invocation.argv
+        assert "reset" not in invocation.argv
+
+
+def test_run_lifecycle_standby_abort_stops_lifecycle_and_returns_code_2(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.aborted(details="Standby abort")),
+    )
+
+    async def scenario() -> int:
+        async def add_ticket_later() -> None:
+            await asyncio.sleep(0.02)
+            ticket_repo.add_ticket(_make_ticket("T001"))
+
+        add_task = asyncio.create_task(add_ticket_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(lifecycle="standby", poll_interval=0.01)
+        )
+        await add_task
+        return await run_task
+
+    exit_code = asyncio.run(scenario())
+
+    assert exit_code == 2
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert orchestrator.last_outcome is not None
+    assert orchestrator.last_outcome.is_aborted is True
+
+
+def test_run_next_abort_records_last_outcome_releases_lock_and_raises_abort_error(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    ticket = _make_ticket("T001")
+    ticket_repo = FakeTicketRepository([ticket])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.aborted(details="Direct abort")),
+    )
+
+    with pytest.raises(UserAbortError, match="Direct abort"):
+        asyncio.run(orchestrator.run_next())
+
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert orchestrator.last_outcome is not None
+    assert orchestrator.last_outcome.is_aborted is True
+    assert ticket.status == TicketStatus.PENDING
+    for invocation in fake_runner.invocations:
+        assert "commit" not in invocation.argv
+        assert "reset" not in invocation.argv
+

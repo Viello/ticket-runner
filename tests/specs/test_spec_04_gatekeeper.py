@@ -41,7 +41,7 @@ from runner.application.gatekeeper import (
     build_shell_argv,
 )
 from runner.application.git_operations import GitOperations
-from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.queue_orchestrator import QueueOrchestrator, TicketOutcomeStatus
 from runner.application.ticket_processor import TicketProcessor
 from runner.application.handoff_coordinator import (
     EscalationNotice,
@@ -56,7 +56,18 @@ from runner.application.worker_supervisor import (
     SessionRunResult,
     WorkerSupervisor,
 )
-from runner.domain.config import VerificationConfig, WorkerConfig
+from runner.container import RunnerContainer, build_container
+from runner.domain.config import (
+    DiscordConfig,
+    GitConfig,
+    LifecycleConfig,
+    PresenceConfig,
+    ProjectConfig,
+    RunnerConfig,
+    TokenBudgetConfig,
+    VerificationConfig,
+    WorkerConfig,
+)
 from runner.domain.exceptions import UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import QuestionSignal, ReadySignal, SignalStatus
@@ -1466,4 +1477,190 @@ def test_us11_orchestrator_ready_wins_precedence_when_stale_question_exists(tmp_
     assert not ticket_file.exists()
     relocated = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
     assert relocated.is_file()
+
+
+# --- US 10 / US 12: Composition Root & Abort Handling Behavioral Tests ---
+
+
+def test_us12_build_container_end_to_end_in_process_success(tmp_path: Path) -> None:
+    """T034 / US 12: build_container wires real pipeline and processes a Ticket end-to-end in-process."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T034")
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t034Container"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        verification=VerificationConfig(test_cmd=test_cmd, max_attempts=3),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(queue_completion="terminate"),
+        git=GitConfig(),
+    )
+
+    container = build_container(
+        config=config,
+        command_runner=sc.runner,
+        intervention_gateway=sc.gateway,
+        ticket_store=DirectoryTicketStore(root_dir=sc.root / "docs" / "tickets"),
+        gotchas_store=GotchasStore(path=sc.root / "docs" / "tickets" / "gotchas.md"),
+        lock=QueueFileLock(lock_path=sc.root / ".agent" / ".queue.lock"),
+        runtime_paths=sc.runtime_paths,
+        cwd=sc.root,
+        clock=lambda: sc.clock_time[0],
+    )
+
+    initial_prompt = container.processor.build_initial_prompt(sc.ticket)
+
+    class WorkerHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9801)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            mod_file = sc.root / "runner" / "composed.py"
+            mod_file.parent.mkdir(parents=True, exist_ok=True)
+            mod_file.write_text("# composed pipeline implementation", encoding="utf-8")
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/composed.py"],
+                    "self_review_notes": "All requirements implemented via container.",
+                    "new_gotchas": [],
+                    "scope": "domain",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=4000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        WorkerHandle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed in 0.01s"], exit_code=0)
+
+    exit_code = asyncio.run(container.orchestrator.run_lifecycle(lifecycle=config.lifecycle))
+
+    assert exit_code == 0
+    assert container.orchestrator.last_outcome is not None
+    assert container.orchestrator.last_outcome.is_approved is True
+    assert container.orchestrator.last_outcome.commit_sha == "f" * 40
+    assert container.lock.is_locked is False
+
+    # Ready signal consumed, ticket relocated, commit recorded
+    assert not sc.ready_signal_path.exists()
+    assert not ticket_file.exists()
+    relocated = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated.is_file()
+
+
+def test_us10_build_container_abort_mid_loop_leaves_tree_byte_identical(tmp_path: Path) -> None:
+    """T034 / US 10: [A]bort mid-loop leaves working tree byte-identical, stops lifecycle, releases lock, and exits with code 2."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T034",
+        decisions=[InterventionDecision(action=InterventionAction.ABORT)],
+    )
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t034Abort"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        verification=VerificationConfig(test_cmd=test_cmd, max_attempts=1),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(queue_completion="standby"),
+        git=GitConfig(),
+    )
+
+    container = build_container(
+        config=config,
+        command_runner=sc.runner,
+        intervention_gateway=sc.gateway,
+        ticket_store=DirectoryTicketStore(root_dir=sc.root / "docs" / "tickets"),
+        gotchas_store=GotchasStore(path=sc.root / "docs" / "tickets" / "gotchas.md"),
+        lock=QueueFileLock(lock_path=sc.root / ".agent" / ".queue.lock"),
+        runtime_paths=sc.runtime_paths,
+        cwd=sc.root,
+        clock=lambda: sc.clock_time[0],
+    )
+
+    initial_prompt = container.processor.build_initial_prompt(sc.ticket)
+
+    # Operator has uncommitted WIP edits that must remain completely untouched
+    wip_file = sc.root / "runner" / "work_in_progress.py"
+    wip_file.parent.mkdir(parents=True, exist_ok=True)
+    wip_content = b"# uncommitted operator debug work\nprint('byte-identical-test')\n"
+    wip_file.write_bytes(wip_content)
+
+    class FailingWorkerHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9802)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/work_in_progress.py"],
+                    "self_review_notes": "Implemented but failing tests",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=2000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        FailingWorkerHandle(),
+    )
+    # Verification fails on first attempt, tripping Circuit Breaker
+    sc.runner.register_spawn(shell_test_cmd, stderr="AssertionError: verification failed", exit_code=1)
+
+    exit_code = asyncio.run(container.orchestrator.run_lifecycle(lifecycle=config.lifecycle))
+
+    # 1. CLI / lifecycle exited with code 2
+    assert exit_code == 2
+
+    # 2. Working tree is byte-identical: no reset, no commit, no archive
+    assert wip_file.is_file()
+    assert wip_file.read_bytes() == wip_content
+    for inv in sc.runner.invocations:
+        assert "reset" not in inv.argv
+        assert "commit" not in inv.argv
+
+    # 3. Ticket was NOT finalized or relocated
+    assert ticket_file.is_file()
+    relocated = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert not relocated.exists()
+
+    # 4. Sentinel lock was released
+    assert container.lock.is_locked is False
+
+    # 5. Outcome was recorded as ABORTED
+    assert container.orchestrator.last_outcome is not None
+    assert container.orchestrator.last_outcome.is_aborted is True
+    assert container.orchestrator.last_outcome.status == TicketOutcomeStatus.ABORTED
+
 

@@ -11,6 +11,8 @@ import sys
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.application.doctor import Doctor, DoctorReport
 from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.container import RunnerContainer, build_container
+from runner.domain.exceptions import UserAbortError
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -131,6 +133,7 @@ async def run_start(
     doctor_instance: Doctor | None = None,
     orchestrator_instance: QueueOrchestrator | None = None,
     poll_interval: float = 5.0,
+    container_instance: RunnerContainer | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -147,13 +150,22 @@ async def run_start(
         loader = YamlConfigLoader()
         config = loader.load(config_path)
 
-    orchestrator = orchestrator_instance or QueueOrchestrator()
+    if orchestrator_instance is not None:
+        orchestrator = orchestrator_instance
+    elif container_instance is not None:
+        orchestrator = container_instance.orchestrator
+    else:
+        container = build_container(config=config)
+        orchestrator = container.orchestrator
 
     try:
         return await orchestrator.run_lifecycle(
             lifecycle=config.lifecycle,
             poll_interval=poll_interval,
         )
+    except UserAbortError as exc:
+        print(f"\n[Runner] Aborted: {exc}")
+        return 2
     except RuntimeError as exc:
         print(f"\n[Runner] Error: {exc}")
         return 1
