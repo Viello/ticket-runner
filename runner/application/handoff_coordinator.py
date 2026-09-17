@@ -895,15 +895,19 @@ class HandoffCoordinator:
                         run_results=tuple(session_runs),
                     )
 
-                # 5.5. Check if pending question signal exists
-                pending_question = None
+                # 5.5. Check if pending or malformed question signal exists
+                is_question_signal = False
                 if self._signal_repository is not None:
                     try:
-                        pending_question = self._signal_repository.read_pending_question(ticket.id)
+                        is_question_signal = self._signal_repository.read_pending_question(ticket.id) is not None
+                    except SignalFormatError:
+                        is_question_signal = True
                     except Exception:
                         pass
+                elif self._runtime_paths.question_path(ticket.id).is_file():
+                    is_question_signal = True
 
-                if pending_question is not None:
+                if is_question_signal:
                     active_sid = source_session_id or (
                         observed_session_ids[-1] if observed_session_ids else None
                     )

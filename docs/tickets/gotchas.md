@@ -305,3 +305,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Per-Ticket Verification Budget Survival Across Question Interleaves
 - **Problem**: When a worker asks a clarifying question mid-attempt, returning to the runner/gateway could inadvertently reset or advance the verification attempt counter if attempt tracking is stored per invocation rather than per Ticket.
 - **Solution**: Maintain the verification attempt counter on the stateful `VerificationLoop` instance per Ticket; return `QUESTION_PENDING` immediately without incrementing the budget counter, ensuring re-entry resumes with the exact remaining attempts intact.
+
+### Atomic Question Answering and Audit Retention
+- **Problem**: When rewriting question signals from `pending` to `answered`, non-atomic writes or naive deletion would either lose original question metadata (type, options, timestamps) or destroy the audit trail needed for post-run verification.
+- **Solution**: Rewrite the question file atomically via `atomic_write_text` preserving all payload fields (`ticket_id`, `type`, `options`, `created_at`) while updating only `status: answered` and `answer`; retain the answered question file on disk for audit (single-use deletion applies only to ready signals).
+
+### Ready-Wins Signal Precedence Over Stale Questions
+- **Problem**: If both a pending question and a valid ready signal exist on disk simultaneously (e.g. from an earlier interrupted run or concurrent writes), prompting for the question halts autonomous execution unnecessarily.
+- **Solution**: Enforce ready-wins precedence: validate the ready signal first; if valid, clean the stale question signal immediately so it cannot re-trigger, bypass human questioning, and proceed directly to Gatekeeper verification.
+
+### Session ID Continuity Across Question Resume
+- **Problem**: Resuming an answered question in OpenCode with a fresh session ID breaks conversational context, forcing the model to re-analyze the codebase from scratch.
+- **Solution**: Preserve `active_session_id` on the `VerificationLoop` across question interruptions and resume the Worker with the identical session identifier carrying `"User answered: <answer>. Proceed with implementation."`.

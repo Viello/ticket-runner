@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from runner.application.gatekeeper import (
     GatekeeperCommandExecutor,
     VerificationLoop,
     WorkerCycleRunner,
+    build_verification_failure_prompt,
 )
 from runner.application.handoff_coordinator import (
     HandoffCoordinator,
@@ -26,7 +28,7 @@ from runner.application.queue_orchestrator import (
     TicketProcessor as TicketProcessorProtocol,
 )
 from runner.domain.config import VerificationConfig, WorkerConfig
-from runner.domain.exceptions import UserAbortError
+from runner.domain.exceptions import SignalFormatError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
@@ -181,41 +183,79 @@ class GatekeeperTicketProcessor:
                 initial_prompt=initial_prompt,
             )
 
-        try:
-            result = await loop.run()
-        except UserAbortError as exc:
-            return TicketOutcome.aborted(details=str(exc))
+        pending_prompt: str | None = None
+        while True:
+            try:
+                result = await loop.run(prompt=pending_prompt)
+            except UserAbortError as exc:
+                return TicketOutcome.aborted(details=str(exc))
 
-        # 4. Map verification loop result to TicketOutcome
-        if result.is_passed:
-            ready_signal = result.ready_signal
-            if ready_signal is not None:
-                changes = tuple(f"Update {p}" for p in ready_signal.modified_files)
-                new_gotchas = ready_signal.new_gotchas
-                scope = ready_signal.scope
-                if ready_signal.self_review_notes and self._printer is not None:
-                    self._printer(f"[{ticket.id}] Self-review notes: {ready_signal.self_review_notes}")
-            else:
-                changes = ()
-                new_gotchas = ()
-                scope = None
+            # 4. Map verification loop result to TicketOutcome
+            if result.is_passed:
+                ready_signal = result.ready_signal
+                if ready_signal is not None:
+                    changes = tuple(f"Update {p}" for p in ready_signal.modified_files)
+                    new_gotchas = ready_signal.new_gotchas
+                    scope = ready_signal.scope
+                    if ready_signal.self_review_notes and self._printer is not None:
+                        self._printer(f"[{ticket.id}] Self-review notes: {ready_signal.self_review_notes}")
+                else:
+                    changes = ()
+                    new_gotchas = ()
+                    scope = None
 
-            return TicketOutcome.approved(
-                new_gotchas=new_gotchas,
-                changes=changes,
-                scope=scope,
-            )
+                return TicketOutcome.approved(
+                    new_gotchas=new_gotchas,
+                    changes=changes,
+                    scope=scope,
+                )
 
-        if result.is_skipped:
-            diagnostics = result.diagnostics or loop.last_diagnostics or ""
-            return TicketOutcome.skipped(details=diagnostics)
+            if result.is_skipped:
+                diagnostics = result.diagnostics or loop.last_diagnostics or ""
+                return TicketOutcome.skipped(details=diagnostics)
 
-        if result.is_question_pending:
-            raise NotImplementedError(
-                f"Question handling for ticket '{ticket.id}' will be implemented in T033."
-            )
+            if result.is_question_pending:
+                # Precedence: check if a valid ready signal exists (ready wins)
+                ready: ReadySignal | None = None
+                try:
+                    ready = self._signal_repository.read_ready(ticket.id)
+                except SignalFormatError:
+                    ready = None
 
-        raise ValueError(f"Unsupported verification loop status: {result.status}")
+                if ready is not None:
+                    if hasattr(self._signal_repository, "clean_question"):
+                        self._signal_repository.clean_question(ticket.id)
+                    pending_prompt = None
+                    continue
+
+                # Read pending question
+                try:
+                    question = self._signal_repository.read_pending_question(ticket.id)
+                except SignalFormatError as exc:
+                    if hasattr(self._signal_repository, "clean_question"):
+                        self._signal_repository.clean_question(ticket.id)
+                    pending_prompt = build_verification_failure_prompt(ticket, str(exc))
+                    continue
+
+                if question is None:
+                    pending_prompt = None
+                    continue
+
+                # Prompt through InterventionGateway.ask_question
+                raw_answer = self._intervention_gateway.ask_question(question)
+                if inspect.iscoroutine(raw_answer):
+                    answer = await raw_answer
+                else:
+                    answer = raw_answer
+
+                # Write answer back by rewriting question Signal (status: answered, answer)
+                self._signal_repository.write_answer(ticket.id, answer)
+
+                # Resume same Worker Session with prompt carrying answer
+                pending_prompt = f"User answered: {answer}. Proceed with implementation."
+                continue
+
+            raise ValueError(f"Unsupported verification loop status: {result.status}")
 
 
 TicketProcessor = GatekeeperTicketProcessor

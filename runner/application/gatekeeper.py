@@ -443,6 +443,11 @@ class VerificationLoop:
         """Last captured failure diagnostics."""
         return self._last_diagnostics
 
+    def _clean_question(self, ticket_id: str) -> None:
+        """Clean any stale or malformed question signal for the ticket."""
+        if hasattr(self._signal_repository, "clean_question"):
+            self._signal_repository.clean_question(ticket_id)
+
     async def run(
         self,
         *,
@@ -487,11 +492,69 @@ class VerificationLoop:
             # Reset pending prompt since it has been consumed
             self._pending_prompt = None
 
-            # 2. Check for question interruption (0 budget consumed!)
-            if (
+            # Precedence check: if a valid ready Signal exists, it wins over any stale question
+            ready_signal: ReadySignal | None = None
+            ready_format_error: SignalFormatError | None = None
+            try:
+                ready_signal = self._signal_repository.read_ready(self._ticket.id)
+            except SignalFormatError as exc:
+                ready_format_error = exc
+
+            if ready_signal is not None:
+                # Valid ready signal wins: clean stale question so it cannot re-trigger
+                self._clean_question(self._ticket.id)
+                self._signal_repository.consume_ready(self._ticket.id)
+
+                # Execute Gatekeeper independent verification commands
+                report = await self._executor.verify(self._verification_config)
+                if report.passed:
+                    self._attempts += 1
+                    return VerificationLoopResult.passed(
+                        ready_signal=ready_signal,
+                        report=report,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+
+                # Verification failed
+                diagnostics = "\n\n".join(report.diagnostics)
+                self._attempts += 1
+                self._last_diagnostics = diagnostics
+                action = await self._handle_failure(diagnostics)
+                if action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics=self._last_diagnostics,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+                continue
+
+            # 2. Check for question interruption or malformed question
+            is_question = (
                 run_result.status == SingleCycleStatus.QUESTION_PENDING
                 or run_result.is_question_pending
-            ):
+            )
+
+            pending_question = None
+            try:
+                pending_question = self._signal_repository.read_pending_question(self._ticket.id)
+            except SignalFormatError as exc:
+                # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
+                self._clean_question(self._ticket.id)
+                diagnostics = str(exc)
+                self._attempts += 1
+                self._last_diagnostics = diagnostics
+                action = await self._handle_failure(diagnostics)
+                if action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics=self._last_diagnostics,
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                    )
+                continue
+
+            if pending_question is not None or is_question:
+                # Valid pending question interrupts verification: 0 budget consumed
                 return VerificationLoopResult.question_pending(
                     session_id=self._active_session_id,
                     attempts=self._attempts,
@@ -516,11 +579,9 @@ class VerificationLoop:
                 continue
 
             # 4. Ready signal validation
-            try:
-                ready_signal = self._signal_repository.read_ready(self._ticket.id)
-            except SignalFormatError as exc:
+            if ready_format_error is not None:
                 self._signal_repository.consume_ready(self._ticket.id)
-                diagnostics = str(exc)
+                diagnostics = str(ready_format_error)
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -532,37 +593,9 @@ class VerificationLoop:
                     )
                 continue
 
-            if ready_signal is None:
-                diagnostics = (
-                    f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
-                )
-                self._attempts += 1
-                self._last_diagnostics = diagnostics
-                action = await self._handle_failure(diagnostics)
-                if action == InterventionAction.SKIP:
-                    return VerificationLoopResult.skipped(
-                        diagnostics=self._last_diagnostics,
-                        attempts=self._attempts,
-                        session_id=self._active_session_id,
-                    )
-                continue
-
-            # 5. Consume ready signal (single-use lifecycle)
-            self._signal_repository.consume_ready(self._ticket.id)
-
-            # 6. Execute Gatekeeper independent verification commands
-            report = await self._executor.verify(self._verification_config)
-            if report.passed:
-                self._attempts += 1
-                return VerificationLoopResult.passed(
-                    ready_signal=ready_signal,
-                    report=report,
-                    attempts=self._attempts,
-                    session_id=self._active_session_id,
-                )
-
-            # 7. Verification failed
-            diagnostics = "\n\n".join(report.diagnostics)
+            diagnostics = (
+                f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
+            )
             self._attempts += 1
             self._last_diagnostics = diagnostics
             action = await self._handle_failure(diagnostics)

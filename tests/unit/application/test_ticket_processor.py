@@ -33,7 +33,7 @@ from runner.application.ticket_processor import GatekeeperTicketProcessor, Ticke
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
-from runner.domain.signal import ReadySignal, SignalStatus
+from runner.domain.signal import QuestionSignal, QuestionType, ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_intervention import FakeInterventionGateway
@@ -374,3 +374,349 @@ def test_initialization_with_handoff_coordinator(tmp_path: Path) -> None:
     prompt = processor.build_initial_prompt(ticket)
     assert ticket.id in prompt
     assert "Ready Signal Protocol" in prompt
+
+
+# --- T033: Question Loop & Answer Resume Unit Tests ---
+
+
+def test_choice_question_scripted_answer_and_resume_to_approval(tmp_path: Path) -> None:
+    """A choice question leads to scripted answer 'A', writes answered JSON, resumes session, and passes."""
+    ticket = _make_ticket(ticket_id="T033", title="Question loop ticket")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(answers=["A"])
+
+    question_path = runtime_paths.question_path(ticket.id)
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        if count == 1:
+            # Worker writes choice question
+            question_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "question": "Which caching backend should be selected?",
+                    "type": "choice",
+                    "options": ["A) Redis", "B) Memcached"],
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+        elif count == 2:
+            # Worker verifies answer was recorded, then emits ready signal
+            ready_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/cache.py"],
+                    "self_review_notes": "Implemented choice A.",
+                    "new_gotchas": [],
+                    "scope": "application",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_active"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_active"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert outcome.changes == ("Update runner/cache.py",)
+    assert outcome.scope == "application"
+
+    # Gateway recorded the choice question
+    assert len(gateway.question_prompts) == 1
+    assert gateway.question_prompts[0].question == "Which caching backend should be selected?"
+    assert gateway.question_prompts[0].options == ("A) Redis", "B) Memcached")
+
+    # On-disk JSON shows "answered" plus "A", preserving other fields
+    assert question_path.is_file()
+    saved_payload = json.loads(question_path.read_text(encoding="utf-8"))
+    assert saved_payload["status"] == "answered"
+    assert saved_payload["answer"] == "A"
+    assert saved_payload["type"] == "choice"
+    assert saved_payload["options"] == ["A) Redis", "B) Memcached"]
+    assert saved_payload["ticket_id"] == ticket.id
+
+    # The resume prompt on cycle 2 carried the answer and session_id was preserved
+    assert len(cycle_runner.calls) == 2
+    resume_call = cycle_runner.calls[1]
+    assert resume_call["session_id"] == "ses_active"
+    assert "User answered: A. Proceed with implementation." in resume_call["prompt"]
+
+    # Ready signal was single-use consumed, answered question retained for audit
+    assert not ready_path.exists()
+    assert question_path.exists()
+
+
+def test_two_sequential_questions_preserve_budget_and_session(tmp_path: Path) -> None:
+    """Two sequential questions both work with the budget counter unchanged afterwards."""
+    ticket = _make_ticket(ticket_id="T033")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(answers=["First Answer", "Second Answer"])
+
+    question_path = runtime_paths.question_path(ticket.id)
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        if count == 1:
+            question_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "question": "First question?",
+                    "type": "text",
+                    "options": None,
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+        elif count == 2:
+            question_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "question": "Second question?",
+                    "type": "text",
+                    "options": None,
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+        elif count == 3:
+            ready_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/sequential.py"],
+                    "self_review_notes": "Implemented after 2 questions.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_seq"),
+            WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_seq"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_seq"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        max_attempts=3,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert len(cycle_runner.calls) == 3
+
+    # Both questions prompted
+    assert len(gateway.question_prompts) == 2
+    assert gateway.question_prompts[0].question == "First question?"
+    assert gateway.question_prompts[1].question == "Second question?"
+
+    # Prompts for calls 2 and 3
+    assert cycle_runner.calls[1]["prompt"] == "User answered: First Answer. Proceed with implementation."
+    assert cycle_runner.calls[2]["prompt"] == "User answered: Second Answer. Proceed with implementation."
+    assert cycle_runner.calls[1]["session_id"] == "ses_seq"
+    assert cycle_runner.calls[2]["session_id"] == "ses_seq"
+
+
+def test_ready_wins_precedence_when_both_signals_exist(tmp_path: Path) -> None:
+    """Ready-wins: with a pending question and a valid ready Signal, verification proceeds with no prompt."""
+    ticket = _make_ticket(ticket_id="T033")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    question_path = runtime_paths.question_path(ticket.id)
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        # Worker authored a question AND a valid ready signal
+        question_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "question": "Stale question that shouldn't be asked?",
+                "type": "text",
+                "options": None,
+                "status": "pending",
+                "answer": None,
+                "created_at": "2026-09-17T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/winner.py"],
+                "self_review_notes": "Ready signal wins over question.",
+                "new_gotchas": [],
+                "timestamp": "2026-09-17T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_readyWins")],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    # Human was NEVER prompted
+    assert len(gateway.question_prompts) == 0
+
+    # Stale question was cleaned and ready signal was consumed
+    assert not question_path.exists()
+    assert not ready_path.exists()
+
+
+def test_malformed_question_consumes_attempt_with_parse_error_diagnostics(tmp_path: Path) -> None:
+    """A malformed question consumes one attempt with the parse error fed back as diagnostics."""
+    ticket = _make_ticket(ticket_id="T033")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    question_path = runtime_paths.question_path(ticket.id)
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        if count == 1:
+            # Emits malformed question JSON (missing required field 'question')
+            question_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "type": "text",
+                    "status": "pending",
+                }),
+                encoding="utf-8",
+            )
+        elif count == 2:
+            # Emits valid ready signal
+            ready_path.write_text(
+                json.dumps({
+                    "ticket_id": t.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/fixed.py"],
+                    "self_review_notes": "Fixed after malformed question.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_malformed"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_malformed"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        max_attempts=3,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert len(cycle_runner.calls) == 2
+
+    # Cycle 2 resume prompt received diagnostics with the parse error
+    resume_prompt = cycle_runner.calls[1]["prompt"]
+    assert "Gatekeeper verification failed" in resume_prompt
+    assert "question" in resume_prompt.lower()
+    assert cycle_runner.calls[1]["session_id"] == "ses_malformed"
+
+    # Malformed question file was cleaned
+    assert not question_path.exists()
+
+
+def test_malformed_question_exhausts_budget_trips_circuit_breaker(tmp_path: Path) -> None:
+    """A malformed question when budget is 1 trips circuit breaker; operator skip returns skipped."""
+    ticket = _make_ticket(ticket_id="T033")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    runtime_paths.ensure_questions_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(decisions=["skip"])
+
+    question_path = runtime_paths.question_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        question_path.write_text("NOT VALID JSON", encoding="utf-8")
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_breaker")],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        max_attempts=1,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_skipped is True
+    assert "not valid json" in str(outcome.details).lower()
+    assert len(gateway.request_records) == 1
+    assert gateway.request_records[0].attempt == 1

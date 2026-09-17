@@ -72,6 +72,20 @@ class FilesystemSignalRepository(SignalRepository):
         atomic_write_text(path, _serialize(payload))
         return answered
 
+    def clean_question(self, ticket_id: str) -> None:
+        """Delete the Ticket's question Signal file if pending or malformed, retaining answered files."""
+        path = self._runtime_paths.question_path(ticket_id)
+        text = self._read_text_if_present(path)
+        if text is None:
+            return
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, Mapping) and payload.get("status") == SignalStatus.ANSWERED.value:
+                return
+        except Exception:
+            pass
+        self._remove_if_present(path)
+
     def purge(self, ticket_id: str) -> None:
         """Delete both Signal artifacts for the Ticket, creating directories as needed."""
         self._runtime_paths.ensure_signals_dir()

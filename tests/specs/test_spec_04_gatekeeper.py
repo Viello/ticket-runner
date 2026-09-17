@@ -1262,3 +1262,208 @@ def test_orchestrator_purge_at_start_removes_leftover_signal_files(tmp_path: Pat
     assert outcome.is_approved is True
     assert leftovers_purged_before_worker_start is True
 
+
+# --- T033: Question Loop & Answer Resume Behavioral Tests ---
+
+
+def test_us11_orchestrator_choice_question_scripted_answer_and_resume_to_commit(tmp_path: Path) -> None:
+    """T033 / US 11: Choice question leads to scripted answer, audit retention on disk, resume prompt, and single commit."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T033", answers=["A"])
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t033ChoiceQuestion"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor, commit_scope="queue")
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    class QuestionHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9601)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.question_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "question": "Which database backend should be selected?",
+                    "type": "choice",
+                    "options": ["A) SQLite", "B) Postgres"],
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("text", session_id=session_id, text="Awaiting answer...") + "\n"
+            yield _event("step_finish", session_id=session_id, tokens=2000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    class AnsweredResumeHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9602)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            mod_file = sc.root / "runner" / "database.py"
+            mod_file.parent.mkdir(parents=True, exist_ok=True)
+            mod_file.write_text("# choice A sqlite database", encoding="utf-8")
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/database.py"],
+                    "self_review_notes": "Implemented choice A.",
+                    "new_gotchas": [],
+                    "scope": "application",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=4000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        QuestionHandle(),
+    )
+
+    captured_resumes: list[list[str]] = []
+    original_spawn = sc.runner.spawn
+
+    async def _intercept_resume(cmd: list[str], **kwargs: Any) -> Any:
+        if "--session" in cmd and cmd[:4] == ["opencode", "run", "--format", "json"]:
+            captured_resumes.append(list(cmd))
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return AnsweredResumeHandle()
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercept_resume  # type: ignore
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+    assert outcome.commit_sha == "f" * 40
+
+    # 1. Gateway prompted question and received scripted answer 'A'
+    assert len(sc.gateway.question_prompts) == 1
+    prompted_q = sc.gateway.question_prompts[0]
+    assert prompted_q.question == "Which database backend should be selected?"
+    assert prompted_q.options == ("A) SQLite", "B) Postgres")
+
+    # 2. Worker session resumed with same session_id and answer prompt
+    assert len(captured_resumes) == 1
+    resumed_cmd = captured_resumes[0]
+    assert resumed_cmd[4] == "--session"
+    assert resumed_cmd[5] == session_id
+    assert resumed_cmd[-1] == "User answered: A. Proceed with implementation."
+
+    # 3. Ready signal consumed, but answered question retained for audit
+    assert not sc.ready_signal_path.exists()
+    assert sc.question_path.is_file()
+    saved_q = json.loads(sc.question_path.read_text(encoding="utf-8"))
+    assert saved_q["status"] == "answered"
+    assert saved_q["answer"] == "A"
+    assert saved_q["options"] == ["A) SQLite", "B) Postgres"]
+
+    # 4. Commit produced and ticket relocated
+    assert not ticket_file.exists()
+    relocated = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated.is_file()
+
+
+def test_us11_orchestrator_ready_wins_precedence_when_stale_question_exists(tmp_path: Path) -> None:
+    """T033 / US 11: With both pending question and valid ready Signal, ready wins, no prompt is issued, and question is cleaned."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T033")
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t033ReadyWins"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor, commit_scope="queue")
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    class BothSignalsHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9701)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            mod_file = sc.root / "runner" / "precedence.py"
+            mod_file.parent.mkdir(parents=True, exist_ok=True)
+            mod_file.write_text("# precedence", encoding="utf-8")
+            # Author BOTH a pending question and a valid ready signal
+            sc.question_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "question": "Stale pending question that should be skipped?",
+                    "type": "text",
+                    "options": None,
+                    "status": "pending",
+                    "answer": None,
+                    "created_at": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/precedence.py"],
+                    "self_review_notes": "Implemented and ready wins.",
+                    "new_gotchas": [],
+                    "scope": "domain",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=3000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        BothSignalsHandle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+
+    # 1. Operator was NEVER prompted for the question
+    assert len(sc.gateway.question_prompts) == 0
+
+    # 2. Stale question was cleaned and ready signal consumed
+    assert not sc.question_path.exists()
+    assert not sc.ready_signal_path.exists()
+
+    # 3. Commit authored and ticket relocated
+    assert not ticket_file.exists()
+    relocated = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated.is_file()
+

@@ -1,5 +1,6 @@
 # T033 — Question loop and answer resume
-Status: pending
+Status: completed
+Completed: 2026-09-17T08:42:00Z
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
 Blocked by: T032
 

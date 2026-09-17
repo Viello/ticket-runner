@@ -65,6 +65,17 @@ class SignalRepository(Protocol):
         """
         ...
 
+    def clean_question(self, ticket_id: str) -> None:
+        """Delete the Ticket's question Signal file if pending or malformed.
+
+        Answered question files are retained for audit. Idempotent: absent
+        files are tolerated.
+
+        Args:
+            ticket_id: Ticket identifier owning the question.
+        """
+        ...
+
     def purge(self, ticket_id: str) -> None:
         """Delete both Signal artifacts for the Ticket, creating directories as needed.
 

@@ -22,6 +22,7 @@ class FakeSignalRepository:
         self._read_question_error = read_question_error
         self.write_answer_calls: list[tuple[str, str]] = []
         self.consumed_ready: list[str] = []
+        self.cleaned_questions: list[str] = []
         self.purged_tickets: list[str] = []
 
     def seed_ready(self, signal: ReadySignal) -> None:
@@ -61,6 +62,14 @@ class FakeSignalRepository:
         answered = replace(question, status=SignalStatus.ANSWERED, answer=answer)
         self._questions[ticket_id] = answered
         return answered
+
+    def clean_question(self, ticket_id: str) -> None:
+        """Drop the seeded question if pending or malformed, retaining answered questions."""
+        self.cleaned_questions.append(ticket_id)
+        question = self._questions.get(ticket_id)
+        if question is not None and question.status is SignalStatus.ANSWERED:
+            return
+        self._questions.pop(ticket_id, None)
 
     def purge(self, ticket_id: str) -> None:
         """Record the purge and drop both seeded artifacts."""
