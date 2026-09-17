@@ -1,7 +1,7 @@
-# T035 — Spec 04 coverage audit
+# T036 — Spec 04 coverage audit
 Status: pending
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
-Blocked by: T034
+Blocked by: T035
 
 ### Requirements
 - Audit `tests/specs/test_spec_04_gatekeeper.py` against Spec 04 US1–US11: every user story has at least one behavioral assertion, and the story-to-test matrix is recorded in the module docstring.
