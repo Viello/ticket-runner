@@ -28,8 +28,10 @@ import time
 from typing import Any
 
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+from runner.adapters.markdown.file_lock import QueueFileLock
 from runner.adapters.markdown.gotchas_store import GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
+from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.opencode.opencode_worker import OpenCodeEvent
 from runner.application.gatekeeper import (
     GatekeeperCommandExecutor,
@@ -39,6 +41,8 @@ from runner.application.gatekeeper import (
     build_shell_argv,
 )
 from runner.application.git_operations import GitOperations
+from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.ticket_processor import TicketProcessor
 from runner.application.handoff_coordinator import (
     EscalationNotice,
     HandoffCoordinator,
@@ -893,3 +897,368 @@ def test_us11_question_interruption_preserves_budget_and_resumes_session(tmp_pat
     res2 = asyncio.run(loop.run(prompt="Use Clean Architecture ports and adapters."))
     assert res2.is_passed is True
     assert res2.attempts == 1  # Passed on 1st verification attempt
+
+
+# --- T032: Ready-Path Ticket Processor & Queue Orchestrator Behavioral Tests ---
+
+
+def _register_git_fakes(runner: FakeCommandRunner) -> None:
+    runner.register(["git", "status", "--porcelain"], stdout="")
+    runner.register(["git", "symbolic-ref", "--short", "HEAD"], stdout="agent/ticket-runner\n")
+    runner.register(["git", "add", "."], stdout="")
+    runner.register(["git", "commit", "-m"], stdout="")
+    runner.register(["git", "rev-parse", "HEAD"], stdout="f" * 40 + "\n")
+    runner.register(["git", "reset", "--hard", "HEAD"], stdout="HEAD is now at fffffff\n")
+    runner.register(["git", "clean", "-fd"], stdout="")
+
+
+def _write_ticket_file(root: Path, ticket: Ticket) -> Path:
+    target = root / ticket.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    reqs = "\n".join(f"- {r}" for r in ticket.requirements)
+    acs = "\n".join(f"- {a}" for a in ticket.acceptance_criteria)
+    gotchas = "\n".join(f"- {g}" for g in ticket.gotchas)
+    target.write_text(
+        f"# {ticket.id} — {ticket.title}\n"
+        f"Status: pending\n"
+        f"Spec: docs/specs/{SPEC_SLUG}.md\n\n"
+        f"### Requirements\n"
+        f"{reqs}\n\n"
+        f"### Acceptance Criteria\n"
+        f"{acs}\n\n"
+        f"### Gotchas\n"
+        f"{gotchas}\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def _make_orchestrator(
+    sc: Scenario,
+    processor: TicketProcessor,
+    commit_scope: str = "queue",
+) -> QueueOrchestrator:
+    tickets_dir = sc.root / "docs" / "tickets"
+    return QueueOrchestrator(
+        ticket_store=DirectoryTicketStore(root_dir=tickets_dir),
+        lock=QueueFileLock(lock_path=tickets_dir / ".queue.lock"),
+        gotchas_store=GotchasStore(path=tickets_dir / "gotchas.md"),
+        git_operations=GitOperations(runner=sc.runner, cwd=sc.root),
+        processor=processor,
+        tickets_dir=tickets_dir,
+        commit_scope=commit_scope,
+        cwd=sc.root,
+    )
+
+
+def test_us04_us05_orchestrator_happy_path_commit_and_relocation_with_ticket_processor(tmp_path: Path) -> None:
+    """T032: Happy path through orchestrator produces single commit, relocates ticket, and purges ready signal."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T032")
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t032Happy"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor, commit_scope="queue")
+
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    class HappyHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9201)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            # Worker creates modified file
+            mod_file = sc.root / "runner" / "ticket_processor.py"
+            mod_file.parent.mkdir(parents=True, exist_ok=True)
+            mod_file.write_text("# processed", encoding="utf-8")
+            # Author ready signal deterministically inside handle
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/ticket_processor.py"],
+                    "self_review_notes": "Implemented and code-review verified.",
+                    "new_gotchas": ["Discovered runtime lesson on signal lifecycle."],
+                    "scope": "application",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=3000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        HappyHandle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+    assert outcome.commit_sha == "f" * 40
+
+    # 1. Exactly one conventional commit authored with scope from signal and Update bullets
+    commit_invocations = [inv for inv in sc.runner.invocations if inv.cmd[:2] == ["git", "commit"]]
+    assert len(commit_invocations) == 1
+    commit_msg = commit_invocations[0].cmd[3]
+    assert commit_msg.startswith("feat(application):")
+    assert "- Update runner/ticket_processor.py" in commit_msg
+    assert "T032" not in commit_msg
+
+    # 2. Ticket relocated to completed/ with Status: completed and Completed timestamp
+    assert not ticket_file.exists()
+    relocated_file = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated_file.is_file()
+    relocated_text = relocated_file.read_text(encoding="utf-8")
+    assert "Status: completed" in relocated_text
+    assert "Completed: 20" in relocated_text
+
+    # 3. Ready signal file was consumed and is gone
+    assert not sc.ready_signal_path.exists()
+
+    # 4. Gotchas appended to gotchas.md
+    gotchas_text = (sc.root / "docs" / "tickets" / "gotchas.md").read_text(encoding="utf-8")
+    assert "Discovered runtime lesson on signal lifecycle." in gotchas_text
+
+
+def test_orchestrator_malformed_ready_signal_resumes_with_diagnostics_and_passes_later_cycle(tmp_path: Path) -> None:
+    """T032: Malformed ready Signal resumes with diagnostics and can only pass on a later valid cycle."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T032")
+    _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t032Malformed"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+        max_attempts=2,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor, commit_scope="queue")
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    # Session 1: emits malformed ready signal (bad status value)
+    class MalformedHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9301)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "not_a_valid_status",
+                    "modified_files": ["mod.py"],
+                    "self_review_notes": "Premature exit.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    # Session 2: after receiving diagnostics, emits valid ready signal
+    class ValidResumeHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9302)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["mod.py"],
+                    "self_review_notes": "Fixed status.",
+                    "new_gotchas": [],
+                    "scope": "domain",
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=2000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        MalformedHandle(),
+    )
+
+    original_spawn = sc.runner.spawn
+
+    captured_resume_prompts: list[str] = []
+
+    async def _intercept_resume(cmd: list[str], **kwargs: Any) -> Any:
+        if "--session" in cmd and cmd[:4] == ["opencode", "run", "--format", "json"]:
+            captured_resume_prompts.append(cmd[-1])
+            sc.runner.spawn_invocations.append(CommandInvocation(cmd=list(cmd), cwd=kwargs.get("cwd")))
+            return ValidResumeHandle()
+        return await original_spawn(cmd, **kwargs)
+
+    sc.runner.spawn = _intercept_resume  # type: ignore
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+
+    # Check that resume prompt contained diagnostics explaining the malformed signal
+    assert len(captured_resume_prompts) == 1
+    assert "ready_for_verification" in captured_resume_prompts[0] or "status" in captured_resume_prompts[0]
+
+    # Ready signal consumed and ticket completed
+    assert not sc.ready_signal_path.exists()
+    relocated_file = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated_file.is_file()
+
+
+def test_orchestrator_scope_absent_falls_back_to_orchestrator_default(tmp_path: Path) -> None:
+    """T032: When scope is absent in ready Signal, commit uses orchestrator default commit scope."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T032")
+    _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t032ScopeFallback"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor, commit_scope="ports")
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    class HandleNoScope(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9401)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/ports/seam.py"],
+                    "self_review_notes": "Scope omitted.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        HandleNoScope(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+
+    # Commit header falls back to orchestrator default 'ports'
+    commit_invocations = [inv for inv in sc.runner.invocations if inv.cmd[:2] == ["git", "commit"]]
+    assert len(commit_invocations) == 1
+    commit_msg = commit_invocations[0].cmd[3]
+    assert commit_msg.startswith("feat(ports):")
+    assert "- Update runner/ports/seam.py" in commit_msg
+
+
+def test_orchestrator_purge_at_start_removes_leftover_signal_files(tmp_path: Path) -> None:
+    """T032: Purge at start removes leftover ready and question files from earlier runs."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T032")
+    _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_t032Purge"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    # Pre-author stale ready and question files from an earlier run
+    sc.ready_signal_path.write_text("stale ready file", encoding="utf-8")
+    sc.question_path.write_text("stale question file", encoding="utf-8")
+    assert sc.ready_signal_path.is_file()
+    assert sc.question_path.is_file()
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor)
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    leftovers_purged_before_worker_start = False
+
+    class PurgeVerifyHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9501)
+
+        async def stdout_lines(self):
+            nonlocal leftovers_purged_before_worker_start
+            # Check that stale files were already removed before worker began!
+            if not sc.ready_signal_path.exists() and not sc.question_path.exists():
+                leftovers_purged_before_worker_start = True
+
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/purged.py"],
+                    "self_review_notes": "Verified purge.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        PurgeVerifyHandle(),
+    )
+    sc.runner.register_spawn(shell_test_cmd, stdout_lines=["1 passed"], exit_code=0)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_approved is True
+    assert leftovers_purged_before_worker_start is True
+

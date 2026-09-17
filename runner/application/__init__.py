@@ -33,6 +33,8 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor,
 )
+from runner.application.ticket_processor import GatekeeperTicketProcessor
+
 
 __all__ = [
     "CEILING",
@@ -45,6 +47,7 @@ __all__ = [
     "ESCALATED",
     "EscalationNotice",
     "GatekeeperCommandExecutor",
+    "GatekeeperTicketProcessor",
     "GatekeeperVerificationLoop",
     "GitOperations",
     "HandoffCoordinator",

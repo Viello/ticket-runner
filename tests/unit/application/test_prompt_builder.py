@@ -230,3 +230,50 @@ def test_prompt_builder_verbatim_ticket_markdown_passthrough() -> None:
     )
 
     assert verbatim_req in prompt
+
+
+def test_prompt_documents_full_ready_signal_schema() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    # Signal path with ticket id
+    assert ".agent/signals/T032_ready.json" in prompt
+
+    # Required and optional schema fields
+    assert "`ticket_id`: \"T032\"" in prompt
+    assert "\"ready_for_verification\"" in prompt
+    assert "`modified_files`" in prompt
+    assert "`self_review_notes`" in prompt
+    assert "`new_gotchas`" in prompt
+    assert "`timestamp`" in prompt
+    assert "`scope`" in prompt
+    assert "never use a ticket number" in prompt
+
+
+def test_prompt_documents_question_protocol_and_schema() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        global_gotchas=SAMPLE_GLOBAL_GOTCHAS,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    # Question protocol path and halt rule
+    assert ".agent/questions/T032.json" in prompt
+    assert "stop working immediately" in prompt.lower() or "stop working" in prompt.lower()
+
+    # Question schema fields
+    assert "`ticket_id`: \"T032\"" in prompt
+    assert "`question`" in prompt
+    assert "`type`: \"choice\" or \"text\"" in prompt
+    assert "`options`" in prompt
+    assert "`status`: \"pending\"" in prompt
+    assert "`answer`: null" in prompt
+    assert "`created_at`" in prompt
+

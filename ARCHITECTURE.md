@@ -36,6 +36,7 @@ ticket-runner/
 │   │   ├── worker_supervisor.py      # OpenCode subprocess execution & stream telemetry
 │   │   ├── handoff_coordinator.py    # Token budget rules (120k warn, 135k handoff, 150k ceiling)
 │   │   ├── gatekeeper.py             # Test/build verification commands & Circuit Breaker
+│   │   ├── ticket_processor.py       # Ticket execution seam driving verification loop & outcome mapping
 │   │   ├── presence_coordinator.py   # Nearby vs Away mode & 3-min idle escalation timer
 │   │   └── git_operations.py         # Branch isolation, conventional commits, tree resets
 │   │

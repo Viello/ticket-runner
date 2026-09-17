@@ -1,5 +1,6 @@
 # T032 — Ready-path ticket processor
-Status: pending
+Status: completed
+Completed: 2026-09-17T08:31:00Z
 Spec: docs/specs/04-signal-protocol-and-gatekeeper.md
 Blocked by: T031
 
