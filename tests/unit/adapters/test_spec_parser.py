@@ -11,7 +11,11 @@ from runner.adapters.markdown.spec_parser import (
 )
 from runner.domain.exceptions import SpecFormatError, TicketFormatError
 
-SPEC_04_PATH = Path("docs/specs/04-signal-protocol-and-gatekeeper.md")
+SPEC_04_PATH = (
+    Path("docs/specs/04-signal-protocol-and-gatekeeper.md")
+    if Path("docs/specs/04-signal-protocol-and-gatekeeper.md").is_file()
+    else Path(".agent/archive/specs/04-signal-protocol-and-gatekeeper.md")
+)
 
 SAMPLE_SPEC = """# Spec 99: Test Spec
 
