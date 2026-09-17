@@ -214,6 +214,30 @@ def test_subprocess_runner_spawn_strips_crlf_and_lf() -> None:
     asyncio.run(_run())
 
 
+def test_subprocess_runner_spawn_handles_long_stdout_lines() -> None:
+    """Verify SubprocessRunner.spawn handles stdout lines exceeding asyncio's default 64KB buffer limit."""
+    runner = SubprocessRunner()
+    # 10 MB line followed by another line, far exceeding asyncio's default 64KB (65536 bytes) limit
+    code = (
+        "import sys; "
+        "sys.stdout.write('A' * (10 * 1024 * 1024) + '\\n'); "
+        "sys.stdout.write('second line\\r\\n'); "
+        "sys.stdout.flush()"
+    )
+
+    async def _run() -> None:
+        handle = await runner.spawn([sys.executable, "-c", code])
+        lines = [line async for line in handle.stdout_lines()]
+        exit_code = await handle.wait()
+
+        assert len(lines) == 2
+        assert len(lines[0]) == 10 * 1024 * 1024
+        assert lines[1] == "second line"
+        assert exit_code == 0
+
+    asyncio.run(_run())
+
+
 def test_subprocess_runner_spawn_respects_cwd_and_env(tmp_path: Path) -> None:
     """Verify SubprocessRunner.spawn executes in designated cwd and inherits passed env."""
     runner = SubprocessRunner()

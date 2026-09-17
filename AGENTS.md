@@ -3,11 +3,8 @@
 Ticket Runner: a planned local Python orchestrator that drives OpenCode through a sequential
 directory queue under `docs/tickets/` with independent verification, context handoffs, and Discord/terminal interaction.
 
-## Repo status: specification only
-No implementation exists yet — no `runner/`, `ticket_runner.py`, `config.yaml`,
-`requirements.txt`, tests, lint, or CI. Don't search for code that isn't there; build against the
-plan's target layout (§18). Do not invent test/lint commands — none are defined yet; verification
-tooling arrives via an explicit ticket.
+## Implementation status
+Specs 01–03 (Doctor, Queue, Worker) are implemented and tested. Spec 04 (Signal Protocol & Gatekeeper) is in progress — tickets T025–T035 in `docs/tickets/04-signal-protocol-and-gatekeeper/`. Specs 05–06 are not yet queued. Discord and terminal-UI adapters are not yet built.
 
 ## Read before designing
 - `ARCHITECTURE.md` — target Clean Architecture directory tree.
@@ -32,7 +29,8 @@ tooling arrives via an explicit ticket.
 
 ## Environment
 - Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
-- Planned deps: `discord.py`, `rich`, `pyyaml`; Discord token comes from the `DISCORD_BOT_TOKEN` env var — `config.yaml` stores only the var name, never the token.
+- Dependencies: `discord.py`, `rich`, `pyyaml`, `pytest` (see `requirements.txt`). Discord token comes from the `DISCORD_BOT_TOKEN` env var — `config.yaml` stores only the var name, never the token.
+- Discord and terminal-UI adapters are not yet implemented.
 - No git hooks are installed yet (only `.sample` files in `.git/hooks/`).
 
 ## Development workflow

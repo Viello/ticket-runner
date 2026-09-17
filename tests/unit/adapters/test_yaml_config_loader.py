@@ -20,7 +20,7 @@ worker:
 verification:
   test_cmd: "pytest"
   build_cmd: "npm run build"
-  max_retries: 3
+  max_attempts: 3
   timeout_seconds: 300
 
 tokens:
@@ -67,7 +67,7 @@ def test_load_valid_yaml_file(tmp_path: Path) -> None:
     assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
     assert config.verification.test_cmd == "pytest"
     assert config.verification.build_cmd == "npm run build"
-    assert config.verification.max_retries == 3
+    assert config.verification.max_attempts == 3
     assert config.verification.timeout_seconds == 300
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
@@ -206,7 +206,7 @@ git: {}
     config = loader.load_from_string(minimal_yaml)
 
     assert config.verification.build_cmd == ""
-    assert config.verification.max_retries == 3
+    assert config.verification.max_attempts == 3
     assert config.verification.timeout_seconds == 300
     assert config.presence.idle_escalation_minutes == 3
     assert config.discord.enabled is True
@@ -258,7 +258,7 @@ def test_load_config_example_yaml() -> None:
     assert config.project.name == "ticket-runner"
     assert config.project.branch == "agent/ticket-runner"
     assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
-    assert config.verification.test_cmd == "pytest"
+    assert config.verification.test_cmd == "python -m pytest"
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
     assert config.tokens.ceiling == 150000
@@ -271,15 +271,15 @@ def test_load_root_config_yaml() -> None:
 
     loader = YamlConfigLoader()
     config = loader.load(root_config_path)
+    example = loader.load(Path("config.example.yaml"))
 
     assert isinstance(config, RunnerConfig)
-    assert config.project.name == "ticket-runner"
-    assert config.project.branch == "agent/ticket-runner"
-    assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
-    assert config.verification.test_cmd == "pytest"
-    assert config.tokens.warn == 120000
-    assert config.tokens.handoff == 135000
-    assert config.tokens.ceiling == 150000
+    assert config.project.name == example.project.name
+    assert config.project.branch == example.project.branch
+    assert config.worker.execution_skill == example.worker.execution_skill
+    assert config.tokens.warn == example.tokens.warn
+    assert config.tokens.handoff == example.tokens.handoff
+    assert config.tokens.ceiling == example.tokens.ceiling
 
 
 @pytest.mark.parametrize(

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+import shutil
 from typing import Mapping
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.application.gatekeeper import CMD_BUILTINS, leading_command_token
 from runner.application.git_operations import GitOperations
 from runner.domain.config import RunnerConfig
 from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError, TicketFormatError
@@ -23,6 +26,7 @@ CHECK_OPENCODE = "opencode"
 CHECK_GIT = "git"
 CHECK_QUEUE = "queue"
 CHECK_CONFIG = "config"
+CHECK_VERIFICATION_COMMANDS = "verification_commands"
 CHECK_HOOK = "pre_push_hook"
 CHECK_DISCORD = "discord"
 
@@ -76,6 +80,7 @@ class Doctor:
         git_dir: Path | None = None,
         env: Mapping[str, str] | None = None,
         target_branch: str = DEFAULT_BRANCH,
+        path_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -113,6 +118,7 @@ class Doctor:
         self._env = env if env is not None else os.environ
         self._target_branch = target_branch
         self._loaded_config: RunnerConfig | None = None
+        self._path_resolver = path_resolver or shutil.which
 
     @property
     def loaded_config(self) -> RunnerConfig | None:
@@ -261,6 +267,54 @@ class Doctor:
                 remediation=remediation,
             )
 
+    async def check_verification_commands(self) -> CheckResult:
+        """Resolve leading tokens of configured verification commands against PATH.
+
+        A configured ``test_cmd``/``build_cmd`` whose leading executable cannot
+        be resolved on PATH is reported as a failed check with an actionable
+        remediation, so a missing binary is never mistaken for a test failure
+        later at Gatekeeper time.
+        """
+        if self._loaded_config is None:
+            return CheckResult(
+                name=CHECK_VERIFICATION_COMMANDS,
+                passed=True,
+                message="Verification command resolution skipped (configuration not loaded).",
+                remediation=None,
+            )
+
+        verification = self._loaded_config.verification
+        commands: list[tuple[str, str]] = []
+        if verification.test_cmd.strip():
+            commands.append(("test_cmd", verification.test_cmd))
+        if verification.build_cmd.strip():
+            commands.append(("build_cmd", verification.build_cmd))
+
+        for field_name, command in commands:
+            token = leading_command_token(command)
+            if token is None or token.lower() in CMD_BUILTINS:
+                continue
+            if self._path_resolver(token) is None:
+                return CheckResult(
+                    name=CHECK_VERIFICATION_COMMANDS,
+                    passed=False,
+                    message=(
+                        f"Verification {field_name} command '{command}' cannot resolve "
+                        f"its executable '{token}' on PATH."
+                    ),
+                    remediation=(
+                        f"'{token}' not found on PATH — use `python -m {token}` instead "
+                        "for Python tools, or add the tool's Scripts directory to PATH."
+                    ),
+                )
+
+        return CheckResult(
+            name=CHECK_VERIFICATION_COMMANDS,
+            passed=True,
+            message="Verification commands resolve to executables on PATH.",
+            remediation=None,
+        )
+
     async def check_hook(self) -> CheckResult:
         """Verify pre-push hook guardrail is installed and active."""
         if not self._hook_installer.is_installed(git_dir=self._git_dir):
@@ -333,6 +387,7 @@ class Doctor:
             self.check_git,
             self.check_queue,
             self.check_config,
+            self.check_verification_commands,
             self.check_hook,
             lambda: self.check_discord(local_only=local_only),
         ]

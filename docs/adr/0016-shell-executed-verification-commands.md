@@ -1,0 +1,3 @@
+# Shell-Executed Verification Commands
+
+We decided that the Gatekeeper executes `verification.build_cmd` and `verification.test_cmd` as shell command strings through the platform shell (`cmd.exe /d /s /c` on Windows, `/bin/sh -c` on POSIX), each bounded by its own `verification.timeout_seconds`, rather than splitting the configured values into argv tokens ourselves. Real build commands depend on shims, pipes, `&&` chains, and environment expansion that argv splitting silently breaks, and the configured commands are authored by the trusted operator, never by the Worker. A command is accepted only on exit code 0; a timed-out command is terminated process-tree-first and treated as a failure; a failing non-empty `build_cmd` skips `test_cmd`.

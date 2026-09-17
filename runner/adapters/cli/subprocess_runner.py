@@ -12,6 +12,8 @@ import sys
 from runner.domain.exceptions import CommandNotFoundError
 from runner.ports.command_runner import CommandResult, CommandRunner, ProcessHandle
 
+DEFAULT_STREAM_LIMIT: int = 16 * 1024 * 1024  # 16 MiB buffer limit for stream reader pipe flow control
+
 
 class SubprocessProcessHandle:
     """Concrete ProcessHandle wrapping an asyncio.subprocess.Process with concurrent stderr draining."""
@@ -50,12 +52,19 @@ class SubprocessProcessHandle:
         """Asynchronously iterate over stripped stdout lines."""
         if self._proc.stdout is None:
             return
+        buf = bytearray()
         while True:
-            line_bytes = await self._proc.stdout.readline()
-            if not line_bytes:
+            chunk = await self._proc.stdout.read(65536)
+            if not chunk:
                 break
-            line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
-            yield line
+            buf.extend(chunk)
+            while b"\n" in buf:
+                idx = buf.index(b"\n")
+                line_bytes = bytes(buf[:idx])
+                del buf[:idx + 1]
+                yield line_bytes.decode("utf-8", errors="replace").rstrip("\r")
+        if buf:
+            yield bytes(buf).decode("utf-8", errors="replace").rstrip("\r\n")
 
     def __aiter__(self) -> AsyncIterator[str]:
         """Asynchronously iterate over stripped stdout lines."""
@@ -182,6 +191,7 @@ class SubprocessRunner:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=DEFAULT_STREAM_LIMIT,
                 cwd=cwd_str,
                 env=proc_env,
             )
@@ -226,6 +236,7 @@ class SubprocessRunner:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=DEFAULT_STREAM_LIMIT,
                 cwd=cwd_str,
                 env=proc_env,
             )

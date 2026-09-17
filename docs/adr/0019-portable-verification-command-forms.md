@@ -1,0 +1,3 @@
+# Portable Verification Command Forms
+
+We decided that Gatekeeper verification commands (`verification.test_cmd`, `verification.build_cmd`) must use portable invocation forms such as `python -m <tool>` rather than bare console-script names, because commands run through `cmd.exe /d /s /c` (ADR 0016) inherit the Runner's PATH, which on Windows commonly omits the Python `Scripts` directory where bare stubs like `pytest` live. As defense-in-depth the Runner resolves each command's leading token via `shutil.which` before wrapping it in the shell, so an unresolvable binary surfaces as an explicit command-not-found diagnostic instead of a misleading exit-code failure, and Doctor fails fast with an actionable remediation when a configured command cannot resolve.

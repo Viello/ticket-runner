@@ -16,6 +16,7 @@ from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.clean_slate import CleanSlateArchiver
 from runner.application.git_operations import GitOperations
 from runner.domain.config import LifecycleConfig, RunnerConfig
+from runner.domain.exceptions import UserAbortError
 from runner.domain.ticket import Ticket
 from runner.ports.ticket_repository import TicketRepository
 
@@ -27,6 +28,7 @@ class TicketOutcomeStatus(str, Enum):
 
     APPROVED = "approved"
     SKIPPED = "skipped"
+    ABORTED = "aborted"
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,11 @@ class TicketOutcome:
     def is_skipped(self) -> bool:
         """Return True if ticket was skipped."""
         return self.status == TicketOutcomeStatus.SKIPPED
+
+    @property
+    def is_aborted(self) -> bool:
+        """Return True if ticket execution was aborted by operator."""
+        return self.status == TicketOutcomeStatus.ABORTED
 
     def with_commit_sha(self, commit_sha: str) -> TicketOutcome:
         """Return a clone of this outcome with commit SHA populated."""
@@ -86,6 +93,17 @@ class TicketOutcome:
         """Construct a skipped ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.SKIPPED,
+            details=details,
+        )
+
+    @classmethod
+    def aborted(
+        cls,
+        details: str | Mapping[str, Any] | None = None,
+    ) -> TicketOutcome:
+        """Construct an aborted ticket outcome with failure details."""
+        return cls(
+            status=TicketOutcomeStatus.ABORTED,
             details=details,
         )
 
@@ -161,6 +179,12 @@ class QueueOrchestrator:
             cwd=self._cwd,
         )
         self._processed_spec_slugs: set[str] = set()
+        self._last_outcome: TicketOutcome | None = None
+
+    @property
+    def last_outcome(self) -> TicketOutcome | None:
+        """Outcome of the most recently processed ticket."""
+        return self._last_outcome
 
     @property
     def is_paused(self) -> bool:
@@ -263,9 +287,7 @@ class QueueOrchestrator:
 
         active_processor = processor or self._processor
         if active_processor is None:
-            raise RuntimeError(
-                "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
-            )
+            raise RuntimeError("No ticket processor configured.")
 
         self.acquire_lock()
 
@@ -283,7 +305,15 @@ class QueueOrchestrator:
         if slug:
             self._processed_spec_slugs.add(slug)
 
-        outcome = await active_processor(ticket)
+        try:
+            outcome = await active_processor(ticket)
+        except UserAbortError as exc:
+            self._last_outcome = TicketOutcome.aborted(details=str(exc))
+            self.release_lock()
+            raise
+        except Exception:
+            self.release_lock()
+            raise
 
         if outcome.is_approved:
             # 1. Relocate ticket to completed/ with timestamp
@@ -304,6 +334,7 @@ class QueueOrchestrator:
                 commit_prefix=prefix,
             )
             final_outcome = outcome.with_commit_sha(sha)
+            self._last_outcome = final_outcome
 
         elif outcome.is_skipped:
             # 1. Reset working tree to pristine state
@@ -312,6 +343,17 @@ class QueueOrchestrator:
             # 2. Relocate ticket to completed/ with failure details
             self._ticket_store.finalize_skipped(ticket, details=outcome.details)
             final_outcome = outcome
+            self._last_outcome = final_outcome
+
+        elif outcome.is_aborted:
+            self._last_outcome = outcome
+            self.release_lock()
+            msg = (
+                str(outcome.details)
+                if outcome.details is not None
+                else f"Execution aborted for ticket '{ticket.id}'."
+            )
+            raise UserAbortError(msg)
 
         else:
             raise ValueError(f"Unsupported ticket outcome status: {outcome.status}")
@@ -412,9 +454,7 @@ class QueueOrchestrator:
             # 1. Check if there are pending tickets without a processor
             pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
             if pending is not None and active_processor is None:
-                raise RuntimeError(
-                    "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
-                )
+                raise RuntimeError("No ticket processor configured.")
 
             # 2. Process initial queue until empty or paused
             if active_processor is not None:
@@ -437,7 +477,8 @@ class QueueOrchestrator:
                 printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                 return 0
 
-            # Standby mode
+            # Standby mode: release sentinel lock before entering idle watch loop
+            self.release_lock()
             printer(
                 f"[Queue] Lifecycle policy 'standby': Entering idle watch loop (polling every {poll_interval}s)..."
             )
@@ -462,9 +503,7 @@ class QueueOrchestrator:
                 if pending is not None:
                     printer(f"[Queue] Detected new pending ticket '{pending.id}'. Resuming queue execution...")
                     if active_processor is None:
-                        raise RuntimeError(
-                            "No ticket processor configured. Signal protocol and Gatekeeper verification will arrive in Spec 04."
-                        )
+                        raise RuntimeError("No ticket processor configured.")
                     while not self._is_paused:
                         outcome = await self.run_next(processor=active_processor)
                         if outcome is None:
@@ -477,6 +516,11 @@ class QueueOrchestrator:
                         return 0
 
             return 0
+        except UserAbortError as exc:
+            if self._last_outcome is None or not self._last_outcome.is_aborted:
+                self._last_outcome = TicketOutcome.aborted(details=str(exc))
+            printer(f"\n[Queue] Aborted by operator: {exc}")
+            return 2
         finally:
             self.release_lock()
 

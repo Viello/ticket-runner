@@ -22,31 +22,38 @@ def _format_bullets(items: tuple[str, ...] | list[str], default_empty: str = "- 
     return "\n".join(bullets)
 
 
-def _format_global_gotchas(global_gotchas: str) -> str:
-    clean = global_gotchas.strip()
-    if not clean:
-        return "## Global Gotchas & Lessons Learned\n\nNone recorded."
-    if clean.startswith("# Global Gotchas"):
-        return clean
-    return f"## Global Gotchas & Lessons Learned\n\n{clean}"
+def _format_global_gotchas(gotchas_path: str | Path = "docs/tickets/gotchas.md") -> str:
+    path_str = str(gotchas_path).strip()
+    if "\n" in path_str or path_str.startswith("#"):
+        posix_path = "docs/tickets/gotchas.md"
+    elif not path_str:
+        posix_path = "docs/tickets/gotchas.md"
+    else:
+        posix_path = Path(path_str).as_posix()
+    return (
+        f"## Global Gotchas & Lessons Learned\n"
+        f"Review and adhere to all project-wide pitfalls recorded at `{posix_path}` before implementing."
+    )
 
 
 def build_prompt(
     ticket: Ticket,
     spec_excerpt: SpecExcerpt | str,
-    global_gotchas: str,
-    execution_skill: str | Path,
+    gotchas_path: str | Path = "docs/tickets/gotchas.md",
+    execution_skill: str | Path = ".agents/skills/implement/SKILL.md",
     *,
     spec_path: str | None = None,
+    global_gotchas: str | None = None,
 ) -> str:
     """Render a pure scoped prompt for an OpenCode Worker session.
 
     Args:
         ticket: Active Ticket domain entity.
         spec_excerpt: SpecExcerpt object or excerpt markdown string.
-        global_gotchas: Global gotchas text from docs/tickets/gotchas.md.
+        gotchas_path: Path to docs/tickets/gotchas.md (emitted as a scoped pointer).
         execution_skill: Path to the configured execution skill file.
         spec_path: Optional explicit path to the spec file; inferred if omitted.
+        global_gotchas: Optional legacy alias for gotchas_path.
 
     Returns:
         Rendered prompt string containing all operational rules and scoped context.
@@ -65,7 +72,8 @@ def build_prompt(
     requirements_text = _format_bullets(ticket.requirements)
     ac_text = _format_bullets(ticket.acceptance_criteria)
     gotchas_text = _format_bullets(ticket.gotchas)
-    formatted_global_gotchas = _format_global_gotchas(global_gotchas)
+    effective_gotchas = global_gotchas if global_gotchas is not None else gotchas_path
+    formatted_global_gotchas = _format_global_gotchas(effective_gotchas)
 
     security_review_line = ""
     if ticket.security_required:
@@ -105,7 +113,26 @@ Full specification reference: `{resolved_spec_path}`
 2. **Review Self-Checks**:
    - Mandatory `/code-review`: Conduct a `/code-review` self-check against standards and spec/ticket acceptance criteria before signaling completion.{security_review_line}
 3. **Debugging Guidance**: For non-trivial test failures or hard bugs, consult `.agents/skills/diagnosing-bugs/SKILL.md`.
-4. **Ready Signal**: When implementation and self-reviews are complete, emit the ready signal by writing `.agent/signals/{ticket.id}_ready.json` with `self_review_notes` summarizing your findings and verification results.
+4. **Ready Signal Protocol**: When implementation and self-reviews are complete, emit the ready signal by writing `.agent/signals/{ticket.id}_ready.json`.
+   The ready Signal JSON payload must follow this exact schema:
+   - `ticket_id`: "{ticket.id}" (must match this active ticket)
+   - `status`: "ready_for_verification"
+   - `modified_files`: array of strings containing repository-relative paths modified during this ticket (e.g. `["runner/application/foo.py"]`)
+   - `self_review_notes`: string summarizing findings, verification results, and standards compliance
+   - `new_gotchas`: array of newly discovered runtime gotchas or lessons learned strings (empty array `[]` if none)
+   - `timestamp`: current ISO-8601 UTC timestamp string
+   - `scope`: optional lowercase architectural layer token (e.g. "application", "domain", "adapters"; omit or null to use the default queue scope; never use a ticket number)
+5. **Question Protocol (Clarification / Blocked)**:
+   If blocked, requirements are ambiguous, or an architectural decision is required:
+   - Write a question Signal to `.agent/questions/{ticket.id}.json` and **stop working immediately**. Do not guess or continue working while blocked.
+   The question Signal JSON payload must follow this exact schema:
+   - `ticket_id`: "{ticket.id}"
+   - `question`: string describing the clarifying question
+   - `type`: "choice" or "text"
+   - `options`: array of choice strings when type is "choice", or null when type is "text"
+   - `status`: "pending"
+   - `answer`: null
+   - `created_at`: current ISO-8601 UTC timestamp string
 """
     return prompt
 
@@ -118,37 +145,40 @@ class _BuildDispatcher:
             def _class_build(
                 ticket: Ticket,
                 spec_excerpt: SpecExcerpt | str,
-                global_gotchas: str,
-                execution_skill: str | Path,
+                gotchas_path: str | Path = "docs/tickets/gotchas.md",
+                execution_skill: str | Path = ".agents/skills/implement/SKILL.md",
                 *,
                 spec_path: str | None = None,
+                global_gotchas: str | None = None,
             ) -> str:
                 return build_prompt(
                     ticket=ticket,
                     spec_excerpt=spec_excerpt,
-                    global_gotchas=global_gotchas,
+                    gotchas_path=gotchas_path,
                     execution_skill=execution_skill,
                     spec_path=spec_path,
+                    global_gotchas=global_gotchas,
                 )
             return _class_build
 
         def _instance_build(
             ticket: Ticket,
             spec_excerpt: SpecExcerpt | str,
-            global_gotchas: str,
+            gotchas_path: str | Path | None = None,
             execution_skill: str | Path | None = None,
             *,
             spec_path: str | None = None,
+            global_gotchas: str | None = None,
         ) -> str:
-            skill = execution_skill or instance.default_execution_skill
-            if skill is None:
-                raise ValueError("execution_skill must be provided either at init or build call")
+            skill = execution_skill or instance.default_execution_skill or ".agents/skills/implement/SKILL.md"
+            path = gotchas_path or instance.default_gotchas_path
             return build_prompt(
                 ticket=ticket,
                 spec_excerpt=spec_excerpt,
-                global_gotchas=global_gotchas,
+                gotchas_path=path,
                 execution_skill=skill,
                 spec_path=spec_path,
+                global_gotchas=global_gotchas,
             )
 
         return _instance_build
@@ -157,9 +187,16 @@ class _BuildDispatcher:
 class PromptBuilder:
     """Pure prompt-composition builder for OpenCode Worker sessions."""
 
-    def __init__(self, execution_skill: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        execution_skill: str | Path | None = None,
+        gotchas_path: str | Path | None = None,
+    ) -> None:
         self.default_execution_skill = (
             Path(execution_skill).as_posix() if execution_skill is not None else None
+        )
+        self.default_gotchas_path = (
+            Path(gotchas_path).as_posix() if gotchas_path is not None else "docs/tickets/gotchas.md"
         )
 
     build = _BuildDispatcher()

@@ -49,9 +49,9 @@ worker:
   execution_skill: ".agents/skills/implement/SKILL.md"
 
 verification:
-  test_cmd: "pytest"
+  test_cmd: "python -m pytest"
   build_cmd: ""
-  max_retries: 3
+  max_attempts: 3
   timeout_seconds: 300
 
 tokens:
@@ -460,7 +460,7 @@ async def test_doctor_all_prerequisites_satisfied_succeeds(tmp_path: Path) -> No
 
     report = await doctor.run(local_only=False, halt_on_failure=True)
     assert report.passed is True
-    assert len(report.checks) == 6
+    assert len(report.checks) == 7
     assert all(c.passed for c in report.checks)
 
 

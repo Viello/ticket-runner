@@ -41,7 +41,7 @@ The automated transfer of work on an active ticket from an expiring Worker sessi
 _Avoid_: Session rollover, context reset, context transfer
 
 **Signal**:
-A durable file written to `.agent/` by the Worker to notify the Runner of a question or pause request.
+A durable file written to `.agent/` by the Worker to notify the Runner of a completed implementation, a clarification question, or a pause request.
 _Avoid_: Message, event, IPC
 
 **Presence Mode**:
@@ -51,6 +51,10 @@ _Avoid_: Status, notification mode
 **Circuit Breaker**:
 A safety mechanism that halts automatic retry loops after a maximum threshold of verification failures, requiring human intervention before proceeding.
 _Avoid_: Retry counter, fail-safe
+
+**Verification Attempt**:
+One full cycle of Worker execution, Signal validation, and Gatekeeper verification; exhausting the configured maximum trips the Circuit Breaker.
+_Avoid_: Try, pass
 
 **Gotchas**:
 Documented quirks, pitfalls, and runtime constraints captured per ticket or globally in `docs/tickets/gotchas.md` to prevent repeated errors across sessions.
@@ -71,5 +75,10 @@ _Avoid_: Requirement doc, PRD, epic, design doc
 **Spec Excerpt**:
 The concise summary (`## Problem Statement` and `## Solution`) extracted from a Spec and injected into the Worker prompt to ground ticket implementation in high-level intent without context bloat.
 _Avoid_: Summary, abstract, snippet
+
+**Worker Skill**:
+A structured methodology handbook stored as a markdown file under `.agents/skills/<name>/SKILL.md` that guides Worker discipline across lifecycle phases (implementation, pre-signal review, security, and debugging) via direct file reads.
+_Avoid_: Plugin, slash command, agent tool
+
 
 

@@ -146,7 +146,7 @@ class YamlConfigLoader(ConfigLoader):
         verification = VerificationConfig(
             test_cmd=verification_dict["test_cmd"],
             build_cmd=verification_dict.get("build_cmd", ""),
-            max_retries=verification_dict.get("max_retries", 3),
+            max_attempts=verification_dict.get("max_attempts", 3),
             timeout_seconds=verification_dict.get("timeout_seconds", 300),
         )
 

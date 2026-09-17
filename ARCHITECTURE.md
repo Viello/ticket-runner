@@ -36,6 +36,7 @@ ticket-runner/
 │   │   ├── worker_supervisor.py      # OpenCode subprocess execution & stream telemetry
 │   │   ├── handoff_coordinator.py    # Token budget rules (120k warn, 135k handoff, 150k ceiling)
 │   │   ├── gatekeeper.py             # Test/build verification commands & Circuit Breaker
+│   │   ├── ticket_processor.py       # Ticket execution seam driving verification loop & outcome mapping
 │   │   ├── presence_coordinator.py   # Nearby vs Away mode & 3-min idle escalation timer
 │   │   └── git_operations.py         # Branch isolation, conventional commits, tree resets
 │   │
@@ -112,7 +113,8 @@ ticket-runner/
 │   ├── checkpoints/
 │   ├── signals/
 │   ├── questions/
-│   └── logs/
+│   ├── logs/
+│   └── archive/                      # Completed spec ticket dirs & spec files (ADR 0012)
 │
 ├── .agents/skills/                   # Vendored Skills Catalog
 │   ├── implement/SKILL.md
@@ -120,13 +122,9 @@ ticket-runner/
 │   └── handoff/SKILL.md
 │
 └── docs/
-    ├── specs/                        # Specs 01 to 06
-    ├── adr/                          # ADRs 0001 to 0010
-    └── tickets/                      # Active and completed ticket queue
+    ├── specs/                        # Active specs: 04, 05, 06 (01–03 archived to .agent/archive/)
+    ├── adr/                          # ADRs 0001 to 0015
+    └── tickets/                      # Active ticket queue (specs 04–06)
         ├── .queue.lock               # Sentinel lockfile during execution
-        ├── gotchas.md                # Cross-ticket global lessons learned
-        └── 01-doctor-and-git-ops/    # Spec 01 tickets
-            ├── T001-project-packaging.md
-            ├── ...
-            └── completed/            # Archived completed tickets
+        └── gotchas.md                # Cross-ticket global lessons learned
 ```

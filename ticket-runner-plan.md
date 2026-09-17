@@ -1,8 +1,13 @@
-# Local Agentic Ticket Runner Plan
+# Local Agentic Ticket Runner — Remaining Roadmap
+
+> [!NOTE]
+> **Status: Historical** — Specs 01 (Doctor & Git Ops), 02 (Queue & Tickets), and 03 (Worker Orchestration & Handoff) are fully implemented. Working code, unit tests, and `ARCHITECTURE.md` are the authoritative source of truth for those areas. The sections below cover the **remaining design intent for Specs 04–06** (Signal Protocol & Gatekeeper, Presence Mode & Discord, State Persistence & TUI). Consult `docs/specs/04-*.md`, `05-*.md`, and `06-*.md` for the formal decompositions.
+
+---
 
 ## 1. Goal
 
-Build a **local Python ticket runner** that orchestrates OpenCode to execute tasks from a predefined `tickets.md` queue **strictly one ticket at a time**.
+Build a **local Python ticket runner** that orchestrates OpenCode to execute tasks from a predefined ticket queue **strictly one ticket at a time**.
 
 The user starts the runner on their PC, works locally at the terminal in **Nearby** mode (silencing remote alerts), and can walk away at any time. When the user is away, the runner detects idle prompts, escalates to **Away** mode, and routes questions and milestone notifications to **Discord**. The runner ensures complete working tree isolation, verifies all implementations through an independent Python gatekeeper, and commits each completed ticket sequentially.
 
@@ -23,55 +28,7 @@ The user starts the runner on their PC, works locally at the terminal in **Nearb
 
 ---
 
-## 3. Ticket Queue (`docs/tickets/`)
-
-The `docs/tickets/` directory hierarchy serves as the single source of truth for work items, cross-session knowledge, and completion history.
-
-### Directory Structure
-
-```text
-docs/tickets/
-├── .queue.lock                       # Sentinel lockfile (held during execution, released on pause)
-├── gotchas.md                        # Global Gotchas & Lessons Learned across runs
-│
-└── 01-doctor-and-git-ops/            # Grouped by functional spec
-    ├── T001-project-packaging.md     # Active pending ticket
-    ├── T002-pre-push-hook.md         # Active pending ticket
-    │
-    └── completed/                    # Archived completed tickets
-        └── T000-init.md              # Stamped with completion timestamp & commit SHA
-```
-
-### Ticket File Template
-
-```markdown
-# T001 — Fix admin loading state
-Status: pending
-Spec: docs/specs/01-admin-panel.md
-
-### Requirements
-- Add loading state to verified datasets table.
-- Prevent duplicate loading indicators on refetch.
-- Preserve existing pagination and sorting behavior.
-
-### Acceptance Criteria
-- Loading spinner displays during async fetch.
-- No layout shift or double scrollbars.
-- Existing CRUD operations remain green.
-
-### Gotchas
-- Table component uses virtualized rendering; loading state must wrap the table body.
-```
-
-### Queue Dynamics & Non-Destructive Parser
-- **Alphanumeric Ordering:** The Runner scans `docs/tickets/<spec-slug>/` and picks the first file with `Status: pending` sorted by ticket identifier (`T001`, `T002`, ...).
-- **Completed Relocation & Single Atomic Commit (ADR 0012):** When a ticket passes Gatekeeper verification, the Runner updates its metadata (`Status: completed`, `Completed: <iso_time>`), moves the file to `docs/tickets/<spec-slug>/completed/`, and stages code, tests, gotchas, and the ticket in a single feature commit without embedding `Commit: <sha>` in frontmatter.
-- **Ephemeral Queue Clean Slate (ADR 0012):** When all tickets under `docs/tickets/<spec-slug>/` are finished, the Runner pauses and interactively prompts the user (`[Y/n]`) to clean slate. On confirmation, it copies the completed tickets and spec to `.agent/archive/<spec-slug>/`, then authors a `chore(queue): Clean up <spec-slug> tickets, gotchas, and spec` commit removing them from Git.
-- **Global Gotchas Aggregation:** New gotchas emitted in completion signals are automatically appended to `docs/tickets/gotchas.md`.
-
----
-
-## 4. Strict Sequential Execution & State Machine
+## 3. Strict Sequential Execution & State Machine
 
 Only one ticket is active at any time. The runner never starts ticket $N+1$ until ticket $N$ is verified and committed.
 
@@ -99,39 +56,7 @@ Only one ticket is active at any time. The runner never starts ticket $N+1$ unti
 
 ---
 
-## 5. OpenCode Worker & Invocation Model
-
-Python orchestrates OpenCode via CLI subprocesses with JSON event streaming:
-
-```bash
-opencode run --format json --session <session_id> --auto "<prompt>"
-```
-
-### Advantages of Subprocess JSON Streaming (ADR 0001)
-1. **Precise Telemetry:** Captures every token metric, tool call (`read_file`, `edit_file`, `run_command`), and text chunk in real time.
-2. **Crash Resilience:** Subprocesses have distinct lifecycles; if a session crashes or needs termination, no orphaned background HTTP daemon state remains.
-3. **Deterministic Resumption:** Resuming an active ticket simply re-invokes `opencode run` with the existing `--session <session_id>`.
-
-### Worker Prompt Context Injection
-To avoid context bloat and history pollution, the Runner injects a strictly scoped prompt for each ticket:
-1. **Ticket Slice:** Current ticket ID, title, requirements, acceptance criteria, and ticket-specific gotchas.
-2. **Spec Excerpt & Reference (ADR 0011):** Parsed `## Problem Statement` and `## Solution` sections (~300 tokens) from the originating Spec (`Spec:` header or auto-inferred from `docs/specs/<spec-slug>.md`), plus a path reference to the full spec file for optional deep exploration.
-3. **Global Gotchas:** The current `docs/tickets/gotchas.md` content.
-4. **Execution Skill Pointer (ADR 0008):** Path to the configured execution skill (`config.yaml: worker.execution_skill`, defaulting to `.agents/skills/implement/SKILL.md`). The prompt instructs the Worker to adopt the discipline of this skill: work at pre-agreed seams using `/tdd`, and run typechecking and tests regularly.
-5. **Operational Rules & Guardrails:**
-   - Modify only files required for this ticket.
-   - Run tests and builds locally during implementation to verify your own changes.
-   - If clarification is needed, write `.agent/questions/{ticket_id}.json` and exit; do not guess.
-   - **Do NOT commit:** Guardrail overrides any commit step in the execution skill; only the Runner Gatekeeper stages and commits.
-   - **Pre-Signal Quality Review:** Run a `/code-review` self-check against the ticket requirements and capture findings in the `self_review_notes` field of `.agent/signals/{ticket_id}_ready.json`.
-   - **Advisory Debugging:** `.agents/skills/diagnosing-bugs/SKILL.md` is available on disk if investigating hard test breaks or non-trivial errors.
-   - When verified, write `.agent/signals/{ticket_id}_ready.json` and exit.
-   - If context limit warning is received, run `.agents/skills/handoff/SKILL.md` to save `.agent/checkpoints/{ticket_id}/handoff.md`.
-
-
----
-
-## 6. Context Management & Token Budgets
+## 4. Context Management & Token Budgets
 
 The runner supervises working memory using a 150,000-token budget:
 
@@ -146,39 +71,7 @@ $$\text{effective\_limit} = \min(\text{configured\_runner\_limit}, \text{model\_
 
 ---
 
-## 7. Context Handoff Protocol
-
-When the 135k threshold is reached:
-1. **Prompted Handoff:** The Runner issues a high-priority prompt to the active session:
-   ```text
-   Context budget threshold reached (135k tokens).
-   Execute the handoff skill at .agents/skills/handoff/SKILL.md.
-   Save the handoff document directly to .agent/checkpoints/{ticket_id}/handoff.md.
-   Include modified files, architectural decisions, test status, and immediate next steps.
-   Then exit.
-   ```
-2. **Session Rollover:** The Runner verifies that `.agent/checkpoints/{ticket_id}/handoff.md` was created, closes Session A, and generates Session B.
-3. **Session B Resumption:**
-   ```bash
-   opencode run --format json --session <session_b_id> --auto \
-     "Resume Ticket {ticket_id}. First read your previous handoff at .agent/checkpoints/{ticket_id}/handoff.md and inspect git status, then continue implementation."
-   ```
-4. **Zero User Disruption:** The handoff occurs transparently in the background without user intervention.
-
----
-
-## 8. Isolation Layers: Preventing History & File Confusion
-
-To prevent confusion when dozens of tickets and files have been processed in earlier runs:
-
-1. **Working Tree Cleanliness:** Python verifies `git status --porcelain` is empty before starting any ticket, and commits all changes immediately after verification. Ticket $N+1$ always starts with a pristine working tree.
-2. **Context Isolation:** The Runner never feeds entire historical logs or past checkpoints to OpenCode. OpenCode only sees the active ticket slice and current global gotchas.
-3. **Thread Auto-Archiving:** Discord threads are automatically archived and locked upon ticket completion, keeping the active Discord channel focused on current work.
-4. **Scoped Runtime Files:** Checkpoints, signals, questions, and logs are segregated by ticket ID (`.agent/checkpoints/T001/`, `.agent/signals/T001_ready.json`).
-
----
-
-## 9. Signal Protocol (Worker-to-Runner Communication)
+## 5. Signal Protocol (Worker-to-Runner Communication) — Spec 04
 
 Rather than relying on brittle parsing of freeform LLM chat logs, the Runner listens for structured filesystem signals (ADR 0004).
 
@@ -219,7 +112,7 @@ opencode run --format json --session <id> --auto "User answered: A: Skeleton pla
 
 ---
 
-## 10. Hybrid Presence Modes (`nearby` vs `away`)
+## 6. Hybrid Presence Modes (`nearby` vs `away`) — Spec 05
 
 The Runner eliminates alert fatigue through a dual presence model (ADR 0003):
 
@@ -238,7 +131,7 @@ The Runner eliminates alert fatigue through a dual presence model (ADR 0003):
 
 ---
 
-## 11. Discord Integration
+## 7. Discord Integration — Spec 05
 
 The Discord bot runs directly in-process using `discord.py` within the asyncio event loop.
 
@@ -256,7 +149,7 @@ The Discord bot runs directly in-process using `discord.py` within the asyncio e
 
 ---
 
-## 12. Independent Gatekeeper Verification & Circuit Breaker
+## 8. Independent Gatekeeper Verification & Circuit Breaker — Spec 04
 
 OpenCode cannot mark a ticket completed. The Python Runner acts as an authoritative Gatekeeper (ADR 0002).
 
@@ -284,63 +177,12 @@ Proceed to next   Send error log       Pause Queue (PAUSE_REQUESTED)
 ### Circuit Breaker Actions
 When Attempt 3 fails, the user can respond via Terminal or Discord:
 - `[R]etry [hint]`: Reset the circuit breaker and pass an optional human hint to the agent.
-- `[S]kip`: Stash/abandon uncommitted edits, record the failure in `tickets.md`, and advance to the next ticket.
+- `[S]kip`: Stash/abandon uncommitted edits, record the failure in the ticket, and advance to the next ticket.
 - `[A]bort`: Gracefully shut down the runner to permit manual debugging on the PC.
 
 ---
 
-## 13. Git Strategy & Safety Guardrails
-
-Autonomous development requires strict git safety bounds:
-
-### Dedicated Branch
-All automated work occurs on `agent/ticket-runner`. The runner checks this branch out on startup (creating it from `main` or the current HEAD if it does not exist). `main` is never modified directly.
-
-### Authoritative Python Commits
-When Gatekeeper verification passes:
-1. Python checks `git status --porcelain` to verify the modified files match expectations.
-2. The Runner updates ticket metadata (`Status: completed`, `Completed: <iso_time>`) and relocates the file to `docs/tickets/<spec-slug>/completed/` (without recording commit SHA in frontmatter).
-3. Python stages code, tests, newly logged gotchas, and the relocated ticket: `git add .`
-4. Python commits with a standardized message (`<type>(<scope>): <Title>` with bulleted changes and no ticket numbers):
-   ```text
-   feat(admin): Fix admin loading state
-
-   - Add loading spinner during async fetch
-   - Prevent duplicate loading indicators on refetch
-   ```
-5. Commit SHA is extracted and written to untracked `.agent/state.json` and broadcasted to Discord/terminal without modifying git-tracked ticket files (ADR 0012).
-
-### Pre-Push Git Hook Guardrail (ADR 0005)
-To physically prevent accidental `git push` operations by LLM tool calls:
-- The Runner installs `.git/hooks/pre-push` during startup if not present:
-  ```bash
-  #!/bin/sh
-  current_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
-  if [ "$current_branch" = "agent/ticket-runner" ]; then
-    echo "ERROR: Direct git push is blocked on agent/ticket-runner branch." >&2
-    exit 1
-  fi
-  exit 0
-  ```
-
----
-
-## 14. Pre-Flight Health Check ("Doctor")
-
-When `python ticket_runner.py start` executes, it runs a pre-flight Doctor check before beginning queue operations:
-
-1. **CLI Availability:** Verifies `opencode` binary exists and runs.
-2. **Git Workspace Cleanliness:** Ensures git repository is initialized and the working tree is clean.
-3. **Queue Validation:** Validates `docs/tickets/` exists and contains at least one pending ticket file.
-4. **Config Verification:** Validates `config.yaml` syntax and verification commands.
-5. **Guardrail Hook:** Verifies `.git/hooks/pre-push` is installed and executable.
-6. **Discord Connectivity:** If `discord.enabled: true`, verifies bot credentials and channel accessibility.
-
-If any check fails, the Doctor prints clear diagnostic feedback and exits without modifying workspace state.
-
----
-
-## 15. Persistent Runner State (`.agent/state.json`)
+## 9. Persistent Runner State (`.agent/state.json`) — Spec 06
 
 The Runner state is continuously persisted to survive unexpected reboots or power outages:
 
@@ -371,7 +213,7 @@ The Runner state is continuously persisted to survive unexpected reboots or powe
 
 ---
 
-## 16. Queue Completion & Lifecycle
+## 10. Queue Completion & Lifecycle — Spec 06
 
 When all pending tickets in `docs/tickets/` are marked completed:
 - The runner emits a completion notification to Discord and terminal:
@@ -382,7 +224,7 @@ When all pending tickets in `docs/tickets/` are marked completed:
 
 ---
 
-## 17. Configuration Specification (`config.yaml`)
+## 11. Configuration Specification (`config.yaml`)
 
 ```yaml
 project:
@@ -425,13 +267,13 @@ git:
 
 ---
 
-## 18. Project Directory Structure
+## 12. Project Directory Structure
 
 The authoritative Clean Architecture directory tree is defined in [ARCHITECTURE.md](ARCHITECTURE.md) (and recorded in [ADR 0009: Clean Architecture and Concentric Layering for Runner File Structure](docs/adr/0009-clean-architecture-file-structuring.md)). All source code and test doubles strictly adhere to that layout.
 
 ---
 
-## 19. Target User Experience
+## 13. Target User Experience
 
 ```text
 $ python ticket_runner.py start
@@ -445,20 +287,20 @@ $ python ticket_runner.py start
 
 ╔════════════════════════════════════════════════════════════════════╗
 ║ TICKET RUNNER — NEARBY MODE                                        ║
-║ Active Ticket: T001 — Fix admin loading state                      ║
+║ Active Ticket: T025 — Implement signal watcher                     ║
 ║ State: WORKING  |  Tokens: [████░░░░░░] 48,200 / 135,000           ║
 ║ Hotkeys: [p] Pause  [m] Toggle Away  [q] Quit                      ║
 ╚════════════════════════════════════════════════════════════════════╝
 
-[Worker] Modifying src/admin/Table.tsx...
-[Worker] Emitted signal: .agent/signals/T001_ready.json
-[Gatekeeper] Running build_cmd: npm run build (PASS)
-[Gatekeeper] Running test_cmd: npm test (PASS)
-[Git] Committed feat(admin): Fix admin loading state (sha: 7a82c19)
-[Queue] T001 moved to Completed Tickets in tickets.md
+[Worker] Modifying runner/adapters/filesystem/signal_watcher.py...
+[Worker] Emitted signal: .agent/signals/T025_ready.json
+[Gatekeeper] Running build_cmd: (skipped)
+[Gatekeeper] Running test_cmd: pytest (PASS)
+[Git] Committed feat(adapters): Implement signal watcher
+[Queue] T025 moved to completed/
 
-Starting T002...
+Starting T026...
 [User steps away from PC]
 [Runner] 3 minutes idle on question -> Switched to AWAY mode -> Pinged Discord thread
-[User answers via Discord on phone] -> Resuming T002...
+[User answers via Discord on phone] -> Resuming T026...
 ```

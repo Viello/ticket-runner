@@ -45,7 +45,7 @@ Large language model agents are powerful at implementing scoped coding tasks, bu
 - **Sequential Execution Loop:** Processes tickets one-by-one; relocates finished tickets to a `completed/` archive upon Gatekeeper pass.
 - **Pre-Flight Doctor:** Validates OpenCode availability, git working tree cleanliness, configuration syntax, and hook installation before any code runs.
 - **Discord Thread-per-Ticket:** In Away mode, opens a dedicated Discord thread per ticket to stream milestone alerts and collect interactive prompt answers directly from your mobile device.
-- **Circuit Breaker:** Halts automatic retry loops after 3 consecutive failed verification attempts and escalates to a human decision (`[R]etry`, `[S]kip`, `[A]bort`).
+- **Circuit Breaker:** Halts automatic retry loops once the configured `verification.max_attempts` budget is exhausted and escalates to a human decision (`[R]etry`, `[S]kip`, `[A]bort`).
 - **Clean Architecture:** Strict inward-pointing boundaries with zero I/O in the core domain, abstract ports for all dependencies, and test doubles for deterministic verification.
 
 ---
@@ -176,17 +176,17 @@ Only **one** ticket is executed at a time. The loop follows strict transitions:
           ↓
       GATEKEEPER (Runs independent test_cmd & build_cmd)
        ├── PASS → Commit (<type>(<scope>): <Title>) → Archive ticket → Next ticket
-       └── FAIL (Attempts < 3) → Feed errors to Worker → Retry WORKING
-                (Attempts = 3) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
+       └── FAIL (Attempts < verification.max_attempts) → Feed errors to Worker → Retry WORKING
+                (Budget exhausted) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
 
 ### Gatekeeper & Circuit Breaker
 
 - **Independent Verification:** The OpenCode Worker cannot mark tickets as completed. Only the Gatekeeper can accept a ticket by running your configured `test_cmd` and `build_cmd`.
-- **Circuit Breaker:** If a ticket fails Gatekeeper verification 3 times consecutively, the Circuit Breaker trips, alerting you via terminal or Discord to choose:
-  - `[R]etry`: Give the worker another cycle with guidance.
-  - `[S]kip`: Move the ticket to a deferred state and proceed to the next ticket.
-  - `[A]bort`: Safely shut down the runner.
+- **Circuit Breaker:** If a ticket exhausts the configured `verification.max_attempts` budget, the Circuit Breaker trips, alerting you via terminal or Discord to choose:
+  - `[R]etry [hint]`: Restore the full budget and give the Worker another cycle with your optional guidance.
+  - `[S]kip`: Discard uncommitted edits (behind one confirmation) and proceed to the next ticket.
+  - `[A]bort`: Stop the runner while preserving the working tree for direct debugging.
 
 ### Context Handoffs & Token Budgets
 
@@ -218,10 +218,9 @@ Tickets live under `docs/tickets/<spec-slug>/` as individual markdown files.
 docs/tickets/
 ├── .queue.lock                       # Lockfile held during execution
 ├── gotchas.md                        # Global Gotchas accumulated across runs
-└── 01-doctor-and-git-ops/            # Grouped by functional spec
-    ├── T001-project-packaging.md     # Active pending ticket
-    ├── T002-pre-push-hook.md         # Active pending ticket
-    └── completed/                    # Verified & committed tickets
+└── 04-signal-protocol-and-gatekeeper/ # Grouped by functional spec
+    ├── T025-example-ticket.md           # Active pending ticket
+    └── completed/                        # Verified & committed tickets
         └── T000-setup.md
 ```
 
@@ -252,7 +251,7 @@ Spec: docs/specs/01-admin-panel.md
 
 - **Alphanumeric Ordering:** Tickets are evaluated in alphanumeric order (`T001`, `T002`, ...).
 - **Lockfile & Live Editing:** When running, the Runner holds `.queue.lock`. Pressing `[p]` (Pause) releases the lock, allowing you to edit requirements, add new tickets, or reprioritize the queue before resuming.
-- **Completed Relocation:** When a ticket passes Gatekeeper checks and is committed, the Runner updates the ticket header (`Status: completed`, `Commit: <sha>`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`.
+- **Completed Relocation:** When a ticket passes Gatekeeper checks and is committed, the Runner updates the ticket header (`Status: completed`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`. The commit SHA is written to untracked `.agent/state.json` only — never embedded in git-tracked ticket frontmatter (ADR 0012).
 
 ---
 
@@ -266,7 +265,7 @@ Spec: docs/specs/01-admin-panel.md
 | `worker.execution_skill` | `string` | `".agents/skills/implement/SKILL.md"` | Path to the worker implementation discipline skill. |
 | `verification.test_cmd` | `string` | `"pytest"` | Independent verification test command executed by Gatekeeper. |
 | `verification.build_cmd` | `string` | `""` | Optional build command executed before tests. |
-| `verification.max_retries` | `int` | `3` | Maximum verification retries before tripping the Circuit Breaker. |
+| `verification.max_attempts` | `int` | `3` | Total Verification Attempts before tripping the Circuit Breaker. |
 | `verification.timeout_seconds`| `int` | `300` | Timeout for test and build command executions. |
 | `tokens.warn` | `int` | `120000` | Token threshold for warning notification. |
 | `tokens.handoff` | `int` | `135000` | Token threshold for checkpointing and context handoff. |
@@ -288,8 +287,8 @@ Spec: docs/specs/01-admin-panel.md
 For deeper architectural and design details, consult the following documentation:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Concentric Clean Architecture layers, ports, adapters, and module responsibilities.
-- [ticket-runner-plan.md](ticket-runner-plan.md) — Comprehensive design specification and requirements.
+- [ticket-runner-plan.md](ticket-runner-plan.md) — Historical design specification; remaining sections cover Signals, Presence, Discord, State, and TUI (specs 4–6).
 - [CONTEXT.md](CONTEXT.md) — Domain vocabulary, concepts, and canonical terminology.
 - [AGENTS.md](AGENTS.md) — Operating rules, invariants, and agent pair-programming instructions.
-- [docs/specs/](docs/specs/) — Functional specifications covering Doctor & Git Ops, Queue & Tickets, Worker Orchestration, Signal Protocols, Presence & Discord, and State Persistence & UI.
-- [docs/adr/](docs/adr/) — Architectural Decision Records.
+- [docs/specs/](docs/specs/) — Active functional specifications: Signal Protocol (04), Presence & Discord (05), State Persistence & UI (06). Specs 01–03 archived to `.agent/archive/`.
+- [docs/adr/](docs/adr/) — Architectural Decision Records (ADRs 0001–0015).

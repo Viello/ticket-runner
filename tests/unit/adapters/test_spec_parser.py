@@ -11,7 +11,11 @@ from runner.adapters.markdown.spec_parser import (
 )
 from runner.domain.exceptions import SpecFormatError, TicketFormatError
 
-SPEC_03_PATH = Path("docs/specs/03-worker-orchestration-and-handoff.md")
+SPEC_04_PATH = (
+    Path("docs/specs/04-signal-protocol-and-gatekeeper.md")
+    if Path("docs/specs/04-signal-protocol-and-gatekeeper.md").is_file()
+    else Path(".agent/archive/specs/04-signal-protocol-and-gatekeeper.md")
+)
 
 SAMPLE_SPEC = """# Spec 99: Test Spec
 
@@ -48,15 +52,15 @@ def _write_spec(tmp_path: Path, filename: str, content: str) -> Path:
     return spec_path
 
 
-def test_extract_excerpt_from_real_spec_03() -> None:
-    assert SPEC_03_PATH.is_file(), f"Spec file not found at {SPEC_03_PATH}"
+def test_extract_excerpt_from_real_spec_04() -> None:
+    assert SPEC_04_PATH.is_file(), f"Spec file not found at {SPEC_04_PATH}"
     parser = SpecMarkdownParser()
-    excerpt = parser.extract_excerpt(SPEC_03_PATH)
+    excerpt = parser.extract_excerpt(SPEC_04_PATH)
 
     assert isinstance(excerpt, SpecExcerpt)
-    assert excerpt.spec_path == SPEC_03_PATH.as_posix()
-    assert "Large-scale coding tasks quickly exhaust LLM context windows" in excerpt.problem_statement
-    assert "Manage the OpenCode Worker as an isolated CLI subprocess" in excerpt.solution
+    assert excerpt.spec_path == SPEC_04_PATH.as_posix()
+    assert "Autonomous agents frequently hallucinate successful completion" in excerpt.problem_statement
+    assert "Enforce durable, filesystem-based Signals" in excerpt.solution
     assert "## User Stories" not in excerpt.text
     assert "## Implementation Decisions" not in excerpt.text
 

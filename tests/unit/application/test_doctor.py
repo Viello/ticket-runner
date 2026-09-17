@@ -12,10 +12,12 @@ from runner.application.doctor import (
     CHECK_HOOK,
     CHECK_OPENCODE,
     CHECK_QUEUE,
+    CHECK_VERIFICATION_COMMANDS,
     CheckResult,
     Doctor,
     DoctorReport,
 )
+from runner.domain.config import RunnerConfig
 from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError
 from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
@@ -68,6 +70,33 @@ class FakeHookInstaller:
     @classmethod
     def is_installed(cls, git_dir: Path | None = None) -> bool:
         return cls.installed
+
+
+def _make_config(
+    test_cmd: str = "python -m pytest", build_cmd: str = ""
+) -> RunnerConfig:
+    """Construct a minimal valid RunnerConfig with scripted verification commands."""
+    from runner.domain.config import (
+        DiscordConfig,
+        GitConfig,
+        LifecycleConfig,
+        PresenceConfig,
+        ProjectConfig,
+        TokenBudgetConfig,
+        VerificationConfig,
+        WorkerConfig,
+    )
+
+    return RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        verification=VerificationConfig(test_cmd=test_cmd, build_cmd=build_cmd),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(),
+        git=GitConfig(),
+    )
 
 
 def test_doctor_report_helpers() -> None:
@@ -350,6 +379,64 @@ async def test_check_discord_enabled_missing_token() -> None:
 
 
 @pytest.mark.anyio
+async def test_check_verification_commands_passes_when_resolvable() -> None:
+    """Doctor passes when configured verification commands resolve on PATH."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(test_cmd="python -m pytest")),
+        path_resolver=lambda token: rf"C:\tools\{token}.exe",
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_verification_commands()
+    assert result.passed is True
+    assert result.name == CHECK_VERIFICATION_COMMANDS
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_verification_commands_fails_with_remediation() -> None:
+    """Doctor fails with an actionable remediation when the leading token is unresolvable."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(test_cmd="pytest -q")),
+        path_resolver=lambda token: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_verification_commands()
+    assert result.passed is False
+    assert result.name == CHECK_VERIFICATION_COMMANDS
+    assert "test_cmd" in result.message
+    assert "pytest" in result.message
+    assert "python -m pytest" in (result.remediation or "")
+
+
+@pytest.mark.anyio
+async def test_check_verification_commands_checks_build_cmd_too() -> None:
+    """Doctor flags an unresolvable non-empty build_cmd as well as test_cmd."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(build_cmd="npm run build")),
+        path_resolver=lambda token: None if token == "npm" else rf"C:\tools\{token}.exe",
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_verification_commands()
+    assert result.passed is False
+    assert "build_cmd" in result.message
+    assert "npm" in result.message
+
+
+@pytest.mark.anyio
+async def test_check_verification_commands_skipped_without_config() -> None:
+    """Doctor skips verification command resolution when configuration is not loaded."""
+    doctor = Doctor(path_resolver=lambda token: None)
+    result = await doctor.check_verification_commands()
+
+    assert result.passed is True
+    assert result.name == CHECK_VERIFICATION_COMMANDS
+    assert "skipped" in result.message.lower()
+
+
+@pytest.mark.anyio
 async def test_run_halts_on_first_failure(tmp_path: Path) -> None:
     """Verify run() halts on the first failed check when halt_on_failure=True."""
     runner = FakeCommandRunner()
@@ -384,8 +471,8 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
     report = await doctor.run(local_only=False, halt_on_failure=False)
 
     assert report.passed is False
-    # All 6 checks executed
-    assert len(report.checks) == 6
+    # All 7 checks executed
+    assert len(report.checks) == 7
 
 
 @pytest.mark.anyio

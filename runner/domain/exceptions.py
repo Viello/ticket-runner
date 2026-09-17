@@ -31,6 +31,11 @@ class SpecFormatError(TicketFormatError):
     pass
 
 
+class SignalFormatError(TicketRunnerError):
+    """Raised when a signal file cannot be parsed or fails strict validation."""
+    pass
+
+
 class CommandNotFoundError(TicketRunnerError):
     """Raised when an executable command cannot be resolved or found."""
 
@@ -46,5 +51,15 @@ class QueueLockError(TicketRunnerError):
 
 class CleanSlateError(TicketRunnerError):
     """Raised when clean-slate queue or spec archival fails."""
+    pass
+
+
+class NonInteractiveError(TicketRunnerError):
+    """Raised when human contact requires an interactive stdin that is unavailable."""
+    pass
+
+
+class UserAbortError(TicketRunnerError):
+    """Raised when an operator aborts execution via the intervention menu."""
     pass
 
