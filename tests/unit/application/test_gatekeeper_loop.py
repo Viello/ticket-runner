@@ -43,6 +43,7 @@ from runner.ports.intervention import (
 )
 from runner.ports.signal_repository import SignalRepository
 from tests.fakes.fake_command_runner import FakeCommandRunner
+from tests.fakes.fake_ticket_repository import FakeTicketRepository
 from tests.fakes.fake_intervention import FakeInterventionGateway
 
 
@@ -651,7 +652,9 @@ def test_orchestrator_outcome_aborted_and_user_abort_error() -> None:
     assert outcome.status == TicketOutcomeStatus.ABORTED
 
     # Test QueueOrchestrator raising UserAbortError on aborted outcome
+    ticket_repo = FakeTicketRepository([_make_ticket("T031")])
     orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
         processor=lambda t: asyncio.sleep(0, result=TicketOutcome.aborted(details="Operator abort")),
     )
 

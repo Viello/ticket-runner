@@ -222,29 +222,46 @@ def test_posix_conflict_raises_queue_lock_error(tmp_path: Path) -> None:
 
 
 def test_git_status_porcelain_clean_with_sentinel_lock(tmp_path: Path) -> None:
-    """Verify sentinel lock file in docs/tickets/.queue.lock does not appear in git status."""
-    # Run git status in workspace root
-    lock_path = Path("docs/tickets/.queue.lock")
-    lock_existed = lock_path.exists()
+    """Verify sentinel lock file does not appear in git status with proper .gitignore."""
+    # Set up an isolated git repository in tmp_path
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
 
+    # Write .gitignore with the same patterns as the real repo
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text(".queue.lock\n**/.queue.lock\n")
+
+    # Create initial commit so git status works
+    subprocess.run(["git", "add", ".gitignore"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
+
+    # Create and acquire the sentinel lock inside the tmp repo
+    lock_dir = tmp_path / "docs" / "tickets"
+    lock_dir.mkdir(parents=True)
+    lock_path = lock_dir / ".queue.lock"
+
+    lock = QueueFileLock(lock_path=lock_path)
+    lock.acquire()
     try:
-        lock = QueueFileLock(lock_path=lock_path)
-        lock.acquire()
-        try:
-            status_proc = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            # .queue.lock must NOT appear in git status --porcelain
-            assert ".queue.lock" not in status_proc.stdout
-        finally:
-            lock.release()
+        status_proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # .queue.lock must NOT appear in git status --porcelain
+        assert ".queue.lock" not in status_proc.stdout
     finally:
-        # Clean up if it didn't exist prior to test
-        if not lock_existed and lock_path.exists():
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+        lock.release()
+

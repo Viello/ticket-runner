@@ -13,6 +13,7 @@ from runner.application.queue_orchestrator import (
     QueueOrchestrator,
     TicketOutcome,
 )
+from runner.adapters.markdown.file_lock import QueueFileLock
 from runner.container import build_container
 from runner.domain.config import (
     DiscordConfig,
@@ -128,6 +129,7 @@ def test_cli_start_threads_config_path(
 def test_cli_start_with_pending_tickets_processes_through_container(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     dummy_config = _make_dummy_config(queue_completion="terminate")
     fake_doc = FakeDoctorPassing(config=dummy_config)
@@ -154,6 +156,7 @@ def test_cli_start_with_pending_tickets_processes_through_container(
         dummy_config,
         ticket_store=ticket_repo,
         git_operations=fake_git_ops,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
         processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
     )
     monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
@@ -168,6 +171,7 @@ def test_cli_start_with_pending_tickets_processes_through_container(
 def test_cli_start_aborted_by_operator_exits_with_code_2(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     dummy_config = _make_dummy_config(queue_completion="terminate")
     fake_doc = FakeDoctorPassing(config=dummy_config)
@@ -187,6 +191,7 @@ def test_cli_start_aborted_by_operator_exits_with_code_2(
     fake_container = build_container(
         dummy_config,
         ticket_store=ticket_repo,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
         processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.aborted(details="Intervention abort")),
     )
     monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
@@ -201,13 +206,14 @@ def test_cli_start_aborted_by_operator_exits_with_code_2(
 def test_cli_start_empty_queue_terminates_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     dummy_config = _make_dummy_config(queue_completion="terminate")
     fake_doc = FakeDoctorPassing(config=dummy_config)
     monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
 
     ticket_repo = FakeTicketRepository([])
-    fake_container = build_container(dummy_config, ticket_store=ticket_repo)
+    fake_container = build_container(dummy_config, ticket_store=ticket_repo, lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"))
     monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
 
     code = ticket_runner.main(["start", "--local-only"])
@@ -219,13 +225,14 @@ def test_cli_start_empty_queue_terminates_cleanly(
 def test_cli_start_empty_queue_standby_with_injected_stop(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     dummy_config = _make_dummy_config(queue_completion="standby")
     fake_doc = FakeDoctorPassing(config=dummy_config)
     monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
 
     ticket_repo = FakeTicketRepository([])
-    fake_container = build_container(dummy_config, ticket_store=ticket_repo)
+    fake_container = build_container(dummy_config, ticket_store=ticket_repo, lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"))
     monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
 
     orchestrator = fake_container.orchestrator

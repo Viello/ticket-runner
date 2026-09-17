@@ -15,6 +15,43 @@ isolated signal directories, and real temporary filesystems under ``tmp_path``:
   US 09: [S]kip discards uncommitted edits and advances queue after confirmation
   US 10: [A]bort cleanly halts the Runner preserving working tree for direct debugging
   US 11: Question signals updated with status answered and Worker session resumed
+
+Story-to-test matrix (T036 coverage audit):
+
+  US 01: Worker writes ready.json
+      -> test_us03_worker_streaming_after_ready_signal_killed_after_grace
+      -> test_us04_us05_orchestrator_happy_path_commit_and_relocation_with_ticket_processor
+  US 02: Worker asks questions
+      -> test_us03_question_signal_triggers_question_pending_without_nudge
+      -> test_us11_question_interruption_preserves_budget_and_resumes_session
+      -> test_us11_orchestrator_choice_question_scripted_answer_and_resume_to_commit
+  US 03: 10s grace / kill
+      -> test_us03_worker_streaming_after_ready_signal_killed_after_grace
+      -> test_us03_worker_exiting_cleanly_within_grace_not_killed
+      -> test_us03_supervisor_reused_resets_grace_state_across_runs
+  US 04: Gatekeeper runs build_cmd + test_cmd
+      -> test_us04_build_and_test_commands_run_on_ready_signal
+      -> test_us04_build_failure_skips_test_cmd
+  US 05: Accept only exit 0
+      -> test_us04_us05_orchestrator_happy_path_commit_and_relocation_with_ticket_processor
+      -> test_us06_failed_verification_reinvokes_session_with_diagnostics_and_passes
+  US 06: Trailing diagnostics re-invoke
+      -> test_us06_failed_verification_reinvokes_session_with_diagnostics_and_passes
+      -> test_orchestrator_malformed_ready_signal_resumes_with_diagnostics_and_passes_later_cycle
+  US 07: Breaker trips at max_attempts
+      -> test_us07_circuit_breaker_trips_after_max_attempts
+  US 08: Retry + hint budget restore
+      -> test_us08_retry_with_hint_restores_budget_and_injects_advice
+  US 09: Skip discards edits + advance
+      -> test_us09_skip_after_budget_exhaustion_returns_skipped_result
+      -> test_us09_orchestrator_skip_resets_tree_relocates_and_advances
+  US 10: Abort preserves working tree
+      -> test_us10_abort_raises_user_abort_error_preserving_working_tree
+      -> test_us10_build_container_abort_mid_loop_leaves_tree_byte_identical
+  US 11: Question answered + resume
+      -> test_us11_question_interruption_preserves_budget_and_resumes_session
+      -> test_us11_orchestrator_choice_question_scripted_answer_and_resume_to_commit
+      -> test_us11_orchestrator_ready_wins_precedence_when_stale_question_exists
 """
 
 from __future__ import annotations
@@ -24,7 +61,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-import time
 from typing import Any
 
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
@@ -460,6 +496,134 @@ def test_us03_supervisor_reused_resets_grace_state_across_runs(tmp_path: Path) -
     # Run 2: starts fresh, no signals present, runs cleanly
     res2 = asyncio.run(sc.supervisor.run("T030", prompt="prompt 2"))
     assert res2.reason == RunTerminationReason.EXITED
+
+
+# --- US 04: Gatekeeper Runs build_cmd + test_cmd Behavioral Tests ---
+
+
+def test_us04_build_and_test_commands_run_on_ready_signal(tmp_path: Path) -> None:
+    """US 04: On ready Signal Gatekeeper runs build_cmd then test_cmd; both exit 0 and Ticket is accepted."""
+    sc = Scenario.assemble(tmp_path, ticket_id="T031")
+    session_id = "ses_us04BuildPass"
+    build_cmd = "python -m build"
+    test_cmd = "pytest -q"
+    verification_config = VerificationConfig(build_cmd=build_cmd, test_cmd=test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class ReadyHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8001)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/core.py"],
+                    "self_review_notes": "Build and tests pass locally.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=15000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        ReadyHandle(),
+    )
+    sc.runner.register_spawn(
+        build_shell_argv(build_cmd),
+        stdout_lines=["building wheel...", "Successfully built"],
+        exit_code=0,
+    )
+    sc.runner.register_spawn(shell_test_cmd := build_shell_argv(test_cmd), stdout_lines=["1 passed"], exit_code=0)
+
+    loop = sc.make_loop(max_attempts=1, verification_config=verification_config)
+    result = asyncio.run(loop.run())
+
+    assert result.is_passed is True
+    assert result.attempts == 1
+    report = result.verification_report
+    assert report is not None
+    assert [outcome.label for outcome in report.results] == ["build", "test"]
+    assert report.skipped_commands == ()
+    assert report.passed is True
+
+    # Both build and test commands were executed in order
+    shell_spawns = [inv.cmd for inv in sc.runner.spawn_invocations if inv.cmd[0] not in ("opencode",)]
+    assert shell_spawns == [build_shell_argv(build_cmd), shell_test_cmd]
+
+
+def test_us04_build_failure_skips_test_cmd(tmp_path: Path) -> None:
+    """US 04: A failing build_cmd skips test_cmd and records skipped_commands on the verification report."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T031",
+        decisions=[InterventionDecision(action=InterventionAction.SKIP)],
+    )
+    session_id = "ses_us04BuildFail"
+    build_cmd = "python -m build"
+    test_cmd = "pytest -q"
+    verification_config = VerificationConfig(build_cmd=build_cmd, test_cmd=test_cmd)
+
+    initial_prompt = sc.coordinator.build_initial_prompt(sc.ticket)
+
+    class ReadyHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=8002)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": "T031",
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/core.py"],
+                    "self_review_notes": "Ready but build broken.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=15000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        ReadyHandle(),
+    )
+    sc.runner.register_spawn(
+        build_shell_argv(build_cmd),
+        stdout_lines=["building wheel..."],
+        stderr="ERROR: CompileError in core.py",
+        exit_code=1,
+    )
+
+    loop = sc.make_loop(max_attempts=1, verification_config=verification_config)
+    result = asyncio.run(loop.run())
+
+    # Build failure consumes the single attempt and the operator skips the Ticket
+    assert result.is_skipped is True
+    assert result.attempts == 1
+    assert "CompileError in core.py" in (result.diagnostics or "")
+
+    # test_cmd was never spawned
+    test_argv = build_shell_argv(test_cmd)
+    assert not any(inv.cmd == test_argv for inv in sc.runner.spawn_invocations)
+
+    # Independent verification report confirms test_cmd was skipped
+    report = asyncio.run(sc.executor.verify(verification_config))
+    assert report.passed is False
+    assert report.skipped_commands == (test_cmd,)
+    assert [outcome.label for outcome in report.results] == ["build"]
 
 
 # --- US 06 - US 10: Verification Loop, Diagnostics, & Circuit Breaker Behavioral Tests ---
@@ -1044,6 +1208,87 @@ def test_us04_us05_orchestrator_happy_path_commit_and_relocation_with_ticket_pro
     # 4. Gotchas appended to gotchas.md
     gotchas_text = (sc.root / "docs" / "tickets" / "gotchas.md").read_text(encoding="utf-8")
     assert "Discovered runtime lesson on signal lifecycle." in gotchas_text
+
+
+def test_us09_orchestrator_skip_resets_tree_relocates_and_advances(tmp_path: Path) -> None:
+    """US 09: [S]kip at orchestrator level resets the working tree, relocates Ticket as skipped, and authors no commit."""
+    sc = Scenario.assemble(
+        tmp_path,
+        ticket_id="T032",
+        decisions=[InterventionDecision(action=InterventionAction.SKIP)],
+    )
+    ticket_file = _write_ticket_file(sc.root, sc.ticket)
+    _register_git_fakes(sc.runner)
+
+    session_id = "ses_us09Skip"
+    test_cmd = "pytest -q"
+    shell_test_cmd = build_shell_argv(test_cmd)
+
+    processor = TicketProcessor(
+        coordinator=sc.coordinator,
+        signal_repository=sc.signals,
+        executor=sc.executor,
+        intervention_gateway=sc.gateway,
+        max_attempts=1,
+    )
+    orchestrator = _make_orchestrator(sc, processor=processor)
+    initial_prompt = processor.build_initial_prompt(sc.ticket)
+
+    class SkipWorkerHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(pid=9202)
+
+        async def stdout_lines(self):
+            yield _event("step_start", session_id=session_id) + "\n"
+            # Worker leaves uncommitted edits on disk that skip must discard
+            mod_file = sc.root / "runner" / "broken.py"
+            mod_file.parent.mkdir(parents=True, exist_ok=True)
+            mod_file.write_text("# broken implementation\n", encoding="utf-8")
+            sc.ready_signal_path.write_text(
+                json.dumps({
+                    "ticket_id": sc.ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["runner/broken.py"],
+                    "self_review_notes": "Implemented but unfixable test failure.",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-17T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+            yield _event("step_finish", session_id=session_id, tokens=1000) + "\n"
+
+        async def wait(self) -> int:
+            return 0
+
+    sc.runner.register_spawn_handle(
+        ["opencode", "run", "--format", "json", "--auto", initial_prompt],
+        SkipWorkerHandle(),
+    )
+    # Verification fails on first attempt, tripping the circuit breaker into the SKIP decision
+    sc.runner.register_spawn(shell_test_cmd, stderr="Unfixable test failure", exit_code=1)
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_skipped is True
+    assert "Unfixable test failure" in str(outcome.details)
+
+    # 1. Working tree was reset (git reset --hard HEAD + git clean -fd)
+    assert ["git", "reset", "--hard", "HEAD"] in sc.runner.commands
+    assert ["git", "clean", "-fd"] in sc.runner.commands
+
+    # 2. Ticket relocated to completed/ with Status: skipped
+    assert not ticket_file.exists()
+    relocated_file = sc.root / "docs" / "tickets" / SPEC_SLUG / "completed" / f"{sc.ticket.id}-behavioral.md"
+    assert relocated_file.is_file()
+    assert "Status: skipped" in relocated_file.read_text(encoding="utf-8")
+
+    # 3. No commit was authored
+    commit_invocations = [inv for inv in sc.runner.invocations if inv.cmd[:2] == ["git", "commit"]]
+    assert len(commit_invocations) == 0
+
+    # 4. Ready signal was consumed
+    assert not sc.ready_signal_path.exists()
 
 
 def test_orchestrator_malformed_ready_signal_resumes_with_diagnostics_and_passes_later_cycle(tmp_path: Path) -> None:
