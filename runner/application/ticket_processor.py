@@ -150,6 +150,13 @@ class GatekeeperTicketProcessor:
         """Human intervention gateway."""
         return self._intervention_gateway
 
+    @property
+    def supervisor(self) -> Any:
+        """Underlying WorkerSupervisor if available through coordinator."""
+        if self._coordinator is not None and hasattr(self._coordinator, "supervisor"):
+            return self._coordinator.supervisor
+        return None
+
     def build_initial_prompt(
         self,
         ticket: Ticket,

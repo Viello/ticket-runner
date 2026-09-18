@@ -54,6 +54,7 @@ class RunTerminationReason(str, Enum):
     STALLED = "STALLED"
     DROPPED = "DROPPED"
     KILLED_SIGNAL = "KILLED_SIGNAL"
+    KILLED_INTERRUPT = "KILLED_INTERRUPT"
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ class SessionRunResult:
     @property
     def is_crash(self) -> bool:
         """Whether this session run suffered a crash (non-zero exit or stream error event)."""
-        if self.reason == RunTerminationReason.KILLED_SIGNAL:
+        if self.reason in (RunTerminationReason.KILLED_SIGNAL, RunTerminationReason.KILLED_INTERRUPT):
             return False
         return self.exit_code != 0 or self.has_error_event
 
@@ -221,7 +222,7 @@ class WorkerSupervisor:
         """Execute termination ladder: graceful terminate -> tree-kill -> bounded wait."""
         try:
             await handle.terminate()
-        except Exception:
+        except BaseException:
             pass
 
         if handle.pid > 0:
@@ -229,12 +230,12 @@ class WorkerSupervisor:
                 await self._command_runner.run(
                     ["taskkill", "/PID", str(handle.pid), "/T", "/F"]
                 )
-            except Exception:
+            except BaseException:
                 pass
 
         try:
             await asyncio.wait_for(handle.wait(), timeout=self._process_wait_timeout)
-        except Exception:
+        except BaseException:
             pass
 
     def _is_signal_present(self, ticket_id: str) -> bool:
@@ -519,10 +520,20 @@ class WorkerSupervisor:
             else:
                 exit_code = await handle.wait()
 
+            if termination_reason == RunTerminationReason.KILLED_INTERRUPT:
+                raise KeyboardInterrupt("Worker interrupted by operator.")
+
         except asyncio.CancelledError:
             try:
-                await asyncio.shield(self._terminate_ladder(handle))
-            except Exception:
+                task = asyncio.create_task(self._terminate_ladder(handle))
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        await asyncio.sleep(0)
+                    except BaseException:
+                        break
+            except BaseException:
                 pass
             raise
         except Exception:

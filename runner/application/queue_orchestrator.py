@@ -235,6 +235,13 @@ class QueueOrchestrator:
         """Default architectural subsystem commit scope."""
         return self._commit_scope
 
+    @property
+    def supervisor(self) -> Any:
+        """Underlying WorkerSupervisor if available through processor."""
+        if self._processor is not None and hasattr(self._processor, "supervisor"):
+            return self._processor.supervisor
+        return None
+
     def acquire_lock(self) -> None:
         """Acquire the sentinel queue lock if not already held."""
         if not self._lock.is_locked:
@@ -471,11 +478,15 @@ class QueueOrchestrator:
             # 2. Process initial queue until empty or paused
             if active_processor is not None:
                 while not self._is_paused:
+                    if stop_event is not None and stop_event.is_set():
+                        break
                     outcome = await self.run_next(processor=active_processor)
                     if outcome is None:
                         break
+                    if stop_event is not None and stop_event.is_set():
+                        break
 
-            if self._is_paused:
+            if self._is_paused or (stop_event is not None and stop_event.is_set()):
                 return 0
 
             # 3. Queue is exhausted
@@ -499,10 +510,17 @@ class QueueOrchestrator:
                 if max_standby_iterations is not None and iteration >= max_standby_iterations:
                     break
 
-                try:
-                    await active_sleep(effective_poll_interval)
-                except asyncio.CancelledError:
-                    raise
+                if stop_event is not None and sleep_fn is None:
+                    try:
+                        await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    try:
+                        await active_sleep(effective_poll_interval)
+                    except asyncio.CancelledError:
+                        raise
 
                 iteration += 1
 
@@ -515,11 +533,15 @@ class QueueOrchestrator:
                     if active_processor is None:
                         raise RuntimeError("No ticket processor configured.")
                     while not self._is_paused:
+                        if stop_event is not None and stop_event.is_set():
+                            break
                         outcome = await self.run_next(processor=active_processor)
                         if outcome is None:
                             break
+                        if stop_event is not None and stop_event.is_set():
+                            break
 
-                    if self._is_paused:
+                    if self._is_paused or (stop_event is not None and stop_event.is_set()):
                         break
 
                     printer("[Queue] Queue exhausted: no pending tickets.")

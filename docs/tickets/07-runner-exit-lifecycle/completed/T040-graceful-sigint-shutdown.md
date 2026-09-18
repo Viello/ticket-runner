@@ -1,5 +1,6 @@
 # T040 — Graceful SIGINT shutdown
-Status: pending
+Status: completed
+Completed: 2026-09-18T04:18:30Z
 Security: required
 Spec: docs/specs/07-runner-exit-lifecycle.md
 Blocked by: T039

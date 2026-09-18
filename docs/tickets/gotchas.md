@@ -383,3 +383,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Windows Job Objects automatically close and reap processes if the last handle is closed. Storing the job handle in a local variable or temporary scope causes garbage collection to prematurely kill active processes mid-run. Conversely, a child process spawned before job assignment can escape into an unmanaged process group.
 - **Solution**: Create and configure the Job Object immediately upon `spawn()`, assign the child process synchronously before any asynchronous yield without `CREATE_BREAKAWAY_FROM_JOB`, and attach the Job Object handle directly to the `SubprocessProcessHandle` instance for its entire lifetime.
 
+### Windows Main-Thread SIGINT Handler and Event Loop Marshalling
+- **Problem**: Python's `asyncio` loop on Windows does not support signal handlers (`loop.add_signal_handler` raises `NotImplementedError`). Catching SIGINT via standard `signal.signal(signal.SIGINT, handler)` executes on the main thread outside the event loop, where directly modifying async state or setting uncoordinated primitives can cause race conditions or miss active awaits.
+- **Solution**: Install a main-thread handler via `signal.signal(signal.SIGINT, ...)` that marshals cooperative shutdown calls (`stop_event.set()`, `supervisor.request_kill(...)`) into the running event loop using `loop.call_soon_threadsafe`.
+
+### Cooperative SIGINT Idempotency and Second Ctrl+C Force-Kill
+- **Problem**: When a process is undergoing cooperative graceful shutdown (terminating worker subprocesses and releasing sentinels), subsequent SIGINT interrupts can restart or re-enter the graceful shutdown path, creating a trap where an operator cannot force-exit a wedged shutdown.
+- **Solution**: Maintain an atomic `shutting_down` latch: the first interrupt begins cooperative shutdown and marshals stop events, while any subsequent interrupt observed while `shutting_down` is active immediately triggers an ungraceful hard exit via `sys.exit(130)`.
+

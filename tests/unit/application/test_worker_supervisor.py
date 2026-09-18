@@ -1718,3 +1718,73 @@ def test_supervisor_stalled_runs_termination_ladder_and_closes_handle(tmp_path: 
         for cmd in fake_runner.commands
     )
 
+
+def test_cancellation_triggers_termination_ladder_and_cleans_handle(tmp_path: Path) -> None:
+    """Regression test: asyncio.CancelledError (BaseException) must trigger termination ladder."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=[json.dumps({"type": "step_start", "sessionID": "ses_cancel123"})],
+        delay=2.0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    ticket = _make_ticket("T040")
+
+    async def _scenario() -> None:
+        task = asyncio.create_task(supervisor.run(ticket=ticket, prompt="test prompt"))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_scenario())
+
+    assert handle.terminated is True
+    assert handle.closed is True
+    assert any(
+        cmd[:2] == ["taskkill", "/PID"] and str(handle.pid) in cmd
+        for cmd in fake_runner.commands
+    )
+
+
+def test_request_kill_interrupt_terminates_handle_and_raises_keyboard_interrupt(tmp_path: Path) -> None:
+    """External request_kill(KILLED_INTERRUPT) terminates process ladder and raises KeyboardInterrupt."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=[json.dumps({"type": "step_start", "sessionID": "ses_interrupt123"})],
+        delay=2.0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+    ticket = _make_ticket("T040")
+
+    async def _scenario() -> None:
+        async def _kill_later() -> None:
+            await asyncio.sleep(0.01)
+            supervisor.request_kill("KILLED_INTERRUPT")
+
+        asyncio.create_task(_kill_later())
+        await supervisor.run(ticket=ticket, prompt="test prompt")
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(_scenario())
+
+    assert handle.terminated is True
+    assert handle.closed is True
+    assert any(
+        cmd[:2] == ["taskkill", "/PID"] and str(handle.pid) in cmd
+        for cmd in fake_runner.commands
+    )
+
+
+

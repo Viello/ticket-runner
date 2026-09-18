@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+import signal
 from typing import Any
 import pytest
 
@@ -13,6 +15,8 @@ from runner.application.queue_orchestrator import (
     QueueOrchestrator,
     TicketOutcome,
 )
+from runner.application.worker_supervisor import WorkerSupervisor
+from runner.domain.runtime_paths import RuntimePaths
 from runner.adapters.markdown.file_lock import QueueFileLock
 from runner.container import build_container
 from runner.domain.config import (
@@ -312,3 +316,156 @@ def test_cli_run_start_honors_poll_interval_override(
     )
     assert code == 0
     assert captured_poll_interval == 0.5
+
+
+def test_cli_ctrl_c_during_standby_exits_cleanly_with_code_130(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="standby")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    ticket_repo = FakeTicketRepository([])
+    lock = QueueFileLock(lock_path=tmp_path / ".queue.lock")
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        lock=lock,
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    orchestrator = fake_container.orchestrator
+    original_run_lifecycle = orchestrator.run_lifecycle
+
+    async def patched_run_lifecycle(*args: Any, **kwargs: Any) -> int:
+        stop_event = kwargs.get("stop_event")
+
+        async def _interrupt_later() -> None:
+            await asyncio.sleep(0.01)
+            sig_handler = signal.getsignal(signal.SIGINT)
+            if callable(sig_handler):
+                sig_handler(signal.SIGINT, None)
+            elif stop_event is not None:
+                stop_event.set()
+
+        asyncio.create_task(_interrupt_later())
+        return await original_run_lifecycle(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "run_lifecycle", patched_run_lifecycle)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 130
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    assert lock.is_locked is False
+
+
+def test_cli_ctrl_c_mid_worker_terminates_active_worker_and_exits_130(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T040",
+        title="Mid-Worker Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T040-mid.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    lock = QueueFileLock(lock_path=tmp_path / ".queue.lock")
+
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=[json.dumps({"type": "step_start", "sessionID": "ses_t040"})],
+        delay=2.0,
+    )
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        async def _interrupt_later() -> None:
+            await asyncio.sleep(0.01)
+            sig_handler = signal.getsignal(signal.SIGINT)
+            if callable(sig_handler):
+                sig_handler(signal.SIGINT, None)
+
+        asyncio.create_task(_interrupt_later())
+        await supervisor.run(ticket=ticket, prompt="test prompt")
+        return TicketOutcome.approved()
+
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        lock=lock,
+        supervisor=supervisor,
+        processor=fake_processor,
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 130
+    assert handle.terminated is True
+    assert handle.closed is True
+    assert lock.is_locked is False
+
+
+def test_cli_second_ctrl_c_during_shutdown_force_kills_with_130(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="standby")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=FakeTicketRepository([]),
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    orchestrator = fake_container.orchestrator
+
+    async def patched_run_lifecycle(*args: Any, **kwargs: Any) -> int:
+        sig_handler = signal.getsignal(signal.SIGINT)
+        assert callable(sig_handler)
+        # First Ctrl+C: starts graceful shutdown
+        sig_handler(signal.SIGINT, None)
+        # Second Ctrl+C: must trigger immediate sys.exit(130)
+        with pytest.raises(SystemExit) as exc_info:
+            sig_handler(signal.SIGINT, None)
+        assert exc_info.value.code == 130
+        return 130
+
+    monkeypatch.setattr(orchestrator, "run_lifecycle", patched_run_lifecycle)
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 130
+
+
+def test_cli_main_catches_keyboard_interrupt_returns_130(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_doc = FakeDoctorPassing()
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    def raise_keyboard_interrupt(*args: Any, **kwargs: Any) -> Any:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(ticket_runner, "run_start", raise_keyboard_interrupt)
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 130
