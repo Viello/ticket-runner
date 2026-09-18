@@ -359,4 +359,9 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Unexpected payload schemas or regex backtracking anomalies during stream decoding of `tool_use` events could raise unhandled exceptions in the telemetry extraction loop, crashing the supervisor and killing active worker sessions.
 - **Solution**: Wrap `extract_resource_access` calls defensively inside a `try...except Exception` block in the supervisor streaming loop, logging warnings for extraction failures while permitting session execution and watchdog monitoring to proceed uninterrupted.
 
+### Non-Blocking Soft Warnings and Multi-Cycle Resource Accumulation
+- **Problem**: Failing verification attempts or tripping the circuit breaker when review skills or `AGENTS.md` are not read prematurely aborts viable solutions and violates Gatekeeper independence. Conversely, discarding accessed resources between retries causes repetitive warnings on subsequent cycles even when the agent has already consulted the required skill.
+- **Solution**: Emit soft warnings strictly via `_notify` and `logger.warning` without modifying attempt budgets or blocking Gatekeeper test execution, and accumulate accessed resources across cycles within the verification loop so earlier consultations satisfy compliance on retry.
+
+
 

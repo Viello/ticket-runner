@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from runner.application.gatekeeper import (
     GatekeeperCommandExecutor,
     VerificationLoop,
     VerificationReport,
+    build_verification_failure_prompt,
 )
 from runner.application.handoff_coordinator import (
     HandoffCoordinator,
@@ -43,6 +44,7 @@ def _make_ticket(
     ticket_id: str = "T032",
     title: str = "Ready-path ticket processor",
     spec_path: str = "docs/specs/04-signal-protocol-and-gatekeeper.md",
+    security_required: bool = False,
 ) -> Ticket:
     return Ticket(
         id=ticket_id,
@@ -53,6 +55,7 @@ def _make_ticket(
         acceptance_criteria=("Single commit with Update bullets.",),
         gotchas=(),
         path=Path(f"docs/tickets/04-signal-protocol-and-gatekeeper/{ticket_id}-test.md"),
+        security_required=security_required,
     )
 
 
@@ -720,3 +723,476 @@ def test_malformed_question_exhausts_budget_trips_circuit_breaker(tmp_path: Path
     assert "not valid json" in str(outcome.details).lower()
     assert len(gateway.request_records) == 1
     assert gateway.request_records[0].attempt == 1
+
+
+# --- T046: Ready Signal Soft Warnings & Diagnostic Resume Tests ---
+
+
+def test_ready_signal_soft_warnings_emitted_when_code_review_and_agents_md_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Missing code-review and AGENTS.md triggers soft warnings via notify and logger, but verification passes."""
+    ticket = _make_ticket(ticket_id="T046", security_required=False)
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    def _on_call(t: Ticket, count: int) -> None:
+        runtime_paths.ready_signal_path(t.id).write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/app.py"],
+                "self_review_notes": "Implemented feature without review.",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    # Worker accessed only "implement", missing "code-review" and "AGENTS.md"
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_1",
+                resources_accessed=frozenset({"implement"}),
+            )
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    notices: list[str] = []
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        notify=notices.append,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+
+    # Check both warnings emitted via notify
+    expected_cr = (
+        "[T046] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. "
+        "Proceeding to verification."
+    )
+    expected_agents = (
+        "[T046] Warning: Ready signal emitted without reading 'AGENTS.md'. "
+        "Proceeding to verification."
+    )
+    assert expected_cr in notices
+    assert expected_agents in notices
+
+    # Check warnings in caplog at WARNING level
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    log_messages = [r.getMessage() for r in warning_records]
+    assert any(expected_cr in msg for msg in log_messages)
+    assert any(expected_agents in msg for msg in log_messages)
+
+
+def test_ready_signal_security_required_missing_security_review_emits_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When security_required is true, missing security-review emits soft warning."""
+    ticket = _make_ticket(ticket_id="T046", security_required=True)
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    def _on_call(t: Ticket, count: int) -> None:
+        runtime_paths.ready_signal_path(t.id).write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/secure.py"],
+                "self_review_notes": "Implemented security feature.",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    # Worker accessed code-review and AGENTS.md, but missed security-review
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_1",
+                resources_accessed=frozenset({"implement", "code-review", "AGENTS.md"}),
+            )
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    notices: list[str] = []
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        notify=notices.append,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+
+    expected_sec = (
+        "[T046] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. "
+        "Proceeding to verification."
+    )
+    assert expected_sec in notices
+    assert not any("code-review" in n for n in notices)
+    assert not any("AGENTS.md" in n for n in notices)
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    log_messages = [r.getMessage() for r in warning_records]
+    assert any(expected_sec in msg for msg in log_messages)
+
+
+def test_ready_signal_with_all_required_resources_emits_no_soft_warnings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When all required resources are present in resources_accessed, no soft warnings are emitted."""
+    ticket = _make_ticket(ticket_id="T046", security_required=True)
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    def _on_call(t: Ticket, count: int) -> None:
+        runtime_paths.ready_signal_path(t.id).write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/perfect.py"],
+                "self_review_notes": "All reviews performed.",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_1",
+                resources_accessed=frozenset({
+                    "implement",
+                    "code-review",
+                    "AGENTS.md",
+                    "security-review",
+                }),
+            )
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    notices: list[str] = []
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        notify=notices.append,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert len(notices) == 0
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warning_records) == 0
+
+
+def test_soft_warnings_non_blocking_on_verification_failure(
+    tmp_path: Path,
+) -> None:
+    """Missing skills emit soft warnings without failing verification attempt or tripping breaker."""
+    ticket = _make_ticket(ticket_id="T046")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(decisions=["skip"])
+
+    def _on_call(t: Ticket, count: int) -> None:
+        runtime_paths.ready_signal_path(t.id).write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/failed.py"],
+                "self_review_notes": "Needs fix.",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    # Missing all review skills; command fails
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_1",
+                resources_accessed=frozenset({"implement"}),
+            )
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_failing_report(tail="Test failed on assert")])
+
+    notices: list[str] = []
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        notify=notices.append,
+        max_attempts=1,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_skipped is True
+    assert "Test failed on assert" in str(outcome.details)
+    # Warnings were emitted
+    assert any("code-review" in n for n in notices)
+    # The failure was due to test failure, exactly 1 attempt consumed
+    assert len(gateway.request_records) == 1
+    assert gateway.request_records[0].attempt == 1
+
+
+def test_attempt_1_failure_resume_prompt_has_no_diagnostic_skill_directive(
+    tmp_path: Path,
+) -> None:
+    """Attempt 1 failure resume prompt contains error output without prepending diagnostic directive."""
+    ticket = _make_ticket(ticket_id="T046")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/attempt1.py"],
+                "self_review_notes": f"Attempt {count}",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_diag"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_diag"),
+        ],
+        on_call=_on_call,
+    )
+    # Attempt 1 fails, Attempt 2 passes
+    executor = _StubExecutor([
+        _failing_report(tail="FAILED test_unit.py - KeyError: 'foo'"),
+        _passing_report(),
+    ])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        max_attempts=3,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert len(cycle_runner.calls) == 2
+
+    resume_prompt = cycle_runner.calls[1]["prompt"]
+    assert resume_prompt is not None
+    assert "Gatekeeper verification failed for ticket T046." in resume_prompt
+    assert "FAILED test_unit.py - KeyError: 'foo'" in resume_prompt
+    # Must NOT have diagnosing-bugs directive
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in resume_prompt
+
+
+def test_attempt_2_plus_failure_resume_prompt_prepends_diagnosing_bugs_directive(
+    tmp_path: Path,
+) -> None:
+    """Attempt 2+ failure resume prompt prepends diagnosing-bugs directive before error diagnostics."""
+    ticket = _make_ticket(ticket_id="T046")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/attempt2.py"],
+                "self_review_notes": f"Attempt {count}",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_diag2"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_diag2"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_diag2"),
+        ],
+        on_call=_on_call,
+    )
+    # Attempt 1 fails, Attempt 2 fails, Attempt 3 passes
+    executor = _StubExecutor([
+        _failing_report(tail="FAILED test_one.py"),
+        _failing_report(tail="FAILED test_two.py"),
+        _passing_report(),
+    ])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        max_attempts=3,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    assert len(cycle_runner.calls) == 3
+
+    # Cycle 2 resume prompt (after attempt 1 failure) does NOT have directive
+    prompt_cycle_2 = cycle_runner.calls[1]["prompt"]
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_cycle_2
+
+    # Cycle 3 resume prompt (after attempt 2 failure) PREPENDS directive
+    prompt_cycle_3 = cycle_runner.calls[2]["prompt"]
+    expected_prefix = (
+        "Gatekeeper verification failed (attempt 2). "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "using your file reading tool to diagnose and isolate the root cause.\n\n"
+    )
+    assert prompt_cycle_3.startswith(expected_prefix)
+    assert "FAILED test_two.py" in prompt_cycle_3
+
+
+def test_build_verification_failure_prompt_formatting_by_attempt() -> None:
+    """build_verification_failure_prompt formats correctly for attempt 1, 2, and beyond."""
+    ticket = _make_ticket(ticket_id="T046")
+    diagnostics = "AssertionError: expected True, got False"
+
+    # Attempt 1 (default)
+    prompt_1 = build_verification_failure_prompt(ticket, diagnostics)
+    assert "Gatekeeper verification failed for ticket T046." in prompt_1
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_1
+    assert "AssertionError: expected True, got False" in prompt_1
+
+    # Attempt 2
+    prompt_2 = build_verification_failure_prompt(ticket, diagnostics, attempt=2)
+    expected_prefix_2 = (
+        "Gatekeeper verification failed (attempt 2). "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "using your file reading tool to diagnose and isolate the root cause.\n\n"
+    )
+    assert prompt_2.startswith(expected_prefix_2)
+    assert "AssertionError: expected True, got False" in prompt_2
+
+    # Attempt 3
+    prompt_3 = build_verification_failure_prompt(ticket, diagnostics, attempt=3)
+    expected_prefix_3 = (
+        "Gatekeeper verification failed (attempt 3). "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "using your file reading tool to diagnose and isolate the root cause.\n\n"
+    )
+    assert prompt_3.startswith(expected_prefix_3)
+
+
+def test_multi_cycle_resource_accumulation(tmp_path: Path) -> None:
+    """Resources accessed across multiple cycles accumulate, satisfying soft warnings on subsequent ready."""
+    ticket = _make_ticket(ticket_id="T046", security_required=False)
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/accum.py"],
+                "self_review_notes": f"Cycle {count}",
+                "new_gotchas": [],
+                "timestamp": "2026-09-18T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    # Cycle 1 accessed code-review (missing AGENTS.md), fails verification
+    # Cycle 2 accessed AGENTS.md, passes verification
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_accum",
+                resources_accessed=frozenset({"code-review"}),
+            ),
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_accum",
+                resources_accessed=frozenset({"AGENTS.md"}),
+            ),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([
+        _failing_report(tail="Initial failure"),
+        _passing_report(),
+    ])
+
+    notices: list[str] = []
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,  # type: ignore
+        intervention_gateway=gateway,
+        notify=notices.append,
+        max_attempts=3,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_approved is True
+    # In Cycle 1, AGENTS.md was missing, so its warning was emitted
+    assert any("AGENTS.md" in n for n in notices)
+    # code-review was NOT in notices because it was accessed in Cycle 1
+    assert not any("code-review" in n for n in notices)
+

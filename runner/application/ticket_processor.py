@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import inspect
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.gotchas_store import GotchasStore
@@ -56,8 +59,12 @@ class GatekeeperTicketProcessor:
         worker_config: WorkerConfig | None = None,
         loop_factory: Callable[..., VerificationLoop] | None = None,
         printer: Callable[[str], None] | None = _DEFAULT_PRINTER,
+        notify: Callable[[str], None] | None = None,
     ) -> None:
         self._coordinator = coordinator
+        self._notify_sink = notify
+        if self._notify_sink is None and coordinator is not None and getattr(coordinator, "_notify", None) is not None:
+            self._notify_sink = coordinator._notify
 
         if signal_repository is not None:
             self._signal_repository = signal_repository
@@ -83,6 +90,45 @@ class GatekeeperTicketProcessor:
         self._worker_config = worker_config
         self._loop_factory = loop_factory
         self._printer = printer
+
+    def _notify(self, message: str) -> None:
+        """Emit notification notice to configured notification sink or printer."""
+        if self._notify_sink is not None:
+            try:
+                self._notify_sink(message)
+            except Exception:
+                pass
+        elif self._printer is not None:
+            try:
+                self._printer(message)
+            except Exception:
+                pass
+
+    def evaluate_ready_warnings(
+        self,
+        ticket: Ticket,
+        resources_accessed: frozenset[str] | set[str],
+    ) -> list[str]:
+        """Evaluate resource access compliance upon receiving a ready signal and emit soft warnings."""
+        warnings: list[str] = []
+        if "code-review" not in resources_accessed:
+            warnings.append(
+                f"[{ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+            )
+        if "AGENTS.md" not in resources_accessed:
+            warnings.append(
+                f"[{ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
+            )
+        if ticket.security_required and "security-review" not in resources_accessed:
+            warnings.append(
+                f"[{ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+            )
+
+        for warning in warnings:
+            logger.warning(warning)
+            self._notify(warning)
+
+        return warnings
 
     @property
     def signal_repository(self) -> SignalRepository:
@@ -150,6 +196,10 @@ class GatekeeperTicketProcessor:
 
     async def process(self, ticket: Ticket) -> TicketOutcome:
         """Drive the ready-path verification loop for a ticket."""
+        return await self._process_ticket(ticket)
+
+    async def _process_ticket(self, ticket: Ticket) -> TicketOutcome:
+        """Internal processing seam driving prompt generation and verification loop."""
         if self._cycle_runner is None:
             raise RuntimeError(
                 "No worker cycle runner configured for TicketProcessor."
@@ -162,28 +212,27 @@ class GatekeeperTicketProcessor:
         initial_prompt = self.build_initial_prompt(ticket)
 
         # 3. Create and drive VerificationLoop
-        if self._loop_factory is not None:
-            loop = self._loop_factory(
-                ticket=ticket,
-                cycle_runner=self._cycle_runner,
-                signal_repository=self._signal_repository,
-                executor=self._executor,
-                intervention_gateway=self._intervention_gateway,
-                verification_config=self._verification_config,
-                max_attempts=self._max_attempts,
-                initial_prompt=initial_prompt,
-            )
-        else:
-            loop = VerificationLoop(
-                ticket=ticket,
-                cycle_runner=self._cycle_runner,
-                signal_repository=self._signal_repository,
-                executor=self._executor,
-                intervention_gateway=self._intervention_gateway,
-                verification_config=self._verification_config,
-                max_attempts=self._max_attempts,
-                initial_prompt=initial_prompt,
-            )
+        factory = self._loop_factory or VerificationLoop
+        loop_kwargs: dict[str, Any] = {
+            "ticket": ticket,
+            "cycle_runner": self._cycle_runner,
+            "signal_repository": self._signal_repository,
+            "executor": self._executor,
+            "intervention_gateway": self._intervention_gateway,
+            "verification_config": self._verification_config,
+            "max_attempts": self._max_attempts,
+            "initial_prompt": initial_prompt,
+        }
+        try:
+            sig = inspect.signature(factory)
+            if "notify" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["notify"] = self._notify
+        except (ValueError, TypeError):
+            pass
+
+        loop = factory(**loop_kwargs)
 
         pending_prompt: str | None = None
         while True:

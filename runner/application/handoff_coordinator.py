@@ -147,6 +147,7 @@ class WorkerRunResult:
     jsonl_paths: tuple[Path, ...] = ()
     stderr_paths: tuple[Path, ...] = ()
     escalation_details: str | None = None
+    resources_accessed: frozenset[str] = frozenset()
 
     # Module-level enum member convenience on class
     ESCALATED: SingleCycleStatus = SingleCycleStatus.ESCALATED
@@ -177,6 +178,22 @@ class WorkerRunResult:
                 "escalation_details",
                 self.escalation.reason or str(self.escalation),
             )
+
+        if not self.resources_accessed and self.run_results:
+            accumulated: set[str] = set()
+            for r in self.run_results:
+                if hasattr(r, "resources_accessed"):
+                    accumulated.update(r.resources_accessed)
+            object.__setattr__(self, "resources_accessed", frozenset(accumulated))
+        elif not isinstance(self.resources_accessed, frozenset):
+            object.__setattr__(
+                self, "resources_accessed", frozenset(self.resources_accessed)
+            )
+
+    @property
+    def skills_accessed(self) -> frozenset[str]:
+        """Alias to resources_accessed for caller convenience."""
+        return self.resources_accessed
 
     @property
     def is_ready(self) -> bool:

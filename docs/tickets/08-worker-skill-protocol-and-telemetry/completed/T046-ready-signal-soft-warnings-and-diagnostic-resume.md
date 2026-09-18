@@ -1,5 +1,6 @@
 # T046 — Ready signal soft warnings and diagnostic retry resume
-Status: pending
+Status: completed
+Completed: 2026-09-18T03:12:00Z
 Spec: docs/specs/08-worker-skill-protocol-and-telemetry.md
 Blocked by: T043, T045
 
