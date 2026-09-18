@@ -30,6 +30,15 @@ def test_directory_properties() -> None:
     assert paths.logs_dir == Path(".agent/logs")
 
 
+def test_state_path() -> None:
+    paths = RuntimePaths()
+    assert paths.state_path == Path(".agent/state.json")
+
+    custom = RuntimePaths(root_dir=Path("custom/agent"))
+    assert custom.state_path == Path("custom/agent/state.json")
+
+
+
 def test_ready_signal_path_embeds_ticket_id() -> None:
     paths = RuntimePaths()
     assert paths.ready_signal_path("T015") == Path(".agent/signals/T015_ready.json")
@@ -99,6 +108,7 @@ def test_no_disk_io_on_init_or_path_computation(tmp_path: Path) -> None:
     _ = paths.checkpoint_path("T015")
     _ = paths.session_log_path("T015", "ses_01")
     _ = paths.session_stderr_path("T015", "ses_01")
+    _ = paths.state_path
 
     assert not agent_root.exists()
 

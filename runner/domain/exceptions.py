@@ -36,6 +36,12 @@ class SignalFormatError(TicketRunnerError):
     pass
 
 
+class StateFormatError(TicketRunnerError):
+    """Raised when a state file cannot be parsed, validated, or safely updated."""
+    pass
+
+
+
 class CommandNotFoundError(TicketRunnerError):
     """Raised when an executable command cannot be resolved or found."""
 

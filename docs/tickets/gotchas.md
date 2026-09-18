@@ -407,4 +407,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When standby resume cycles process newly detected tickets and drain again, re-triggering clean-slate prompts mid-watch re-introduces terminal blocking during active polling.
 - **Solution**: Track deferred clean-slate status and already cleaned spec slugs without prompting during standby re-drain; fire the interactive prompt exactly once upon final lifecycle exit.
 
+### Bounded State Reads with Fast-Path Stat Size Check
+- **Problem**: Reading unvalidated on-disk state documents into memory using standard `read_text()` or `json.load()` can cause memory exhaustion or hang the process when encountering corrupted or hostile multi-gigabyte files. Relying solely on `stat().st_size` can be inaccurate or bypassed on special filesystems or streaming descriptors.
+- **Solution**: Pair a pre-flight `stat().st_size > max_bytes` check with a bounded binary read (`handle.read(max_bytes + 1)`). If the returned chunk exceeds `max_bytes`, immediately raise `StateFormatError` before decoding UTF-8 or parsing JSON, capping memory usage deterministically.
+
+### State Adapter Caller-Owned Exact Document Writes
+- **Problem**: Attempting automatic read-modify-write merges inside low-level state persistence adapters tightly couples the storage layer to specific document schemas and can silently mask key deletion or clobber concurrent updates.
+- **Solution**: Keep the `StateStore` port protocol strictly as an exact-document writer (`write(document)` writes exactly the supplied mapping atomically without reading), requiring high-level application interactors to own schema evolution and explicit read-modify-write merge semantics.
+
 
