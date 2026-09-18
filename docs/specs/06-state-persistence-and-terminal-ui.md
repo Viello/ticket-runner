@@ -75,6 +75,114 @@ Persist orchestrator execution state continuously to `.agent/state.json` using a
 - **Crash Recovery with TUI Open**:
   On startup, if `state.json` contains `tui_open: true`, the Runner logs a warning: `"Runner exited while TUI session was open (session: <tui_session_id>). TUI may still be running. Resuming managed execution."` and clears both `tui_open` and `tui_session_id` before proceeding with normal crash recovery.
 
+## UI Contract
+
+This section defines the exact rendered formats that implementing code must produce. These are port-boundary contracts, not style suggestions — tests assert against them. For all `state.json` field names referenced below, the authoritative schema is in **Implementation Decisions → State Schema** above.
+
+### Top Panel (6 fixed rows)
+
+Verbatim example:
+
+```
+ticket  T042 · status  WORKING  · attempt  2 / 3
+tokens  [████████░░] 118,200 / 150,000 (79%)
+presence  nearby  · session  9f4a2c1e
+branch  agent/ticket-runner  · queue  T042 (2 remaining)
+────────────────────────────────────────────────────────────
+[p] pause  [m] toggle mode  [q] quit  [o] open TUI
+```
+
+Rules:
+- Row 1: `ticket  {active_ticket_id} · status  {status} · attempt  {verification_attempts} / 3`
+- Row 2: `tokens  [{bar}] {tokens.current:,} / 150,000 ({pct}%)`
+- Row 3: `presence  {presence_mode} · session  {opencode_session_id | "none"}`
+- Row 4: `branch  {branch} · queue  {active_ticket_id} ({n} remaining)` — or `queue  empty` when queue is exhausted
+- Row 5: Rich horizontal rule (`─` characters, full panel width)
+- Row 6: hotkey legend (see **Hotkey Legend States** below)
+
+The top panel is implemented as a `rich.layout.Layout` split: top panel is a fixed-height `Panel` (6 rows + borders); bottom panel fills the remaining height with the ring buffer.
+
+### Token Bar Format
+
+Rule: 10 characters wide. Fill character `█`, empty character `░`.
+
+| Block index | Threshold | Rich colour |
+|---|---|---|
+| 1–8 | always filled when `current` ≥ that tenth | `green` |
+| 9 | filled when `current` ≥ 120,000 | `yellow` |
+| 10 | filled when `current` ≥ 135,000 | `red` |
+
+Percentage: `round(tokens.current / 150_000 * 100)`. Bar is recalculated and the `Live` display refreshed on every state write.
+
+Verbatim examples:
+```
+[██████████]  150,000 / 150,000 (100%)   ← fully red at ceiling
+[████████░░]  118,200 / 150,000  (79%)   ← normal running
+[████░░░░░░]   60,000 / 150,000  (40%)   ← early session
+```
+
+### Ring-Buffer Line Format
+
+Verbatim example:
+```
+13:04:03 [worker] Tool: Read CONTEXT.md
+13:04:15 [worker] Tool: Edit src/runner/presence_coordinator.py
+13:07:44 [gate  ] Gatekeeper: running pytest tests/ ...
+13:07:50 [runner] Authoring commit: feat(queue): defer clean-slate prompt
+```
+
+Rules:
+- Template: `{HH:MM:SS} [{source:<6}] {message}` — source label left-padded to 6 characters
+- `source` is exactly one of: `runner`, `worker`, `gate`
+- Maximum 15 entries at any time; when a 16th arrives, the oldest is evicted (FIFO ring)
+- Newest entry always at the bottom; display order is chronological top-to-bottom
+- No entry is ever edited after insertion; only evicted
+
+### Hotkey Legend States
+
+The hotkey legend (row 6 of the top panel) has exactly four states, each rendered as plain text:
+
+| State | Exact rendered text |
+|---|---|
+| Normal | `[p] pause  [m] toggle mode  [q] quit  [o] open TUI` |
+| Confirm-pending (after `[o]`) | `Open TUI? [y] confirm / [n] cancel` |
+| TUI queued (session run active, confirmed) | `[p] pause  [m] toggle mode  [q] quit  [o] pending…` |
+| TUI open | `[r] Resume  (all other keys suspended)` |
+
+Transitions: Normal → Confirm-pending on `[o]`; Confirm-pending → Normal on `[n]`; Confirm-pending → TUI queued (if session active) or TUI open (if at signal boundary) on `[y]`; TUI open → Normal on `[r]` or process exit.
+
+### TUI Warning Panel (exact copy)
+
+When `tui_open: true`, the normal dashboard is replaced entirely by this panel. No other panel is visible.
+
+```
+⚠  OpenCode TUI open — Runner is paused & blind
+   Execution is paused: no Gatekeeper, no Circuit Breaker, no token tracking.
+   Tokens consumed in TUI are NOT tracked against the 135k handoff budget.
+   Work done in TUI bypasses the Gatekeeper and Signal protocol.
+   Close the terminal window to resume managed execution.
+   [r] Resume  (required if using Windows Terminal)
+```
+
+Rule: the `⚠` and the first line are rendered in `bold yellow`; the four body lines in `dim white`; the `[r] Resume` line in `bold green`.
+
+### Completion Banner (terminate policy only)
+
+Rendered only when `queue_completion_policy = "terminate"` and the queue is exhausted. Not rendered in `standby` mode.
+
+```
+╔══════════════════════════════════════════════════╗
+║  🎉  Queue complete! All tickets committed.      ║
+║  {n} tickets  ·  0 failed  ·  ~{k}k tokens      ║
+╚══════════════════════════════════════════════════╝
+```
+
+Rules:
+- `{n}` = count of tickets committed in this run
+- `{k}` = total tokens across all sessions, rounded to nearest thousand
+- Rendered in `bold green` border and text
+- Displayed for 2 seconds, then runner exits with code 0
+
 ## Testing Decisions
 
 - **Testing External Behavior Only**: Tests verify that state transitions correctly update `state.json` contents on disk, that crash recovery properly detects uncommitted changes and resumes the recorded ticket, and that hotkeys invoke pause/mode-toggle/quit commands. Tests do not verify individual Rich widget rendering coordinates.

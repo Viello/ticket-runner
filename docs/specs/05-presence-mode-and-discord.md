@@ -97,6 +97,94 @@ When a prompt requiring human input (question Signal or Circuit Breaker trip) is
 
 Receiving a valid answer message in a Discord thread immediately sets `presence_mode = "nearby"` in the Presence coordinator's state machine.
 
+## UI Contract
+
+This section defines port-boundary contracts for Discord output — the exact embed fields, formats, and routing rules that `DiscordLogger` and `DiscordGateway` must produce. Behavioural fidelity is the hard constraint; aesthetic rendering is Discord's responsibility. For `presence_mode` and `tokens` field names, see Spec 06 § State Schema (authoritative).
+
+### Status Card Embed Fields
+
+The Status Card is a Discord embed posted as the first message in each Ticket thread and pinned immediately. It is edited in-place at every phase transition via `DiscordGateway.edit_message`.
+
+Verbatim field layout (monospace, as seen in Discord code block inside the embed description):
+
+```
+Ticket:       T042 · defer-clean-slate-prompt-until-exit
+Spec:         05-presence-mode-and-discord
+Status:       🟡 Verifying   (Running → Reviewing → Verifying → ✅ Committed)
+Attempt:      2 / 3
+Tokens:       ~118k / 150k  ████████░░ 79%
+Started:      13:04 UTC
+Last updated: 13:11 UTC
+```
+
+Rules:
+- Embed colour (Discord API integer): `0x5865F2` (blurple) — not severity-routed; Status Card is always neutral
+- `Tokens` line format: `~{round(current/1000)}k / 150k  {bar} {pct}%` — token bar uses the same 10-block `█`/`░` format defined in Spec 06 § Token Bar Format (blocks 1–8 green, 9 yellow at ≥ 120k, 10 red at ≥ 135k)
+- `Last updated` is refreshed on every `edit_message` call; staleness indicates a bot crash or frozen Runner
+- Field label column is right-padded with spaces to align colons at column 14
+- `Status` field shows the current phase with the full breadcrumb trail in parentheses; breadcrumb order: `Running → Reviewing → Verifying → ✅ Committed`
+
+### Live Digest Contract
+
+The Live Digest is a single plain-text message posted at the start of each Session Run via `DiscordGateway.post_message`. It is edited in-place by `DiscordGateway.edit_message`.
+
+Rules:
+- One Live Digest message per Session Run; never deleted, never split into multiple messages
+- Rate-limit floor: edits fire at most once every 5 seconds — a faster stream is buffered and the next edit posts the accumulated content
+- Rolling window: the last 500 characters of raw LLM stream content (not token count — character count)
+- On Session Run end: the final edit appends `\n[done]` to the current window content and stops further edits
+- The `[done]` marker is never removed; it is the final snapshot of that Session Run
+
+Verbatim end-of-run format:
+```
+…inspecting existing implementation in `src/runner/`
+Writing `tests/unit/test_presence_coordinator.py`…
+All checks pass. Emitting ready signal.
+[done]
+```
+
+### Question Signal Embed
+
+When a question Signal is posted, `DiscordLogger` sends two API calls to the thread: a plain-text `@mention` message followed immediately by a yellow embed.
+
+**Message 1 — mention (plain text, `post_message`):**
+```
+<@{discord_user_id}>
+```
+Rule: `discord_user_id` comes from `config.yaml: discord.notify_user_id`. Sent as standalone message content — not inside the embed — so Discord triggers a push notification on the user's device.
+
+**Message 2 — question embed (`post_message`):**
+
+| Embed field | Value |
+|---|---|
+| colour | `0xFEE75C` (yellow) — question is a pause, not a failure |
+| title | `❓ Worker Question` |
+| description | `{question_body}` from the question Signal file |
+| footer text | `Posted at {HH:MM} UTC · Reply in this thread to answer` |
+
+Rule: the two messages are posted in immediate succession. No other messages are posted between them. The thread reply that resolves the question must update the Signal file at `.agent/questions/{ticket_id}.json` and trigger `presence_mode → "nearby"` reset via the Presence coordinator.
+
+### Message Chunking Header
+
+Verbatim header format: `[continued 2/3]` — 1-indexed chunk number, slash-separated, enclosed in square brackets, on its own line before the chunk body.
+
+Rules:
+- Trigger: any payload passed to `DiscordLogger` whose character count exceeds 1,950
+- Split point: last `\n` at or before character position 1,950; if no newline exists in the payload, split at exactly 1,950
+- Chunk 1 has no prefix — it is posted as-is
+- Chunks 2…M are each prefixed with `[continued N/M]\n` on its own line
+- `M` (total chunk count) is computed before any chunk is posted; all headers reference the same final `M`
+- Applies to both plain-text routine posts and embed description bodies
+- Embed **title** and **field names** are never chunked — truncate to Discord API per-field limits (256 chars for title; 1,024 chars for field value) instead
+
+Verbatim example for a 2,451-character payload split at position 1,943 (last newline before 1,950):
+```
+[chunk 1 — 1,943 chars, no prefix]
+
+[continued 2/2]
+[remaining 508 chars]
+```
+
 ## Testing Decisions
 
 - **Testing External Behavior Only**: Tests verify that idle timers trigger mode transitions, that question Signals are updated when thread replies are received, that threads are archived upon completion, and that `--local-only` disables Discord startup checks. Tests do not inspect `discord.py` internal event dispatchers.
