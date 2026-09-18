@@ -363,5 +363,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Failing verification attempts or tripping the circuit breaker when review skills or `AGENTS.md` are not read prematurely aborts viable solutions and violates Gatekeeper independence. Conversely, discarding accessed resources between retries causes repetitive warnings on subsequent cycles even when the agent has already consulted the required skill.
 - **Solution**: Emit soft warnings strictly via `_notify` and `logger.warning` without modifying attempt budgets or blocking Gatekeeper test execution, and accumulate accessed resources across cycles within the verification loop so earlier consultations satisfy compliance on retry.
 
+### Doctor Pre-Flight Checks Must Respect Injected Workspace Paths
+- **Problem**: Resolving workspace-root files (such as `AGENTS.md` and `.agents/skills/...`) using unanchored relative paths (`Path("AGENTS.md")`) or paths relative to `Path.cwd()` causes Doctor pre-flight checks in integration tests or isolated workspace runs to probe the host repository rather than the injected test workspace (`tmp_path`), triggering false passes on missing files or false failures on foreign environments.
+- **Solution**: Resolve `AGENTS.md` and skill paths relative to `self._cwd` when provided, permit optional explicit path overrides in the `Doctor` constructor, and ensure all pre-flight inspections remain strictly read-only (`is_file()` and `open(..., "r")`).
+
+
 
 

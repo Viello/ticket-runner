@@ -1,5 +1,6 @@
 # T047 — Doctor preflight checks for AGENTS.md and skills
-Status: pending
+Status: completed
+Completed: 2026-09-18T03:19:00Z
 Spec: docs/specs/08-worker-skill-protocol-and-telemetry.md
 Blocked by: T046
 

@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 
 from runner.application.doctor import (
+    CHECK_AGENTS_MD,
     CHECK_CONFIG,
     CHECK_DISCORD,
     CHECK_GIT,
     CHECK_HOOK,
     CHECK_OPENCODE,
     CHECK_QUEUE,
+    CHECK_SKILLS,
     CHECK_VERIFICATION_COMMANDS,
     CheckResult,
     Doctor,
@@ -73,7 +75,9 @@ class FakeHookInstaller:
 
 
 def _make_config(
-    test_cmd: str = "python -m pytest", build_cmd: str = ""
+    test_cmd: str = "python -m pytest",
+    build_cmd: str = "",
+    execution_skill: str = ".agents/skills/implement/SKILL.md",
 ) -> RunnerConfig:
     """Construct a minimal valid RunnerConfig with scripted verification commands."""
     from runner.domain.config import (
@@ -89,7 +93,7 @@ def _make_config(
 
     return RunnerConfig(
         project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
-        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        worker=WorkerConfig(execution_skill=execution_skill),
         verification=VerificationConfig(test_cmd=test_cmd, build_cmd=build_cmd),
         tokens=TokenBudgetConfig(),
         presence=PresenceConfig(),
@@ -471,8 +475,8 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
     report = await doctor.run(local_only=False, halt_on_failure=False)
 
     assert report.passed is False
-    # All 7 checks executed
-    assert len(report.checks) == 7
+    # All 9 checks executed
+    assert len(report.checks) == 9
 
 
 @pytest.mark.anyio
@@ -548,3 +552,158 @@ async def test_check_queue_handles_ticket_format_error() -> None:
     assert result.name == CHECK_QUEUE
     assert "Malformed ticket" in result.message
     assert result.remediation is not None
+
+
+@pytest.mark.anyio
+async def test_check_agents_md_passes_when_present(tmp_path: Path) -> None:
+    """Verify check_agents_md passes when AGENTS.md exists and is readable."""
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# AGENTS.md\n## Invariants\n- Test\n", encoding="utf-8")
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_agents_md()
+
+    assert result.passed is True
+    assert result.name == CHECK_AGENTS_MD
+    assert "AGENTS.md" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_agents_md_fails_when_missing(tmp_path: Path) -> None:
+    """Verify check_agents_md fails with actionable remediation when AGENTS.md is missing."""
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_agents_md()
+
+    assert result.passed is False
+    assert result.name == CHECK_AGENTS_MD
+    assert "AGENTS.md" in result.message
+    assert result.remediation is not None
+    assert "AGENTS.md" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_agents_md_custom_path(tmp_path: Path) -> None:
+    """Verify check_agents_md respects injected agents_md_path override."""
+    custom_file = tmp_path / "custom_agents.md"
+    custom_file.write_text("# Rules\n", encoding="utf-8")
+
+    doctor = Doctor(agents_md_path=custom_file)
+    result = await doctor.check_agents_md()
+
+    assert result.passed is True
+    assert result.name == CHECK_AGENTS_MD
+
+
+@pytest.mark.anyio
+async def test_check_skills_passes_when_all_skills_present(tmp_path: Path) -> None:
+    """Verify check_skills passes when execution skill and required review skills exist."""
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_skills()
+
+    assert result.passed is True
+    assert result.name == CHECK_SKILLS
+    assert "required skill files verified" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_skills_fails_when_all_skills_missing(tmp_path: Path) -> None:
+    """Verify check_skills fails naming all missing skills when none exist."""
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_skills()
+
+    assert result.passed is False
+    assert result.name == CHECK_SKILLS
+    assert result.remediation is not None
+    assert ".agents/skills/implement/SKILL.md" in result.remediation
+    assert ".agents/skills/code-review/SKILL.md" in result.remediation
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_skills_fails_naming_specifically_missing_skills(tmp_path: Path) -> None:
+    """Verify check_skills failure specifically names only the absent skill files."""
+    skills_dir = tmp_path / ".agents" / "skills"
+    # Create implement and code-review, but omit diagnosing-bugs
+    for name in ("implement", "code-review"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_skills()
+
+    assert result.passed is False
+    assert result.name == CHECK_SKILLS
+    assert result.remediation is not None
+    assert "diagnosing-bugs/SKILL.md" in result.remediation
+    assert "code-review/SKILL.md" not in result.remediation
+    assert "implement/SKILL.md" not in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_skills_respects_custom_configured_execution_skill(tmp_path: Path) -> None:
+    """Verify check_skills checks custom configured worker.execution_skill."""
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    custom_skill = "custom/skills/special-execution.md"
+    config = _make_config(execution_skill=custom_skill)
+
+    doctor = Doctor(cwd=tmp_path, config_loader=FakeConfigLoader(config=config))
+    await doctor.check_config()
+
+    result = await doctor.check_skills()
+    assert result.passed is False
+    assert result.name == CHECK_SKILLS
+    assert result.remediation is not None
+    assert custom_skill in result.remediation
+    assert "code-review" not in result.remediation
+    assert "diagnosing-bugs" not in result.remediation
+
+
+@pytest.mark.anyio
+async def test_doctor_run_includes_agents_md_and_skills_checks(tmp_path: Path) -> None:
+    """Verify Doctor.run() includes both CHECK_AGENTS_MD and CHECK_SKILLS in report."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    config = _make_config()
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,
+    )
+
+    report = await doctor.run(local_only=True, halt_on_failure=False)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_AGENTS_MD in check_names
+    assert CHECK_SKILLS in check_names
+
