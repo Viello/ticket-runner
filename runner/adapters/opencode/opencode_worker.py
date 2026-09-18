@@ -5,23 +5,37 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+import re
 from typing import Any
 
 from runner.domain.runtime_paths import is_valid_session_id
 from runner.domain.telemetry import TokenUsage
 
-# Six canonical event types emitted by opencode run --format json
+# Seven canonical event types emitted by opencode run --format json
 KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     "step_start",
     "step_finish",
     "text",
     "tool_call",
+    "tool_use",
     "tool_result",
     "error",
 })
 
 # Maximum permitted line length to prevent memory exhaustion from oversized lines
 MAX_LINE_CHARS: int = 5_000_000
+
+# Regex to match project-local skills: .agents/skills/<name>/SKILL.md
+SKILL_RESOURCE_PATTERN: re.Pattern[str] = re.compile(
+    r"\.agents/skills/([a-z0-9_-]+)/skill\.md",
+    re.IGNORECASE,
+)
+
+# Regex to match workspace AGENTS.md references
+AGENTS_MD_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:^|[/\\\"'\s(\[{:;,])agents\.md(?:$|[/\\\"'\s)\]}:;,])",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -168,3 +182,129 @@ def decode_event(line: str) -> OpenCodeEvent | None:
         raw=payload,
         is_known=is_known,
     )
+
+
+def _check_and_add_resource(text: str, detected: set[str]) -> None:
+    """Normalize text and add recognized skill or AGENTS.md resources to detected set."""
+    if not isinstance(text, str) or not text:
+        return
+    norm = text.replace("\\", "/").lower()
+    for m in SKILL_RESOURCE_PATTERN.finditer(norm):
+        detected.add(m.group(1).lower())
+    if AGENTS_MD_PATTERN.search(norm):
+        detected.add("AGENTS.md")
+
+
+def extract_resource_access(
+    event_or_line: OpenCodeEvent | str | None = None,
+    raw_line: str | None = None,
+    *,
+    event: OpenCodeEvent | None = None,
+) -> frozenset[str]:
+    """Detect project-local skill and AGENTS.md resource accesses from event stream.
+
+    Performs dual resource access detection:
+    - Structured detection: inspects tool_use and tool_call event payloads for read
+      tool file paths and bash tool shell commands.
+    - Fallback detection: scans raw stream line strings for skill or AGENTS.md occurrences.
+
+    Args:
+        event_or_line: Decoded OpenCodeEvent domain model, or raw stream line string.
+        raw_line: Optional raw JSONL line string when event is passed positionally.
+        event: Optional OpenCodeEvent keyword argument.
+
+    Returns:
+        frozenset of canonical resource identifiers (e.g. 'implement', 'code-review', 'AGENTS.md').
+    """
+    actual_event: OpenCodeEvent | None = event
+    actual_line: str = ""
+
+    if isinstance(event_or_line, OpenCodeEvent):
+        actual_event = event_or_line
+        if isinstance(raw_line, str):
+            actual_line = raw_line
+    elif isinstance(event_or_line, str):
+        actual_line = event_or_line
+        if isinstance(raw_line, OpenCodeEvent):
+            actual_event = raw_line
+    elif event_or_line is None:
+        if isinstance(raw_line, str):
+            actual_line = raw_line
+
+    detected: set[str] = set()
+
+    # 1. Structured detection on OpenCodeEvent
+    if actual_event is not None:
+        tool_name = ""
+        part = actual_event.part if isinstance(actual_event.part, dict) else {}
+        raw = actual_event.raw if isinstance(actual_event.raw, dict) else {}
+
+        # Discover tool identifier
+        for container in (part, raw):
+            for k in ("tool", "name", "tool_name"):
+                v = container.get(k)
+                if isinstance(v, str) and v:
+                    tool_name = v.lower()
+                    break
+            if tool_name:
+                break
+
+        # Collect candidate argument dictionaries
+        input_dicts: list[Mapping[str, Any]] = []
+
+        if isinstance(part.get("state"), dict) and isinstance(part["state"].get("input"), dict):
+            input_dicts.append(part["state"]["input"])
+
+        for container in (part, raw):
+            for key in ("input", "args", "arguments", "parameters"):
+                val = container.get(key)
+                if isinstance(val, dict):
+                    input_dicts.append(val)
+                elif isinstance(val, str):
+                    try:
+                        parsed = json.loads(val)
+                        if isinstance(parsed, dict):
+                            input_dicts.append(parsed)
+                    except Exception:
+                        pass
+
+        # Inspect tool arguments
+        for inp in input_dicts:
+            # File reading paths
+            if tool_name in ("", "read", "readfile", "read_file", "file_reader"):
+                for fk in ("filePath", "file_path", "path", "file", "filename", "target"):
+                    fval = inp.get(fk)
+                    if isinstance(fval, str):
+                        _check_and_add_resource(fval, detected)
+
+            # Shell commands
+            if tool_name in ("", "bash", "sh", "shell", "command", "exec", "execute", "terminal"):
+                for ck in ("command", "cmd", "input", "script"):
+                    cval = inp.get(ck)
+                    if isinstance(cval, str):
+                        _check_and_add_resource(cval, detected)
+
+            # Check any string values in the arguments dictionary
+            for val in inp.values():
+                if isinstance(val, str):
+                    _check_and_add_resource(val, detected)
+
+    # 2. Fallback stream line scanning
+    if actual_line:
+        _check_and_add_resource(actual_line, detected)
+    elif actual_event is not None and isinstance(actual_event.raw, dict):
+        try:
+            _check_and_add_resource(json.dumps(actual_event.raw), detected)
+        except Exception:
+            pass
+
+    return frozenset(detected)
+
+
+class OpenCodeWorkerCli:
+    """Namespace seam exposing OpenCode CLI adapter methods."""
+
+    decode_event = staticmethod(decode_event)
+    build_run_command = staticmethod(build_opencode_run_command)
+    extract_resource_access = staticmethod(extract_resource_access)
+

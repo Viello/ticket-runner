@@ -6,8 +6,10 @@ import pytest
 from runner.adapters.opencode.opencode_worker import (
     KNOWN_EVENT_TYPES,
     OpenCodeEvent,
+    OpenCodeWorkerCli,
     build_opencode_run_command,
     decode_event,
+    extract_resource_access,
 )
 from runner.domain.telemetry import TokenUsage
 
@@ -199,3 +201,197 @@ def test_decode_event_crlf_tolerance() -> None:
     assert event is not None
     assert event.type == "step_start"
     assert event.session_id == "ses_123"
+
+
+def test_decode_event_tool_use_is_known() -> None:
+    assert "tool_use" in KNOWN_EVENT_TYPES
+    raw_line = json.dumps({
+        "type": "tool_use",
+        "sessionID": "ses_tool123",
+        "timestamp": 1789564165000,
+        "part": {
+            "id": "prt_tool1",
+            "type": "tool_use",
+            "tool": "read",
+            "input": {"filePath": ".agents/skills/implement/SKILL.md"},
+        },
+    })
+    event = decode_event(raw_line)
+    assert event is not None
+    assert event.type == "tool_use"
+    assert event.is_known is True
+    assert event.session_id == "ses_tool123"
+    assert event.part is not None
+    assert event.part.get("tool") == "read"
+
+
+# --- Resource Access Detection Tests ---
+
+
+def test_extract_resource_access_read_tool_skills() -> None:
+    # POSIX relative path
+    event1 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "input": {"filePath": ".agents/skills/implement/SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event1) == frozenset({"implement"})
+
+    # Windows mixed/backslash absolute path
+    event2 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "input": {"filePath": r"D:\Projects\.agents\skills\code-review\SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event2) == frozenset({"code-review"})
+
+    # Nested OpenCode state input structure
+    event3 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "state": {
+                "input": {"filePath": "d:/projects/.agents/skills/security-review/skill.md"},
+            },
+        },
+    }))
+    assert extract_resource_access(event3) == frozenset({"security-review"})
+
+    # Alternative argument keys (file_path, path)
+    event4 = decode_event(json.dumps({
+        "type": "tool_call",
+        "part": {
+            "name": "read",
+            "args": {"path": ".agents/skills/diagnosing-bugs/SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event4) == frozenset({"diagnosing-bugs"})
+
+
+def test_extract_resource_access_read_tool_agents_md() -> None:
+    # Relative AGENTS.md
+    event1 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "input": {"filePath": "AGENTS.md"},
+        },
+    }))
+    assert extract_resource_access(event1) == frozenset({"AGENTS.md"})
+
+    # Absolute Windows path
+    event2 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "input": {"filePath": r"D:\Projects\AGENTS.md"},
+        },
+    }))
+    assert extract_resource_access(event2) == frozenset({"AGENTS.md"})
+
+    # Lowercase / mixed case
+    event3 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "read",
+            "input": {"filePath": "./agents.md"},
+        },
+    }))
+    assert extract_resource_access(event3) == frozenset({"AGENTS.md"})
+
+
+def test_extract_resource_access_bash_tool_commands() -> None:
+    # cat with POSIX path
+    event1 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "bash",
+            "input": {"command": "cat .agents/skills/diagnosing-bugs/SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event1) == frozenset({"diagnosing-bugs"})
+
+    # PowerShell Get-Content with Windows path
+    event2 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "bash",
+            "input": {"command": r"Get-Content D:\Projects\AGENTS.md"},
+        },
+    }))
+    assert extract_resource_access(event2) == frozenset({"AGENTS.md"})
+
+    # cmd type command
+    event3 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "bash",
+            "input": {"command": r"type .agents\skills\implement\SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event3) == frozenset({"implement"})
+
+    # Command inspecting multiple resources
+    event4 = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {
+            "tool": "bash",
+            "input": {"command": "head -n 20 AGENTS.md .agents/skills/code-review/SKILL.md"},
+        },
+    }))
+    assert extract_resource_access(event4) == frozenset({"AGENTS.md", "code-review"})
+
+
+def test_extract_resource_access_fallback_stream_line() -> None:
+    # Unstructured event string with skill path
+    raw_line1 = '{"event": "agent_action", "detail": "reading .agents/skills/security-review/SKILL.md"}'
+    assert extract_resource_access(raw_line=raw_line1) == frozenset({"security-review"})
+
+    # Escaped Windows path in raw JSON
+    raw_line2 = r'{"type":"raw","msg":"inspecting D:\\Projects\\AGENTS.md before coding"}'
+    assert extract_resource_access(raw_line2) == frozenset({"AGENTS.md"})
+
+    # Dual invocation with both decoded event and raw line
+    event = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "read", "input": {"filePath": ".agents/skills/implement/SKILL.md"}},
+    }))
+    raw_line = '{"type":"tool_use","part":{"tool":"read","input":{"filePath":".agents/skills/implement/SKILL.md"}}}'
+    assert extract_resource_access(event, raw_line) == frozenset({"implement"})
+
+
+def test_extract_resource_access_edge_cases_and_seams() -> None:
+    # Unrelated files and commands
+    unrelated_event = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "read", "input": {"filePath": "runner/adapters/opencode/opencode_worker.py"}},
+    }))
+    assert extract_resource_access(unrelated_event) == frozenset()
+
+    unrelated_bash = decode_event(json.dumps({
+        "type": "tool_use",
+        "part": {"tool": "bash", "input": {"command": "pytest tests/unit"}},
+    }))
+    assert extract_resource_access(unrelated_bash) == frozenset()
+
+    # Unrelated words containing agents
+    assert extract_resource_access(raw_line="editing NOT_AGENTS.md and agents.md.bak") == frozenset()
+
+    # None, empty, and invalid lines
+    assert extract_resource_access(None) == frozenset()
+    assert extract_resource_access("") == frozenset()
+    assert extract_resource_access("   \n") == frozenset()
+    assert extract_resource_access("{corrupt json") == frozenset()
+
+    # Tolerant keyword argument passing
+    assert extract_resource_access(event=None, raw_line="") == frozenset()
+
+    # OpenCodeWorkerCli namespace seam
+    assert OpenCodeWorkerCli.decode_event is decode_event
+    assert OpenCodeWorkerCli.extract_resource_access is extract_resource_access
+    assert OpenCodeWorkerCli.build_run_command is build_opencode_run_command
+

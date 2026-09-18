@@ -351,3 +351,7 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Inlining operational guardrails into prompt strings risks ballooning command-line argument lengths past the Windows 32,767 character ceiling if entire documents are embedded verbatim.
 - **Solution**: Restrict inlining strictly to targeted high-impact sections (`## Invariants`, ~250 tokens), pair with explicit file-reading directives (`read`) for broader documentation, and verify total command length in automated tests.
 
+### Mixed Path Separator Normalization for OpenCode Stream Telemetry
+- **Problem**: On Windows, OpenCode emits absolute and relative file paths in tool calls with mixed separators (e.g. `D:\Projects\.agents\skills\implement\SKILL.md`, `D:/Projects/...`, or escaped JSON backslashes `\\\\`), causing naive substring or POSIX-only regex matching to fail silently during tool use and resource access detection.
+- **Solution**: Normalize all file paths and raw stream text with `.replace("\\", "/").lower()` before applying skill folder extraction or `AGENTS.md` regex matching, guaranteeing cross-platform telemetry detection across Windows and POSIX environments.
+

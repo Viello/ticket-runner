@@ -1,5 +1,6 @@
 # T044 — Stream tool-use and resource access detection
-Status: pending
+Status: completed
+Completed: 2026-09-18T02:54:00Z
 Spec: docs/specs/08-worker-skill-protocol-and-telemetry.md
 Blocked by: None
 
