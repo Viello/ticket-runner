@@ -1,5 +1,6 @@
 # T042 — Defer interactive clean-slate prompt until exit
-Status: pending
+Status: completed
+Completed: 2026-09-18T04:36:00Z
 Spec: docs/specs/07-runner-exit-lifecycle.md
 Blocked by: T040
 

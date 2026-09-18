@@ -1110,3 +1110,362 @@ def test_run_lifecycle_runtime_error_returns_1(
     assert any("Runtime error" in p for p in printed)
 
 
+# --- T042: Defer Interactive Clean-Slate Prompt Until Exit ---
+
+def test_run_lifecycle_standby_interactive_defers_prompt_until_exit(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T001-test.md"
+    ticket_file.write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=ticket_file)
+    ticket_repo = FakeTicketRepository([t1])
+
+    printed: list[str] = []
+    actions: list[str] = []
+    lock_state_at_prompt: list[bool] = []
+    stop_event = asyncio.Event()
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+        printed.append(msg)
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            lock_state_at_prompt.append(queue_lock.is_locked)
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    async def fake_sleep(duration: float) -> None:
+        # Standby is active and polling; trigger stop
+        assert actions == []
+        assert any("standing by watching docs/tickets/" in p.lower() for p in printed)
+        stop_event.set()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="standby", clean_slate="interactive")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+            stop_event=stop_event,
+        )
+    )
+
+    assert exit_code == 0
+    # Clean slate was called only once at exit, before summary, and with lock released
+    assert actions == ["clean_slate:02-test:interactive", "summary"]
+    assert lock_state_at_prompt == [False]
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_interactive_sigint_fires_prompt_before_summary(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T001-test.md"
+    ticket_file.write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=ticket_file)
+    ticket_repo = FakeTicketRepository([t1])
+
+    printed: list[str] = []
+    actions: list[str] = []
+    lock_state_at_prompt: list[bool] = []
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+        printed.append(msg)
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            lock_state_at_prompt.append(queue_lock.is_locked)
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    async def fake_sleep(duration: float) -> None:
+        # Simulate SIGINT during standby polling
+        assert actions == []
+        raise KeyboardInterrupt()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="standby", clean_slate="interactive")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+        )
+    )
+
+    assert exit_code == 130
+    assert actions == ["clean_slate:02-test:interactive", "summary"]
+    assert lock_state_at_prompt == [False]
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_resume_cycle_does_not_prompt_mid_watch(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "T001-test.md").write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=spec_dir / "T001-test.md")
+    ticket_repo = FakeTicketRepository([t1])
+
+    printed: list[str] = []
+    actions: list[str] = []
+    stop_event = asyncio.Event()
+    sleep_count = 0
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+        printed.append(msg)
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    async def fake_sleep(duration: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count == 1:
+            # Add new ticket during standby watch
+            t2_file = spec_dir / "T002-test.md"
+            t2_file.write_text("# T002 — Test\nStatus: pending\n", encoding="utf-8")
+            ticket_repo.add_ticket(_make_ticket("T002", spec_path="docs/specs/02-test.md", path=t2_file))
+        elif sleep_count == 2:
+            # After resume and second drain, stop standby
+            stop_event.set()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="standby", clean_slate="interactive")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+            stop_event=stop_event,
+        )
+    )
+
+    assert exit_code == 0
+    # No prompts mid-watch: exactly one clean_slate at exit, followed by summary
+    assert actions == ["clean_slate:02-test:interactive", "summary"]
+    banner_lines = [p for p in printed if "watching docs/tickets/" in p.lower()]
+    assert len(banner_lines) == 2
+
+
+def test_run_lifecycle_standby_always_archives_at_drain_and_not_on_exit(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "T001-test.md").write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=spec_dir / "T001-test.md")
+    ticket_repo = FakeTicketRepository([t1])
+
+    actions: list[str] = []
+    lock_state_at_archive: list[bool] = []
+    stop_event = asyncio.Event()
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            lock_state_at_archive.append(queue_lock.is_locked)
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    async def fake_sleep(duration: float) -> None:
+        # At this point, archival should have already happened at drain
+        assert actions == ["clean_slate:02-test:always"]
+        stop_event.set()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="standby", clean_slate="always")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+            stop_event=stop_event,
+        )
+    )
+
+    assert exit_code == 0
+    # Archival occurred once at drain, not again at exit
+    assert actions == ["clean_slate:02-test:always", "summary"]
+    assert lock_state_at_archive == [False]
+
+
+def test_run_lifecycle_standby_never_skips_entirely(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "T001-test.md").write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=spec_dir / "T001-test.md")
+    ticket_repo = FakeTicketRepository([t1])
+
+    actions: list[str] = []
+    stop_event = asyncio.Event()
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    async def fake_sleep(duration: float) -> None:
+        stop_event.set()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="standby", clean_slate="never")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+            stop_event=stop_event,
+        )
+    )
+
+    assert exit_code == 0
+    assert actions == ["summary"]
+
+
+def test_run_lifecycle_terminate_interactive_prompts_at_drain_with_lock_released(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "T001-test.md").write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=spec_dir / "T001-test.md")
+    ticket_repo = FakeTicketRepository([t1])
+
+    actions: list[str] = []
+    lock_state_at_prompt: list[bool] = []
+
+    def recording_printer(msg: str) -> None:
+        if "Completion Summary" in msg:
+            actions.append("summary")
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            lock_state_at_prompt.append(queue_lock.is_locked)
+            actions.append(f"clean_slate:{spec_slug}:{policy}")
+            return True
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="interactive")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+        )
+    )
+
+    assert exit_code == 0
+    assert actions == ["clean_slate:02-test:interactive", "summary"]
+    assert lock_state_at_prompt == [False]
+
+
+

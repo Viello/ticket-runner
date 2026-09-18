@@ -395,4 +395,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In multi-phase lifecycle executions where `QueueOrchestrator.run_lifecycle` drains the initial queue and settles into standby mode, discarding the return value of `run_next` causes completion summaries to report incomplete ticket counts and drop authored commit SHAs when new tickets arrive and get processed during subsequent standby cycles.
 - **Solution**: Accumulate all `TicketOutcome` instances into a persistent lifecycle list across both the initial drain loop and all standby resumption cycles, ensuring graceful exit completion summaries accurately aggregate total processed tickets (approved, skipped, aborted), all authored commit SHAs, current branch, and elapsed time measured via an injectable clock.
 
+### Non-Blocking Standby Watch Loop and Deferred Clean-Slate Archival
+- **Problem**: Prompting for interactive clean-slate archival (`[CleanSlate] Wipe completed tickets and spec for a clean slate? [Y/n]: `) at queue drain under `queue_completion="standby"` blocks the orchestrator on terminal input, stalling the watch loop from polling for incoming tickets while an operator is away.
+- **Solution**: Defer interactive clean-slate archival under standby mode past queue drain until runner exit (graceful SIGINT or shutdown), while allowing `always` and `never` policies to retain their drain-time behaviors and preserving `terminate` policy's drain-time prompt per ADR 0012.
+
+### Clean-Slate Execution Must Release Sentinel Lock Before Archival
+- **Problem**: Executing interactive archival prompts or running git removal/chore commits while holding the sentinel queue file lock causes Windows file-sharing violations if user input blocks lock release or git operations attempt modifications overlapping the lock directory.
+- **Solution**: Release the sentinel lock (`self.release_lock()`) explicitly prior to invoking `_handle_clean_slate` on both drain-time and exit-time execution paths.
+
+### Standby Resume Cycles Must Suppress Mid-Watch Archival Prompts
+- **Problem**: When standby resume cycles process newly detected tickets and drain again, re-triggering clean-slate prompts mid-watch re-introduces terminal blocking during active polling.
+- **Solution**: Track deferred clean-slate status and already cleaned spec slugs without prompting during standby re-drain; fire the interactive prompt exactly once upon final lifecycle exit.
+
 

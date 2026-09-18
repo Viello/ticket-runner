@@ -189,7 +189,14 @@ class QueueOrchestrator:
             cwd=self._cwd,
         )
         self._processed_spec_slugs: set[str] = set()
+        self._cleaned_spec_slugs: set[str] = set()
+        self._deferred_clean_slate: bool = False
         self._last_outcome: TicketOutcome | None = None
+
+    @property
+    def has_deferred_clean_slate(self) -> bool:
+        """Return True if interactive clean-slate archival was deferred at queue drain."""
+        return self._deferred_clean_slate
 
     @property
     def lifecycle_outcomes(self) -> list[TicketOutcome]:
@@ -368,6 +375,7 @@ class QueueOrchestrator:
             slug = parent_name if parent_name != "completed" else ticket.path.parent.parent.name
         if slug:
             self._processed_spec_slugs.add(slug)
+            self._cleaned_spec_slugs.discard(slug)
 
         try:
             outcome = await active_processor(ticket)
@@ -458,13 +466,17 @@ class QueueOrchestrator:
             target_slugs = sorted(self._processed_spec_slugs)
 
         for slug in target_slugs:
+            if slug in self._cleaned_spec_slugs:
+                continue
             slug_dir = self._tickets_dir / slug
             if slug_dir.is_dir():
-                await self._clean_slate_archiver.clean_slate(
+                res = await self._clean_slate_archiver.clean_slate(
                     spec_slug=slug,
                     policy=policy,
                     printer=printer,
                 )
+                if res:
+                    self._cleaned_spec_slugs.add(slug)
 
     async def run_lifecycle(
         self,
@@ -502,6 +514,8 @@ class QueueOrchestrator:
         active_sleep = sleep_fn or asyncio.sleep
         self._lifecycle_outcomes = []
         self._summary_printed = False
+        self._deferred_clean_slate = False
+        self._cleaned_spec_slugs.clear()
         active_clock = clock or self._clock
         self._lifecycle_start_time = active_clock()
 
@@ -546,25 +560,36 @@ class QueueOrchestrator:
                     if stop_event is not None and stop_event.is_set():
                         break
 
-            if self._is_paused or (stop_event is not None and stop_event.is_set()):
+            if self._is_paused:
                 self.release_lock()
-                await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+                await self.print_completion_summary(printer=printer, clock=active_clock)
+                return 0
+
+            pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
+            if pending is not None:
+                # Execution was stopped before queue drained
+                self.release_lock()
                 await self.print_completion_summary(printer=printer, clock=active_clock)
                 return 0
 
             # 3. Queue is exhausted
             printer("[Queue] Queue exhausted: no pending tickets.")
 
-            # Ephemeral clean-slate archival
-            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
-
             # 4. Apply lifecycle policy
             if policy == "terminate":
+                self.release_lock()
+                await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                 printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                 await self.print_completion_summary(printer=printer, clock=active_clock)
                 return 0
 
-            # Standby mode: release sentinel lock before entering idle watch loop
+            # Standby mode: archive at drain for 'always', defer prompt for 'interactive'
+            if active_clean_slate == "always":
+                self.release_lock()
+                await self._handle_clean_slate(policy="always", printer=printer)
+            elif active_clean_slate == "interactive":
+                self._deferred_clean_slate = True
+
             self.release_lock()
             printer(STANDBY_BANNER)
             iteration = 0
@@ -606,27 +631,38 @@ class QueueOrchestrator:
                         if stop_event is not None and stop_event.is_set():
                             break
 
-                    if self._is_paused or (stop_event is not None and stop_event.is_set()):
+                    if self._is_paused:
                         break
 
-                    printer("[Queue] Queue exhausted: no pending tickets.")
-                    await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
-                    if policy == "terminate":
-                        printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
-                        await self.print_completion_summary(printer=printer, clock=active_clock)
-                        return 0
+                    remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
+                    if remaining is None:
+                        printer("[Queue] Queue exhausted: no pending tickets.")
+                        if active_clean_slate == "always":
+                            self.release_lock()
+                            await self._handle_clean_slate(policy="always", printer=printer)
+                        elif active_clean_slate == "interactive":
+                            self._deferred_clean_slate = True
+
+                    if stop_event is not None and stop_event.is_set():
+                        break
 
                     self.release_lock()
                     printer(STANDBY_BANNER)
 
             self.release_lock()
-            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+            if self._deferred_clean_slate:
+                self._deferred_clean_slate = False
+                await self._handle_clean_slate(policy="interactive", printer=printer)
             await self.print_completion_summary(printer=printer, clock=active_clock)
             return 0
         except KeyboardInterrupt:
             self.release_lock()
             printer("\n[Queue] Interrupted by SIGINT.")
-            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+            if self._deferred_clean_slate:
+                self._deferred_clean_slate = False
+                await self._handle_clean_slate(policy="interactive", printer=printer)
+            elif policy == "terminate" and active_clean_slate != "never":
+                await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
             await self.print_completion_summary(printer=printer, clock=active_clock)
             return 130
         except UserAbortError as exc:
