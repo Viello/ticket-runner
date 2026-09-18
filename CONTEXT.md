@@ -100,3 +100,10 @@ _Avoid_: Discord client, Discord adapter, bot interface
 The logging logic port that sits above `DiscordGateway`. Owns severity routing (critical vs routine), embed construction, message chunking at 1,950 characters, Status Card edits, and Live Digest rate-limited edits. Accepts structured log events from the Runner and decides format, targeting, and dispatch.
 _Avoid_: Discord notifier, log sink, message sender
 
+**Model Selection**:
+The startup-time choice of which configured LLM (`provider/model` string) the Runner will use for the entire session. Presented as an interactive numbered prompt when multiple models are configured; auto-selected silently when exactly one model is configured; overridable via `--model <id>` CLI flag. The selected model is session-scoped — fixed until the Runner restarts — and stored in `.agent/state.json` for crash recovery.
+_Avoid_: Model switch, model picker, LLM choice
+
+**Reasoning Variant**:
+The per-ticket reasoning depth setting declared in a ticket's `Reasoning:` frontmatter field and passed to OpenCode as `--variant`. Controls the model's thinking effort (e.g. `low`, `medium`, `high`, `max` on Anthropic; provider-specific strings on others). Resolved in priority order: ticket `Reasoning:` field → `model.default_reasoning` in config → flag omitted (OpenCode default). Applied uniformly across all Session Runs under the ticket.
+_Avoid_: Thinking level, reasoning mode, inference depth
