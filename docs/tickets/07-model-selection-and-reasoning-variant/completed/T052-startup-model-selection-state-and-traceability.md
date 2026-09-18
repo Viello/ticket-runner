@@ -1,5 +1,6 @@
 # T052 — Interactive model selection, state persistence, and restore notice
-Status: pending
+Status: completed
+Completed: 2026-09-18T12:46:00Z
 Spec: docs/specs/07-model-selection-and-reasoning-variant.md
 Blocked by: T048, T051
 Security: required

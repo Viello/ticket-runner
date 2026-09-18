@@ -11,11 +11,16 @@ import sys
 from typing import Any
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.filesystem.json_state_store import JsonStateStore
+from runner.adapters.ui.model_prompt import ModelPrompt
 from runner.application.doctor import Doctor, DoctorReport
+from runner.application.model_selection import ModelSelectionInteractor
 from runner.application.queue_orchestrator import QueueOrchestrator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
-from runner.domain.exceptions import UserAbortError
+from runner.domain.exceptions import NonInteractiveError, UserAbortError
+from runner.domain.runtime_paths import RuntimePaths
+from runner.ports.state_store import StateStore
 
 
 EXIT_CODE_CONTRACT = """Exit codes:
@@ -159,6 +164,9 @@ async def run_start(
     supervisor_instance: WorkerSupervisor | None = None,
     clock: Callable[[], float] | None = None,
     model_id: str | None = None,
+    state_store: StateStore | None = None,
+    model_prompt: ModelPrompt | None = None,
+    key_reader: Callable[[], str] | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -194,6 +202,28 @@ async def run_start(
                     f"Configured model IDs: {configured_ids_str}"
                 )
                 return 1
+
+        effective_state_store = state_store
+        if effective_state_store is None:
+            runtime_paths = RuntimePaths()
+            effective_state_store = JsonStateStore(path=runtime_paths.state_path)
+
+        prompt_adapter = model_prompt or ModelPrompt(read_key=key_reader)
+        interactor = ModelSelectionInteractor(
+            config=config,
+            state_store=effective_state_store,
+            prompt=prompt_adapter,
+        )
+
+        try:
+            model_id = interactor.resolve_and_persist(cli_model=model_id)
+        except NonInteractiveError as exc:
+            print(f"\n[Runner] Error: {exc}")
+            return 1
+        except Exception as exc:
+            print(f"\n[Runner] Error: State persistence failed: {exc}")
+            return 1
+
         container = build_container(config=config, clock=clock, model_id=model_id)
         orchestrator = container.orchestrator
         if supervisor is None:

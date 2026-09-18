@@ -427,6 +427,18 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Passing an unknown or unvalidated `--model` CLI argument could spawn OpenCode with invalid model identifiers or exit with exit code 2 (confusing runtime validation errors with operator aborts), and placing `-m <model_id>` incorrectly in argv token lists could disrupt flag precedence or token indexing in test suites.
 - **Solution**: Restrict `--model` to the `start` subparser, validate the provided model ID against configured `model.models` in `run_start` after Doctor passes, print configured choices and exit with code 1 upon mismatch before container instantiation. In `build_opencode_run_command`, place `-m <model_id>` before `--variant` and before `--auto` as discrete argv tokens, omitting `-m` when `model_id` is empty or None.
 
+### Windows Console Raw Key Reading and Non-Interactive Stdin Fallback
+- **Problem**: Reading raw console keystrokes using `msvcrt.getwch()` on Windows raises exceptions or hangs in non-interactive pipelines, subshells, redirected test environments, or non-Windows hosts where `msvcrt` is unavailable.
+- **Solution**: Wrap raw key reading with `sys.stdin.isatty()` checks and lazy import error handling, raising `NonInteractiveError` with an actionable message directing the operator to specify `--model` explicitly whenever interactive console input cannot be obtained.
+
+### Untrusted State Model Re-Validation and Drift Fallback
+- **Problem**: Restoring previously persisted state such as `selected_model` from `.agent/state.json` without re-validating against active configuration risks passing invalid or deprecated model IDs into worker commands if the configuration file changed between sessions.
+- **Solution**: Always re-validate state-recorded model identifiers against configured `model.models`; if the recorded model is missing, emit a warning that the model is no longer configured and fall through to auto-selection or interactive prompting rather than crashing or propagating an unconfigured model string.
+
+### Injected Container Test Isolation for Startup Interactors
+- **Problem**: Running startup model resolution and state store persistence unconditionally in CLI entry points like `run_start` causes in-memory test doubles (`container_instance` or `orchestrator_instance`) to inadvertently touch disk state files (`.agent/state.json`) or block on console input.
+- **Solution**: Confine startup resolution and state persistence strictly to the locally built container path in `run_start`, allowing tests passing injected containers or orchestrators to skip model selection entirely, while exposing explicit `state_store`, `model_prompt`, and `key_reader` injection seams on `run_start`.
+
 
 
 

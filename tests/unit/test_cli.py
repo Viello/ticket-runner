@@ -32,8 +32,10 @@ from runner.domain.config import (
     VerificationConfig,
     WorkerConfig,
 )
+from runner.domain.exceptions import StateFormatError
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_command_runner import FakeCommandRunner
+from tests.fakes.fake_state_store import FakeStateStore
 from tests.fakes.fake_ticket_repository import FakeTicketRepository
 import ticket_runner
 
@@ -634,6 +636,9 @@ def test_cli_start_with_valid_model_builds_container_with_model(
         processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
     )
 
+    fake_state_store = FakeStateStore(initial_state={"prior_key": "prior_val"})
+    monkeypatch.setattr(ticket_runner, "JsonStateStore", lambda path: fake_state_store)
+
     passed_kwargs: dict[str, Any] = {}
 
     def mock_build_container(*args: Any, **kwargs: Any) -> Any:
@@ -645,6 +650,8 @@ def test_cli_start_with_valid_model_builds_container_with_model(
     code = ticket_runner.main(["start", "--local-only", "--model", "qwen/qwen-plus"])
     assert code == 0
     assert passed_kwargs.get("model_id") == "qwen/qwen-plus"
+    assert fake_state_store.write_calls[-1]["prior_key"] == "prior_val"
+    assert fake_state_store.write_calls[-1]["selected_model"] == "qwen/qwen-plus"
 
 
 def test_cli_start_with_unknown_model_prints_error_and_exits_1_without_orchestrating(
@@ -734,5 +741,306 @@ def test_cli_start_omitting_model_passes_none_model_id(
     code = ticket_runner.main(["start", "--local-only"])
     assert code == 0
     assert passed_kwargs.get("model_id") is None
+
+
+def test_cli_run_start_single_model_auto_selects_and_persists(
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(models=(ModelEntry(id="single/model", label="Single Model"),)),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore()
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            orchestrator_instance=FakeOrchestrator(),  # type: ignore[arg-type]
+            state_store=store,
+        )
+    )
+    assert code == 0
+
+
+def test_cli_run_start_multiple_models_interactive_selection(
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(
+            models=(
+                ModelEntry(id="m1/chat", label="M1 Chat"),
+                ModelEntry(id="m2/chat", label="M2 Chat"),
+            )
+        ),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore()
+    keys = ["2", "\r"]
+    key_iter = iter(keys)
+
+    passed_kwargs: dict[str, Any] = {}
+
+    class ContainerDouble:
+        orchestrator: Any = None
+        supervisor: Any = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        container = ContainerDouble()
+        container.orchestrator = FakeOrchestrator()
+        return container
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ticket_runner, "build_container", mock_build_container):
+        code = asyncio.run(
+            ticket_runner.run_start(
+                config_path=tmp_path / "config.yaml",
+                local_only=True,
+                doctor_instance=fake_doc,
+                state_store=store,
+                key_reader=lambda: next(key_iter),
+            )
+        )
+
+    assert code == 0
+    assert passed_kwargs.get("model_id") == "m2/chat"
+    assert store.write_calls[-1]["selected_model"] == "m2/chat"
+
+
+def test_cli_run_start_restores_from_state_and_prints_notice(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(
+            models=(
+                ModelEntry(id="m1/chat", label="M1 Chat"),
+                ModelEntry(id="m2/chat", label="M2 Chat"),
+            )
+        ),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore(initial_state={"selected_model": "m2/chat", "custom": "field"})
+
+    passed_kwargs: dict[str, Any] = {}
+
+    class ContainerDouble:
+        orchestrator: Any = None
+        supervisor: Any = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        container = ContainerDouble()
+        container.orchestrator = FakeOrchestrator()
+        return container
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ticket_runner, "build_container", mock_build_container):
+        code = asyncio.run(
+            ticket_runner.run_start(
+                config_path=tmp_path / "config.yaml",
+                local_only=True,
+                doctor_instance=fake_doc,
+                state_store=store,
+            )
+        )
+
+    assert code == 0
+    assert passed_kwargs.get("model_id") == "m2/chat"
+    assert store.write_calls[-1]["custom"] == "field"
+    captured = capsys.readouterr()
+    assert "Resuming with M2 Chat — pass --model to override" in captured.out
+
+
+def test_cli_run_start_drift_warns_and_falls_back(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(models=(ModelEntry(id="single/model", label="Single Model"),)),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore(initial_state={"selected_model": "departed/model"})
+
+    passed_kwargs: dict[str, Any] = {}
+
+    class ContainerDouble:
+        orchestrator: Any = None
+        supervisor: Any = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        container = ContainerDouble()
+        container.orchestrator = FakeOrchestrator()
+        return container
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ticket_runner, "build_container", mock_build_container):
+        code = asyncio.run(
+            ticket_runner.run_start(
+                config_path=tmp_path / "config.yaml",
+                local_only=True,
+                doctor_instance=fake_doc,
+                state_store=store,
+            )
+        )
+
+    assert code == 0
+    assert passed_kwargs.get("model_id") == "single/model"
+    captured = capsys.readouterr()
+    assert "departed/model" in captured.out
+    assert store.write_calls[-1]["selected_model"] == "single/model"
+
+
+def test_cli_run_start_non_interactive_exits_1_with_model_message(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(
+            models=(
+                ModelEntry(id="m1/chat", label="M1 Chat"),
+                ModelEntry(id="m2/chat", label="M2 Chat"),
+            )
+        ),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore()
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            state_store=store,
+            key_reader=lambda: "",  # EOF / non-interactive
+        )
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "--model" in captured.out or "--model" in captured.err
+
+
+def test_cli_run_start_state_write_failure_exits_1_before_container_build(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(models=(ModelEntry(id="single/model", label="Single Model"),)),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore(write_error=OSError("Permission denied on write"))
+
+    build_called = False
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        nonlocal build_called
+        build_called = True
+        raise AssertionError("Should not build container on write failure")
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ticket_runner, "build_container", mock_build_container):
+        code = asyncio.run(
+            ticket_runner.run_start(
+                config_path=tmp_path / "config.yaml",
+                local_only=True,
+                doctor_instance=fake_doc,
+                state_store=store,
+            )
+        )
+
+    assert code == 1
+    assert build_called is False
+    captured = capsys.readouterr()
+    assert "persistence failed" in captured.out.lower() or "permission denied" in captured.out.lower()
+
+
+def test_cli_run_start_corrupt_state_warns_and_persists_cleanly(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    object.__setattr__(
+        config,
+        "model",
+        ModelConfig(models=(ModelEntry(id="single/model", label="Single Model"),)),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    store = FakeStateStore(read_error=StateFormatError("Malformed state file"))
+
+    passed_kwargs: dict[str, Any] = {}
+
+    class ContainerDouble:
+        orchestrator: Any = None
+        supervisor: Any = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        container = ContainerDouble()
+        container.orchestrator = FakeOrchestrator()
+        return container
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ticket_runner, "build_container", mock_build_container):
+        code = asyncio.run(
+            ticket_runner.run_start(
+                config_path=tmp_path / "config.yaml",
+                local_only=True,
+                doctor_instance=fake_doc,
+                state_store=store,
+            )
+        )
+
+    assert code == 0
+    assert passed_kwargs.get("model_id") == "single/model"
+    captured = capsys.readouterr()
+    assert "corrupted" in captured.out.lower()
+    assert store.write_calls[-1] == {"selected_model": "single/model"}
 
 
