@@ -355,3 +355,8 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: On Windows, OpenCode emits absolute and relative file paths in tool calls with mixed separators (e.g. `D:\Projects\.agents\skills\implement\SKILL.md`, `D:/Projects/...`, or escaped JSON backslashes `\\\\`), causing naive substring or POSIX-only regex matching to fail silently during tool use and resource access detection.
 - **Solution**: Normalize all file paths and raw stream text with `.replace("\\", "/").lower()` before applying skill folder extraction or `AGENTS.md` regex matching, guaranteeing cross-platform telemetry detection across Windows and POSIX environments.
 
+### Non-Blocking Resource Telemetry Extraction Isolation
+- **Problem**: Unexpected payload schemas or regex backtracking anomalies during stream decoding of `tool_use` events could raise unhandled exceptions in the telemetry extraction loop, crashing the supervisor and killing active worker sessions.
+- **Solution**: Wrap `extract_resource_access` calls defensively inside a `try...except Exception` block in the supervisor streaming loop, logging warnings for extraction failures while permitting session execution and watchdog monitoring to proceed uninterrupted.
+
+

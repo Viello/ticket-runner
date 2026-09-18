@@ -1,5 +1,6 @@
 # T045 — Worker supervisor resource telemetry
-Status: pending
+Status: completed
+Completed: 2026-09-18T03:00:00Z
 Spec: docs/specs/08-worker-skill-protocol-and-telemetry.md
 Blocked by: T044
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 import io
 import json
+import logging
 from pathlib import Path
 import sys
 import time
@@ -18,6 +19,7 @@ from runner.adapters.opencode.opencode_worker import (
     OpenCodeEvent,
     build_opencode_run_command,
     decode_event,
+    extract_resource_access,
 )
 from runner.domain.config import TokenBudgetConfig
 from runner.domain.runtime_paths import RuntimePaths
@@ -26,6 +28,8 @@ from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.signal_repository import SignalRepository
 
+
+logger = logging.getLogger(__name__)
 
 STALL_SILENCE_SECONDS: float = 900.0
 BOUNDED_RUN_TIMEOUT_SECONDS: float = 300.0
@@ -66,6 +70,7 @@ class SessionRunResult:
     stderr_path: Path | None = None
     diagnostics: tuple[str, ...] = ()
     has_error_event: bool = False
+    resources_accessed: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if isinstance(self.reason, str) and not isinstance(
@@ -75,6 +80,10 @@ class SessionRunResult:
                 object.__setattr__(self, "reason", RunTerminationReason(self.reason))
             except ValueError:
                 pass
+        if not isinstance(self.resources_accessed, frozenset):
+            object.__setattr__(
+                self, "resources_accessed", frozenset(self.resources_accessed)
+            )
 
     @property
     def latest_occupancy(self) -> int:
@@ -85,6 +94,11 @@ class SessionRunResult:
     def log_path(self) -> Path | None:
         """Alias to jsonl_path for caller convenience."""
         return self.jsonl_path
+
+    @property
+    def skills_accessed(self) -> frozenset[str]:
+        """Alias to resources_accessed for caller convenience."""
+        return self.resources_accessed
 
     @property
     def log_paths(self) -> tuple[Path, ...]:
@@ -286,6 +300,7 @@ class WorkerSupervisor:
         stderr_target_path: Path | None = None
         termination_reason: RunTerminationReason | None = None
         has_error_event: bool = False
+        resources_accessed: set[str] = set()
 
         def _init_logging(sid: str) -> None:
             nonlocal log_file, log_skipped, jsonl_target_path, stderr_target_path
@@ -446,6 +461,19 @@ class WorkerSupervisor:
                 last_line_time = arrival_time
 
                 event = decode_event(line)
+
+                try:
+                    detected = extract_resource_access(event, raw_line=line)
+                    for resource_name in sorted(detected):
+                        logger.info(
+                            f"[{ticket_id}] Worker accessed resource: {resource_name}"
+                        )
+                        resources_accessed.add(resource_name)
+                except Exception as exc:
+                    logger.warning(
+                        f"[{ticket_id}] Failed to extract resource access: {exc}"
+                    )
+
                 if event is None:
                     diagnostics.append(
                         f"[{ticket_id}] Unparseable JSON stdout line skipped: {line[:100]}"
@@ -547,6 +575,7 @@ class WorkerSupervisor:
             stderr_path=stderr_target_path if not log_skipped else None,
             diagnostics=tuple(diagnostics),
             has_error_event=has_error_event,
+            resources_accessed=frozenset(resources_accessed),
         )
 
     run_session = run
