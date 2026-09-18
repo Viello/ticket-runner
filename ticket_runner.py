@@ -132,7 +132,7 @@ async def run_start(
     local_only: bool,
     doctor_instance: Doctor | None = None,
     orchestrator_instance: QueueOrchestrator | None = None,
-    poll_interval: float = 5.0,
+    poll_interval: float | None = None,
     container_instance: RunnerContainer | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
@@ -158,10 +158,14 @@ async def run_start(
         container = build_container(config=config)
         orchestrator = container.orchestrator
 
+    effective_poll_interval = (
+        poll_interval if poll_interval is not None else config.lifecycle.poll_interval
+    )
+
     try:
         return await orchestrator.run_lifecycle(
             lifecycle=config.lifecycle,
-            poll_interval=poll_interval,
+            poll_interval=effective_poll_interval,
         )
     except UserAbortError as exc:
         print(f"\n[Runner] Aborted: {exc}")

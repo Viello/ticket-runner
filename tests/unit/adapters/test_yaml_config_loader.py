@@ -79,6 +79,7 @@ def test_load_valid_yaml_file(tmp_path: Path) -> None:
     assert config.discord.channel_id == "987654321"
     assert config.lifecycle.queue_completion == "standby"
     assert config.lifecycle.clean_slate == "interactive"
+    assert config.lifecycle.poll_interval == 5.0
     assert config.git.auto_push is False
     assert config.git.commit_prefix == "feat"
     assert config.git.enforce_pre_push_hook is True
@@ -213,9 +214,34 @@ git: {}
     assert config.discord.channel_id == ""
     assert config.lifecycle.queue_completion == "standby"
     assert config.lifecycle.clean_slate == "interactive"
+    assert config.lifecycle.poll_interval == 5.0
     assert config.git.auto_push is False
     assert config.git.commit_prefix == "feat"
     assert config.git.enforce_pre_push_hook is True
+
+
+def test_load_lifecycle_poll_interval_honored() -> None:
+    yaml_content = VALID_CONFIG_YAML.replace(
+        '  clean_slate: "interactive"',
+        '  clean_slate: "interactive"\n  poll_interval: 2.5',
+    )
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_content)
+    assert config.lifecycle.poll_interval == 2.5
+
+
+@pytest.mark.parametrize(
+    "invalid_poll_interval",
+    [-1, 0, 0.0, -0.5, "fast", None, True],
+)
+def test_load_lifecycle_poll_interval_invalid(invalid_poll_interval: object) -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["lifecycle"]["poll_interval"] = invalid_poll_interval
+
+    with pytest.raises(ConfigError, match="poll_interval"):
+        loader.load_from_dict(data)
 
 
 def test_load_token_budget_invariant_violation() -> None:
@@ -262,6 +288,7 @@ def test_load_config_example_yaml() -> None:
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
     assert config.tokens.ceiling == 150000
+    assert config.lifecycle.poll_interval == 5.0
 
 
 def test_load_root_config_yaml() -> None:

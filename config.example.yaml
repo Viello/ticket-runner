@@ -55,6 +55,8 @@ lifecycle:
   #   "always"      - Automatically archive and clean slate
   #   "never"       - Keep completed tickets and spec in working tree
   clean_slate: "interactive"
+  # Standby watch loop polling interval in seconds
+  poll_interval: 5.0
 
 git:
   # Never push automatically (pre-push hook blocks remote pushes on the agent branch)

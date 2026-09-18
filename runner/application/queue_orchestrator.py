@@ -21,6 +21,10 @@ from runner.domain.ticket import Ticket
 from runner.ports.ticket_repository import TicketRepository
 
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
+STANDBY_BANNER = (
+    "[Queue] All tickets processed. Standing by watching docs/tickets/ for new tickets "
+    "(standby, Ctrl+C to exit)."
+)
 
 
 class TicketOutcomeStatus(str, Enum):
@@ -406,22 +410,24 @@ class QueueOrchestrator:
         self,
         processor: TicketProcessor | Callable[[Ticket], Awaitable[TicketOutcome]] | None = None,
         lifecycle: LifecycleConfig | RunnerConfig | str | None = None,
-        poll_interval: float = 5.0,
+        poll_interval: float | None = None,
         printer: Callable[[str], None] = print,
         stop_event: asyncio.Event | None = None,
         max_standby_iterations: int | None = None,
         clean_slate_policy: str | None = None,
+        sleep_fn: Callable[[float], Awaitable[None]] | None = None,
     ) -> int:
         """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
 
         Args:
             processor: Injected ticket processor seam. Defaults to self.processor.
             lifecycle: Policy specification (RunnerConfig, LifecycleConfig, or "standby"/"terminate").
-            poll_interval: Idle standby polling interval in seconds (default: 5.0).
+            poll_interval: Idle standby polling interval in seconds (default: 5.0 or from config).
             printer: Output callback for console notifications.
             stop_event: Optional asyncio.Event to gracefully exit standby loop.
             max_standby_iterations: Optional iteration limit for tests.
             clean_slate_policy: Optional override for clean_slate policy (e.g. 'always' / 'never').
+            sleep_fn: Optional injected async sleep callable for deterministic clock tests.
 
         Returns:
             Exit status code (0 for clean termination or standby exit).
@@ -431,13 +437,17 @@ class QueueOrchestrator:
             ValueError: If an unknown lifecycle policy is specified.
         """
         active_processor = processor or self._processor
+        active_sleep = sleep_fn or asyncio.sleep
 
+        config_poll_interval = 5.0
         if isinstance(lifecycle, RunnerConfig):
             policy = lifecycle.lifecycle.queue_completion
             active_clean_slate = clean_slate_policy or lifecycle.lifecycle.clean_slate
+            config_poll_interval = lifecycle.lifecycle.poll_interval
         elif isinstance(lifecycle, LifecycleConfig):
             policy = lifecycle.queue_completion
             active_clean_slate = clean_slate_policy or lifecycle.clean_slate
+            config_poll_interval = lifecycle.poll_interval
         elif isinstance(lifecycle, str):
             policy = lifecycle.strip().lower()
             active_clean_slate = clean_slate_policy or "never"
@@ -446,6 +456,8 @@ class QueueOrchestrator:
             active_clean_slate = clean_slate_policy or "never"
         else:
             raise ValueError(f"Unsupported lifecycle configuration type: {type(lifecycle)}")
+
+        effective_poll_interval = poll_interval if poll_interval is not None else config_poll_interval
 
         if policy not in ("standby", "terminate"):
             raise ValueError(f"Unsupported queue completion policy: '{policy}'")
@@ -479,9 +491,7 @@ class QueueOrchestrator:
 
             # Standby mode: release sentinel lock before entering idle watch loop
             self.release_lock()
-            printer(
-                f"[Queue] Lifecycle policy 'standby': Entering idle watch loop (polling every {poll_interval}s)..."
-            )
+            printer(STANDBY_BANNER)
             iteration = 0
             while not self._is_paused:
                 if stop_event is not None and stop_event.is_set():
@@ -490,7 +500,7 @@ class QueueOrchestrator:
                     break
 
                 try:
-                    await asyncio.sleep(poll_interval)
+                    await active_sleep(effective_poll_interval)
                 except asyncio.CancelledError:
                     raise
 
@@ -509,11 +519,17 @@ class QueueOrchestrator:
                         if outcome is None:
                             break
 
+                    if self._is_paused:
+                        break
+
                     printer("[Queue] Queue exhausted: no pending tickets.")
                     await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                     if policy == "terminate":
                         printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                         return 0
+
+                    self.release_lock()
+                    printer(STANDBY_BANNER)
 
             return 0
         except UserAbortError as exc:

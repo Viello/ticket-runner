@@ -367,6 +367,6 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Resolving workspace-root files (such as `AGENTS.md` and `.agents/skills/...`) using unanchored relative paths (`Path("AGENTS.md")`) or paths relative to `Path.cwd()` causes Doctor pre-flight checks in integration tests or isolated workspace runs to probe the host repository rather than the injected test workspace (`tmp_path`), triggering false passes on missing files or false failures on foreign environments.
 - **Solution**: Resolve `AGENTS.md` and skill paths relative to `self._cwd` when provided, permit optional explicit path overrides in the `Doctor` constructor, and ensure all pre-flight inspections remain strictly read-only (`is_file()` and `open(..., "r")`).
 
-
-
-
+### Standby Entry Banner Emission and Re-entry Timing
+- **Problem**: In standby queue execution, printing entry banners inside polling sleep loops causes repetitive heartbeat spam, while emitting only once on startup skips announcing re-entry when newly arrived tickets drain and the runner returns to idle standby.
+- **Solution**: Emit the standby banner strictly upon initial queue exhaustion and after processing standby-discovered tickets once the queue is redrained, ensuring the sentinel lock is released prior to each banner emission and omitting periodic output during idle watch intervals.

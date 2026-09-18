@@ -811,3 +811,136 @@ def test_run_next_abort_records_last_outcome_releases_lock_and_raises_abort_erro
         assert "commit" not in invocation.argv
         assert "reset" not in invocation.argv
 
+
+def test_run_lifecycle_standby_prints_banner_once_and_polls_configured_interval(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    printed: list[str] = []
+    recorded_sleeps: list[float] = []
+    lock_states_at_print: list[bool] = []
+
+    def recording_printer(msg: str) -> None:
+        if "watching docs/tickets/" in msg or "standing by" in msg.lower():
+            lock_states_at_print.append(queue_lock.is_locked)
+        printed.append(msg)
+
+    async def fake_sleep(duration: float) -> None:
+        recorded_sleeps.append(duration)
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+    )
+
+    config = LifecycleConfig(queue_completion="standby", poll_interval=8.5)
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=recording_printer,
+            sleep_fn=fake_sleep,
+            max_standby_iterations=1,
+        )
+    )
+
+    assert exit_code == 0
+    banner_lines = [
+        p for p in printed
+        if "all tickets processed" in p.lower()
+        and "watching docs/tickets/" in p.lower()
+        and "ctrl+c" in p.lower()
+    ]
+    assert len(banner_lines) == 1
+    assert lock_states_at_print == [False]
+    assert recorded_sleeps == [8.5]
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_re_entry_prints_banner_once_per_entry(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    printed: list[str] = []
+    stop_event = asyncio.Event()
+    sleep_count = 0
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved()
+
+    async def fake_sleep(duration: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count == 1:
+            ticket_repo.add_ticket(_make_ticket("T001", title="Standby Ticket"))
+        elif sleep_count == 3:
+            stop_event.set()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle="standby",
+            poll_interval=0.01,
+            printer=printed.append,
+            sleep_fn=fake_sleep,
+            stop_event=stop_event,
+        )
+    )
+
+    assert exit_code == 0
+    banner_lines = [
+        p for p in printed
+        if "all tickets processed" in p.lower()
+        and "watching docs/tickets/" in p.lower()
+        and "ctrl+c" in p.lower()
+    ]
+    assert len(banner_lines) == 2
+    assert sleep_count >= 3
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+
+def test_run_lifecycle_standby_honors_poll_interval_override(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    ticket_repo = FakeTicketRepository([])
+    recorded_sleeps: list[float] = []
+
+    async def fake_sleep(duration: float) -> None:
+        recorded_sleeps.append(duration)
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+    )
+
+    config = LifecycleConfig(queue_completion="standby", poll_interval=10.0)
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            poll_interval=0.25,
+            sleep_fn=fake_sleep,
+            max_standby_iterations=1,
+        )
+    )
+
+    assert exit_code == 0
+    assert recorded_sleeps == [0.25]
+

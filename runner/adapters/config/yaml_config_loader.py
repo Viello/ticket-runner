@@ -205,10 +205,13 @@ class YamlConfigLoader(ConfigLoader):
         )
 
         # 7. Lifecycle section
-        lifecycle = LifecycleConfig(
-            queue_completion=lifecycle_dict.get("queue_completion", "standby"),
-            clean_slate=lifecycle_dict.get("clean_slate", "interactive"),
-        )
+        lifecycle_kwargs: dict[str, Any] = {
+            "queue_completion": lifecycle_dict.get("queue_completion", "standby"),
+            "clean_slate": lifecycle_dict.get("clean_slate", "interactive"),
+        }
+        if "poll_interval" in lifecycle_dict:
+            lifecycle_kwargs["poll_interval"] = lifecycle_dict["poll_interval"]
+        lifecycle = LifecycleConfig(**lifecycle_kwargs)
 
         # 8. Git section
         git = GitConfig(

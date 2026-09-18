@@ -1,5 +1,6 @@
 # T038 — Standby poll interval and completion banner
-Status: pending
+Status: completed
+Completed: 2026-09-18T03:50:30Z
 Spec: docs/specs/07-runner-exit-lifecycle.md
 Blocked by: none
 

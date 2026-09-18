@@ -104,13 +104,17 @@ def test_lifecycle_config_valid() -> None:
     cfg = LifecycleConfig(queue_completion="standby", clean_slate="interactive")
     assert cfg.queue_completion == "standby"
     assert cfg.clean_slate == "interactive"
+    assert cfg.poll_interval == 5.0
 
-    cfg2 = LifecycleConfig(queue_completion="terminate", clean_slate="always")
+    cfg2 = LifecycleConfig(queue_completion="terminate", clean_slate="always", poll_interval=2.5)
     assert cfg2.queue_completion == "terminate"
     assert cfg2.clean_slate == "always"
+    assert cfg2.poll_interval == 2.5
 
-    cfg3 = LifecycleConfig(queue_completion="standby", clean_slate="never")
+    cfg3 = LifecycleConfig(queue_completion="standby", clean_slate="never", poll_interval=10)
     assert cfg3.clean_slate == "never"
+    assert cfg3.poll_interval == 10.0
+    assert isinstance(cfg3.poll_interval, float)
 
 
 @pytest.mark.parametrize(
@@ -124,6 +128,28 @@ def test_lifecycle_config_valid() -> None:
 def test_lifecycle_config_invalid(queue_completion: str, clean_slate: str) -> None:
     with pytest.raises(ConfigError):
         LifecycleConfig(queue_completion=queue_completion, clean_slate=clean_slate)
+
+
+@pytest.mark.parametrize(
+    "invalid_interval",
+    [
+        0,
+        0.0,
+        -1,
+        -0.5,
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+        "5.0",
+        "invalid",
+        True,
+        False,
+        None,
+    ],
+)
+def test_lifecycle_config_poll_interval_invalid(invalid_interval: object) -> None:
+    with pytest.raises(ConfigError, match="poll_interval"):
+        LifecycleConfig(poll_interval=invalid_interval)  # type: ignore[arg-type]
 
 
 def test_discord_config_valid() -> None:

@@ -249,3 +249,66 @@ def test_cli_start_empty_queue_standby_with_injected_stop(
     assert code == 0
     captured = capsys.readouterr()
     assert "standby" in captured.out.lower()
+
+
+def test_cli_run_start_passes_configured_poll_interval(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="standby")
+    object.__setattr__(dummy_config.lifecycle, "poll_interval", 12.5)
+
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    captured_poll_interval: float | None = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal captured_poll_interval
+            captured_poll_interval = kwargs.get("poll_interval")
+            return 0
+
+    fake_orch = FakeOrchestrator()
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            orchestrator_instance=fake_orch,  # type: ignore[arg-type]
+        )
+    )
+    assert code == 0
+    assert captured_poll_interval == 12.5
+
+
+def test_cli_run_start_honors_poll_interval_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="standby")
+    object.__setattr__(dummy_config.lifecycle, "poll_interval", 12.5)
+
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    captured_poll_interval: float | None = None
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal captured_poll_interval
+            captured_poll_interval = kwargs.get("poll_interval")
+            return 0
+
+    fake_orch = FakeOrchestrator()
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            orchestrator_instance=fake_orch,  # type: ignore[arg-type]
+            poll_interval=0.5,
+        )
+    )
+    assert code == 0
+    assert captured_poll_interval == 0.5
