@@ -33,8 +33,9 @@ Persist orchestrator execution state continuously to `.agent/state.json` using a
 ## Implementation Decisions
 
 - **State Schema (`.agent/state.json`)**:
-  Stores `active_ticket_id` (string or null), `status` (`"IDLE"`, `"WORKING"`, `"GATEKEEPER"`, `"WAITING_FOR_USER"`, `"PAUSE_REQUESTED"`, `"CIRCUIT_BREAKER_TRIPPED"`), `opencode_session_id` (string or null), `presence_mode` (`"nearby"` | `"away"`), `verification_attempts` (integer), `tokens` object (`current` integer, `warning_sent` boolean), `branch` (string), `started_at` (ISO-8601), `last_checkpoint` (path or null), `tui_open` (boolean, default `false`), `tui_session_id` (string or null), and `last_updated` (ISO-8601).
+  Stores `active_ticket_id` (string or null), `status` (`"IDLE"`, `"WORKING"`, `"GATEKEEPER"`, `"WAITING_FOR_USER"`, `"PAUSE_REQUESTED"`, `"CIRCUIT_BREAKER_TRIPPED"`), `opencode_session_id` (string or null), `selected_model` (string or null; the session-scoped Model Selection id, persisted by Spec 07), `presence_mode` (`"nearby"` | `"away"`), `verification_attempts` (integer), `tokens` object (`current` integer, `warning_sent` boolean), `branch` (string), `started_at` (ISO-8601), `last_checkpoint` (path or null), `tui_open` (boolean, default `false`), `tui_session_id` (string or null), and `last_updated` (ISO-8601).
 - **Atomic State Writes**: All writes to `state.json` write to `state.json.tmp` and execute an atomic replace (`os.replace`).
+- **State Store Introduction (Spec 07 Prefactor)**: Spec 07 introduces the minimal `StateStore` port (`runner/ports/state_store.py`), the atomic JSON adapter (`runner/adapters/filesystem/json_state_store.py`), and `RuntimePaths.state_path`, modeling `selected_model` only. That adapter writes the exact document supplied by its caller; callers merge before writing so fields they do not own round-trip untouched. Spec 06 layers `RunnerState` (the full schema above) on the same port rather than replacing it.
 - **Crash Recovery Logic**:
   On startup, if `status` in `state.json` indicates an in-flight ticket:
   1. Inspect `git status --porcelain` to identify uncommitted edits.
