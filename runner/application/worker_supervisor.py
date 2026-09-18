@@ -140,6 +140,7 @@ class WorkerSupervisor:
         signal_grace_timeout: float = SIGNAL_GRACE_SECONDS,
         signal_repository: SignalRepository | None = None,
         default_reasoning: str = "",
+        model_id: str | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -157,11 +158,17 @@ class WorkerSupervisor:
         self._signal_grace_timeout = float(signal_grace_timeout)
         self._signal_repository = signal_repository
         self._default_reasoning = default_reasoning.strip() if default_reasoning else ""
+        self._model_id = model_id.strip() if (model_id and model_id.strip()) else None
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def model_id(self) -> str | None:
+        """Configured model identifier for session runs."""
+        return self._model_id
 
     @property
     def default_reasoning(self) -> str:
@@ -297,7 +304,10 @@ class WorkerSupervisor:
             else ""
         ) or self._default_reasoning
         cmd = build_opencode_run_command(
-            prompt=prompt, session_id=session_id, variant=variant
+            prompt=prompt,
+            session_id=session_id,
+            variant=variant,
+            model_id=self._model_id,
         )
 
         handle = await self._command_runner.spawn(cmd, cwd=self._cwd)

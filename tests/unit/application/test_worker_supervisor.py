@@ -2002,6 +2002,129 @@ def test_default_reasoning_resolution_across_initial_handoff_and_answer_resumes(
     ]
 
 
+@pytest.mark.parametrize(
+    ("input_model", "expected_model"),
+    [
+        ("qwen/qwen-plus", "qwen/qwen-plus"),
+        ("  anthropic/claude-3-5-sonnet  ", "anthropic/claude-3-5-sonnet"),
+        ("", None),
+        ("   ", None),
+        (None, None),
+    ],
+)
+def test_supervisor_initializes_and_exposes_model_id(
+    tmp_path: Path,
+    input_model: str | None,
+    expected_model: str | None,
+) -> None:
+    supervisor = WorkerSupervisor(
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        model_id=input_model,
+    )
+    assert supervisor.model_id == expected_model
+
+
+def test_supervisor_propagates_model_id_to_all_session_run_types(tmp_path: Path) -> None:
+    fake_runner = FakeCommandRunner()
+    ticket = _make_ticket("T051")
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        model_id="qwen/qwen-plus",
+    )
+
+    # 1. Initial run
+    asyncio.run(supervisor.run(ticket=ticket, prompt="initial task"))
+    # 2. Handoff resume run
+    asyncio.run(supervisor.run(ticket=ticket, prompt="handoff continuation"))
+    # 3. Crash retry run
+    asyncio.run(supervisor.run(ticket=ticket, prompt="retry after crash"))
+    # 4. Nudge run
+    asyncio.run(supervisor.run(ticket=ticket, prompt="nudge instruction", session_id="ses_activeNudge"))
+    # 5. Answer resume run
+    asyncio.run(supervisor.run(ticket=ticket, prompt="answer resume instruction", session_id="ses_activeAns"))
+
+    assert len(fake_runner.spawns) == 5
+    assert fake_runner.spawns[0] == [
+        "opencode", "run", "--format", "json", "-m", "qwen/qwen-plus", "--auto", "initial task",
+    ]
+    assert fake_runner.spawns[1] == [
+        "opencode", "run", "--format", "json", "-m", "qwen/qwen-plus", "--auto", "handoff continuation",
+    ]
+    assert fake_runner.spawns[2] == [
+        "opencode", "run", "--format", "json", "-m", "qwen/qwen-plus", "--auto", "retry after crash",
+    ]
+    assert fake_runner.spawns[3] == [
+        "opencode", "run", "--format", "json", "--session", "ses_activeNudge", "-m", "qwen/qwen-plus", "--auto", "nudge instruction",
+    ]
+    assert fake_runner.spawns[4] == [
+        "opencode", "run", "--format", "json", "--session", "ses_activeAns", "-m", "qwen/qwen-plus", "--auto", "answer resume instruction",
+    ]
+
+
+def test_supervisor_propagates_both_model_id_and_ticket_reasoning(tmp_path: Path) -> None:
+    fake_runner = FakeCommandRunner()
+    ticket = Ticket(
+        id="T051",
+        title="Worker supervisor test ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/07-model-selection.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        reasoning="high",
+        path=Path("docs/tickets/07-model-selection/T051-test.md"),
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        model_id="anthropic/claude-3-5-sonnet",
+        default_reasoning="low",
+    )
+
+    asyncio.run(
+        supervisor.run(
+            ticket=ticket,
+            prompt="implement feature",
+            session_id="ses_abc123",
+        )
+    )
+
+    assert len(fake_runner.spawns) == 1
+    assert fake_runner.spawns[0] == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--session",
+        "ses_abc123",
+        "-m",
+        "anthropic/claude-3-5-sonnet",
+        "--variant",
+        "high",
+        "--auto",
+        "implement feature",
+    ]
+
+
+def test_supervisor_without_model_id_omits_m_flag(tmp_path: Path) -> None:
+    fake_runner = FakeCommandRunner()
+    ticket = _make_ticket("T051")
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+    )
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="plain prompt"))
+
+    assert len(fake_runner.spawns) == 1
+    assert "-m" not in fake_runner.spawns[0]
+
+
+
 
 
 

@@ -79,6 +79,7 @@ class RunnerContainer:
 def build_container(
     config: RunnerConfig | None = None,
     *,
+    model_id: str | None = None,
     command_runner: CommandRunner | None = None,
     intervention_gateway: InterventionGateway | None = None,
     ticket_store: TicketRepository | None = None,
@@ -163,6 +164,7 @@ def build_container(
         clock=clock or time.monotonic,
         signal_repository=resolved_signal_repo,
         default_reasoning=resolved_config.model.default_reasoning,
+        model_id=model_id,
     )
 
     resolved_coordinator = coordinator or HandoffCoordinator(

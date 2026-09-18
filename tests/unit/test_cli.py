@@ -23,6 +23,8 @@ from runner.domain.config import (
     DiscordConfig,
     GitConfig,
     LifecycleConfig,
+    ModelConfig,
+    ModelEntry,
     PresenceConfig,
     ProjectConfig,
     RunnerConfig,
@@ -568,4 +570,169 @@ def test_cli_start_runtime_error_returns_code_1(
     assert code == 1
     captured = capsys.readouterr()
     assert "error" in captured.out.lower() or "error" in captured.err.lower()
+
+
+def test_cli_parser_has_model_on_start_only() -> None:
+    parser = ticket_runner.create_parser()
+
+    args = parser.parse_args(["start", "--model", "qwen/qwen-plus"])
+    assert args.model == "qwen/qwen-plus"
+
+    args_default = parser.parse_args(["start"])
+    assert args_default.model is None
+
+    # --model must NOT exist on doctor command
+    with pytest.raises(SystemExit):
+        parser.parse_args(["doctor", "--model", "qwen/qwen-plus"])
+
+
+def test_cli_start_with_valid_model_builds_container_with_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        verification=VerificationConfig(test_cmd="pytest"),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(queue_completion="terminate"),
+        git=GitConfig(),
+        model=ModelConfig(
+            models=(
+                ModelEntry(id="qwen/qwen-plus", label="Qwen Plus"),
+                ModelEntry(id="anthropic/claude-3-5-sonnet", label="Claude 3.5 Sonnet"),
+            )
+        ),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Pending Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-pending.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_runner = FakeCommandRunner()
+    fake_runner.register(["git", "add", "."], stdout="")
+    fake_runner.register(["git", "commit", "-m"], stdout="")
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="a" * 40 + "\n")
+    fake_git_ops = GitOperations(runner=fake_runner)
+
+    fake_container = build_container(
+        config,
+        ticket_store=ticket_repo,
+        git_operations=fake_git_ops,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    passed_kwargs: dict[str, Any] = {}
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        return fake_container
+
+    monkeypatch.setattr(ticket_runner, "build_container", mock_build_container)
+
+    code = ticket_runner.main(["start", "--local-only", "--model", "qwen/qwen-plus"])
+    assert code == 0
+    assert passed_kwargs.get("model_id") == "qwen/qwen-plus"
+
+
+def test_cli_start_with_unknown_model_prints_error_and_exits_1_without_orchestrating(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        verification=VerificationConfig(test_cmd="pytest"),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(queue_completion="terminate"),
+        git=GitConfig(),
+        model=ModelConfig(
+            models=(
+                ModelEntry(id="qwen/qwen-plus", label="Qwen Plus"),
+                ModelEntry(id="anthropic/claude-3-5-sonnet", label="Claude 3.5 Sonnet"),
+            )
+        ),
+    )
+    fake_doc = FakeDoctorPassing(config=config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    build_container_called = False
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        nonlocal build_container_called
+        build_container_called = True
+        raise AssertionError("build_container should not be called when model validation fails")
+
+    monkeypatch.setattr(ticket_runner, "build_container", mock_build_container)
+
+    code = ticket_runner.main(["start", "--local-only", "--model", "bogus"])
+    assert code == 1
+    assert build_container_called is False
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "qwen/qwen-plus" in output
+    assert "anthropic/claude-3-5-sonnet" in output
+    assert "bogus" in output
+
+
+def test_cli_start_omitting_model_passes_none_model_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Pending Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-pending.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_runner = FakeCommandRunner()
+    fake_runner.register(["git", "add", "."], stdout="")
+    fake_runner.register(["git", "commit", "-m"], stdout="")
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="a" * 40 + "\n")
+    fake_git_ops = GitOperations(runner=fake_runner)
+
+    fake_container = build_container(
+        config,
+        ticket_store=ticket_repo,
+        git_operations=fake_git_ops,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+
+    passed_kwargs: dict[str, Any] = {}
+
+    def mock_build_container(*args: Any, **kwargs: Any) -> Any:
+        passed_kwargs.update(kwargs)
+        return fake_container
+
+    monkeypatch.setattr(ticket_runner, "build_container", mock_build_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 0
+    assert passed_kwargs.get("model_id") is None
+
 

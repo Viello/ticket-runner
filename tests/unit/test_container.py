@@ -44,3 +44,18 @@ def test_build_container_default_reasoning_empty_by_default(tmp_path: Path) -> N
     container = build_container(config=config, cwd=tmp_path)
 
     assert container.supervisor.default_reasoning == ""
+
+
+def test_build_container_wires_model_id(tmp_path: Path) -> None:
+    config = _make_config()
+    container = build_container(config=config, cwd=tmp_path, model_id="qwen/qwen-plus")
+
+    assert container.supervisor.model_id == "qwen/qwen-plus"
+
+
+def test_build_container_model_id_none_by_default(tmp_path: Path) -> None:
+    config = _make_config()
+    container = build_container(config=config, cwd=tmp_path)
+
+    assert container.supervisor.model_id is None
+

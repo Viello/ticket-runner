@@ -120,6 +120,76 @@ def test_build_opencode_run_command_preserves_variant_as_single_token() -> None:
     assert cmd[7] == "p"
 
 
+@pytest.mark.parametrize(
+    ("model_id", "variant", "expected_flags"),
+    [
+        # Model only: adds -m before --auto
+        ("qwen/qwen-plus", None, ["-m", "qwen/qwen-plus"]),
+        ("qwen/qwen-plus", "", ["-m", "qwen/qwen-plus"]),
+        ("qwen/qwen-plus", "   ", ["-m", "qwen/qwen-plus"]),
+        # Variant only: adds --variant before --auto
+        (None, "high", ["--variant", "high"]),
+        ("", "high", ["--variant", "high"]),
+        ("   ", "high", ["--variant", "high"]),
+        # Both: adds -m then --variant before --auto
+        ("qwen/qwen-plus", "medium", ["-m", "qwen/qwen-plus", "--variant", "medium"]),
+        # Neither: adds neither
+        (None, None, []),
+        ("", "", []),
+        ("   ", "   ", []),
+        (None, "", []),
+        ("", None, []),
+    ],
+)
+def test_build_opencode_run_command_model_and_variant_token_matrix(
+    model_id: str | None,
+    variant: str | None,
+    expected_flags: list[str],
+) -> None:
+    cmd = build_opencode_run_command("p", model_id=model_id, variant=variant)
+    expected = ["opencode", "run", "--format", "json"] + expected_flags + ["--auto", "p"]
+    assert cmd == expected
+
+
+def test_build_opencode_run_command_with_session_and_model_and_variant() -> None:
+    cmd = build_opencode_run_command(
+        "p",
+        session_id="ses_01ABC123",
+        model_id="anthropic/claude-3-5-sonnet",
+        variant="high",
+    )
+    assert cmd == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--session",
+        "ses_01ABC123",
+        "-m",
+        "anthropic/claude-3-5-sonnet",
+        "--variant",
+        "high",
+        "--auto",
+        "p",
+    ]
+
+
+@pytest.mark.parametrize("invalid_model", [123, True, False, ["qwen"], {"model": "qwen"}])
+def test_build_opencode_run_command_rejects_non_str_model(invalid_model: object) -> None:
+    with pytest.raises(TypeError, match="Model ID must be a string"):
+        build_opencode_run_command("p", model_id=invalid_model)  # type: ignore[arg-type]
+
+
+def test_build_opencode_run_command_preserves_model_as_single_token() -> None:
+    untrusted = "custom-model; rm -rf /"
+    cmd = build_opencode_run_command("p", model_id=untrusted)
+    assert cmd[4] == "-m"
+    assert cmd[5] == "custom-model; rm -rf /"
+    assert cmd[6] == "--auto"
+    assert cmd[7] == "p"
+
+
+
 
 # --- Event Decoding Tests ---
 

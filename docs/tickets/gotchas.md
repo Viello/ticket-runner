@@ -423,6 +423,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Passing untrusted ticket frontmatter such as `Reasoning:` directly into subprocess CLI arguments risks token misalignment or injection if shell-quoted or split. Additionally, appending CLI flags in the wrong position can break existing downstream tests or CLI parsers expecting `--auto <prompt>` as the terminal arguments, or tests indexing fixed token positions (`cmd[4]`, `cmd[5]`, `cmd[7]`).
 - **Solution**: Insert `--variant <variant>` strictly after `--session <id>` and before `--auto <prompt>`, only when variant is non-empty after stripping whitespace. Pass the value as a single argv token without shell quoting or word-splitting. In test doubles (`FakeCommandRunner`), verify spawned subprocesses via `fake_runner.spawns` rather than `fake_runner.commands` (which only captures `run()` calls).
 
+### Model CLI Flag Validation and Subprocess Ordering
+- **Problem**: Passing an unknown or unvalidated `--model` CLI argument could spawn OpenCode with invalid model identifiers or exit with exit code 2 (confusing runtime validation errors with operator aborts), and placing `-m <model_id>` incorrectly in argv token lists could disrupt flag precedence or token indexing in test suites.
+- **Solution**: Restrict `--model` to the `start` subparser, validate the provided model ID against configured `model.models` in `run_start` after Doctor passes, print configured choices and exit with code 1 upon mismatch before container instantiation. In `build_opencode_run_command`, place `-m <model_id>` before `--variant` and before `--auto` as discrete argv tokens, omitting `-m` when `model_id` is empty or None.
+
+
 
 
 

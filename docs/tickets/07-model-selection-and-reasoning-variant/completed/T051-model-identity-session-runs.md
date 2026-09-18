@@ -1,5 +1,6 @@
 # T051 — Model identity: `--model` plumbed to every Session Run
-Status: pending
+Status: completed
+Completed: 2026-09-18T09:22:00Z
 Spec: docs/specs/07-model-selection-and-reasoning-variant.md
 Blocked by: T050
 Security: required

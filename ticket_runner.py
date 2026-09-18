@@ -83,6 +83,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=Path("config.yaml"),
         help="Path to configuration YAML file (default: config.yaml).",
     )
+    start_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="OpenCode model identifier to use for session runs.",
+    )
 
     # placeholders for future subcommands
     subparsers.add_parser("pause", help="Pause the active ticket execution.")
@@ -152,6 +158,7 @@ async def run_start(
     stop_event: asyncio.Event | None = None,
     supervisor_instance: WorkerSupervisor | None = None,
     clock: Callable[[], float] | None = None,
+    model_id: str | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -178,7 +185,16 @@ async def run_start(
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
     else:
-        container = build_container(config=config, clock=clock)
+        if model_id is not None:
+            valid_model_ids = [m.id for m in config.model.models]
+            if model_id not in valid_model_ids:
+                configured_ids_str = ", ".join(valid_model_ids) if valid_model_ids else "none"
+                print(
+                    f"\n[Runner] Error: Unknown model '{model_id}'. "
+                    f"Configured model IDs: {configured_ids_str}"
+                )
+                return 1
+        container = build_container(config=config, clock=clock, model_id=model_id)
         orchestrator = container.orchestrator
         if supervisor is None:
             supervisor = container.supervisor
@@ -290,7 +306,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
         elif args.command == "start":
-            return asyncio.run(run_start(config_path=config_path, local_only=local_only))
+            return asyncio.run(
+                run_start(
+                    config_path=config_path,
+                    local_only=local_only,
+                    model_id=getattr(args, "model", None),
+                )
+            )
         elif args.command in ("pause", "status"):
             print(f"Command '{args.command}' is not yet implemented (scheduled in upcoming specs).")
             return 0
