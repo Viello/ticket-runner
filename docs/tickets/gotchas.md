@@ -370,3 +370,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Standby Entry Banner Emission and Re-entry Timing
 - **Problem**: In standby queue execution, printing entry banners inside polling sleep loops causes repetitive heartbeat spam, while emitting only once on startup skips announcing re-entry when newly arrived tickets drain and the runner returns to idle standby.
 - **Solution**: Emit the standby banner strictly upon initial queue exhaustion and after processing standby-discovered tickets once the queue is redrained, ensuring the sentinel lock is released prior to each banner emission and omitting periodic output during idle watch intervals.
+
+### TerminateJobObject Non-Zero Exit Code vs CloseHandle
+- **Problem**: Closing a Windows Job Object handle (`CloseHandle`) with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates processes with exit code 0 by default, causing test assertions and supervisory checks expecting non-zero termination exit codes to fail.
+- **Solution**: In explicit process termination routines, invoke `kernel32.TerminateJobObject(hJob, 1)` prior to closing the job handle, ensuring active child and descendant processes exit with a non-zero status, while allowing normal lifecycle completion to reap residual orphans via `CloseHandle`.
+
+### asyncio.CancelledError Is a BaseException Bypassing Exception Handlers
+- **Problem**: In Python 3.8+, `asyncio.CancelledError` inherits from `BaseException` rather than `Exception`. Supervisor error handlers using `except Exception:` completely bypass the process termination ladder during task cancellation or graceful shutdown, leaving background subprocesses running.
+- **Solution**: Explicitly catch `asyncio.CancelledError` in supervisor streaming loops, wrap the cleanup routine in `await asyncio.shield(...)` to protect the termination ladder against repeated cancellation, and re-raise.
+
+### Windows Job Object Handle Lifetime and Immediate Assignment
+- **Problem**: Windows Job Objects automatically close and reap processes if the last handle is closed. Storing the job handle in a local variable or temporary scope causes garbage collection to prematurely kill active processes mid-run. Conversely, a child process spawned before job assignment can escape into an unmanaged process group.
+- **Solution**: Create and configure the Job Object immediately upon `spawn()`, assign the child process synchronously before any asynchronous yield without `CREATE_BREAKAWAY_FROM_JOB`, and attach the Job Object handle directly to the `SubprocessProcessHandle` instance for its entire lifetime.
+

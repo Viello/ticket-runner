@@ -1655,3 +1655,66 @@ def test_supervisor_resource_extraction_exception_is_non_fatal(
     assert result.reason == RunTerminationReason.EXITED
     assert result.resources_accessed == frozenset()
     assert "Failed to extract resource access" in caplog.text
+
+
+def test_supervisor_cancellation_runs_termination_ladder_and_closes_handle(tmp_path: Path) -> None:
+    """A simulated cancellation of the supervisor run executes the termination ladder and closes the handle."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=['{"type": "step_start", "sessionID": "ses_cancel1"}'],
+        delay=5.0,  # Slow stream so task remains pending
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    ticket = _make_ticket("T039")
+
+    async def _run() -> None:
+        task = asyncio.create_task(supervisor.run(ticket=ticket, prompt="test prompt"))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+
+    assert handle.terminated is True
+    assert handle.closed is True
+    assert any(
+        cmd[:2] == ["taskkill", "/PID"] and str(handle.pid) in cmd
+        for cmd in fake_runner.commands
+    )
+
+
+def test_supervisor_stalled_runs_termination_ladder_and_closes_handle(tmp_path: Path) -> None:
+    """When a supervisor run stalls, it executes the termination ladder and closes the handle."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=['{"type": "step_start", "sessionID": "ses_stall1"}'],
+        delay=2.0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        stall_timeout=0.05,
+    )
+
+    ticket = _make_ticket("T039")
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="test prompt"))
+
+    assert result.reason == RunTerminationReason.STALLED
+    assert handle.terminated is True
+    assert handle.closed is True
+    assert any(
+        cmd[:2] == ["taskkill", "/PID"] and str(handle.pid) in cmd
+        for cmd in fake_runner.commands
+    )
+

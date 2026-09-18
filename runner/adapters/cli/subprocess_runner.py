@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import sys
 
+from runner.adapters.cli.windows_job import WindowsJobObject
 from runner.domain.exceptions import CommandNotFoundError
 from runner.ports.command_runner import CommandResult, CommandRunner, ProcessHandle
 
@@ -16,10 +17,15 @@ DEFAULT_STREAM_LIMIT: int = 16 * 1024 * 1024  # 16 MiB buffer limit for stream r
 
 
 class SubprocessProcessHandle:
-    """Concrete ProcessHandle wrapping an asyncio.subprocess.Process with concurrent stderr draining."""
+    """Concrete ProcessHandle wrapping an asyncio.subprocess.Process with concurrent stderr draining and Job Object reaping."""
 
-    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+    def __init__(
+        self,
+        proc: asyncio.subprocess.Process,
+        job: WindowsJobObject | None = None,
+    ) -> None:
         self._proc = proc
+        self._job = job
         self._stderr_chunks: list[str] = []
         self._stderr_drain_task: asyncio.Task[None] | None = None
         if self._proc.stderr is not None:
@@ -34,6 +40,24 @@ class SubprocessProcessHandle:
     def stderr(self) -> str:
         """Accumulated decoded stderr output."""
         return "".join(self._stderr_chunks)
+
+    @property
+    def job(self) -> WindowsJobObject | None:
+        """Windows Job Object instance associated with this process, if active."""
+        return self._job
+
+    def close(self) -> None:
+        """Close the Windows Job Object handle if open, releasing or reaping the process tree."""
+        if self._job is not None:
+            job = self._job
+            self._job = None
+            try:
+                job.close()
+            except Exception:
+                pass
+
+    def __del__(self) -> None:
+        self.close()
 
     async def _drain_stderr(self) -> None:
         """Concurrently drain stderr in chunks to prevent pipe buffer deadlocks."""
@@ -72,38 +96,53 @@ class SubprocessProcessHandle:
 
     async def wait(self) -> int:
         """Wait for process completion, ensure stderr is drained, and return exit code."""
-        code = await self._proc.wait()
-        if self._stderr_drain_task is not None:
-            await self._stderr_drain_task
-        return code
+        try:
+            code = await self._proc.wait()
+            if self._stderr_drain_task is not None:
+                await self._stderr_drain_task
+            return code
+        finally:
+            self.close()
 
     async def terminate(self) -> None:
         """Terminate process (descendant tree on Windows, SIGTERM on POSIX) within a bounded wait."""
         if self._proc.returncode is not None:
+            self.close()
             return
 
         pid = self._proc.pid
         if sys.platform == "win32":
-            # Descendant cleanup: kill entire process tree using taskkill
-            if isinstance(pid, int) and pid > 0:
+            job_terminated = False
+            if self._job is not None:
                 try:
-                    kill_proc = await asyncio.create_subprocess_exec(
-                        "taskkill",
-                        "/PID",
-                        str(pid),
-                        "/T",
-                        "/F",
-                        stdin=asyncio.subprocess.DEVNULL,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await asyncio.wait_for(kill_proc.wait(), timeout=3.0)
+                    job = self._job
+                    self._job = None
+                    job.terminate(exit_code=1)
+                    job_terminated = True
                 except Exception:
-                    # Fallback to direct process termination
+                    pass
+
+            if not job_terminated:
+                # Descendant cleanup: kill entire process tree using taskkill as secondary fallback
+                if isinstance(pid, int) and pid > 0:
                     try:
-                        self._proc.terminate()
-                    except ProcessLookupError:
-                        pass
+                        kill_proc = await asyncio.create_subprocess_exec(
+                            "taskkill",
+                            "/PID",
+                            str(pid),
+                            "/T",
+                            "/F",
+                            stdin=asyncio.subprocess.DEVNULL,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        await asyncio.wait_for(kill_proc.wait(), timeout=3.0)
+                    except Exception:
+                        # Fallback to direct process termination
+                        try:
+                            self._proc.terminate()
+                        except ProcessLookupError:
+                            pass
         else:
             try:
                 self._proc.terminate()
@@ -229,6 +268,10 @@ class SubprocessRunner:
         executable, args, cwd_str, proc_env = self._prepare_command(cmd, cwd, env)
         raw_cmd = cmd[0]
 
+        job: WindowsJobObject | None = None
+        if sys.platform == "win32":
+            job = WindowsJobObject.create()
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 executable,
@@ -240,7 +283,13 @@ class SubprocessRunner:
                 cwd=cwd_str,
                 env=proc_env,
             )
-        except FileNotFoundError as exc:
-            raise CommandNotFoundError(raw_cmd, str(exc)) from exc
+            if job is not None and proc.pid:
+                job.assign_process(proc.pid)
+        except Exception as exc:
+            if job is not None:
+                job.close()
+            if isinstance(exc, FileNotFoundError):
+                raise CommandNotFoundError(raw_cmd, str(exc)) from exc
+            raise
 
-        return SubprocessProcessHandle(proc)
+        return SubprocessProcessHandle(proc, job=job)

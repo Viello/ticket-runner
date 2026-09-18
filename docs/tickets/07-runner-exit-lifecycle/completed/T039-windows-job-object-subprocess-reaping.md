@@ -1,5 +1,6 @@
 # T039 — Windows Job Object subprocess reaping
-Status: pending
+Status: completed
+Completed: 2026-09-18T04:05:30Z
 Security: required
 Spec: docs/specs/07-runner-exit-lifecycle.md
 Blocked by: none

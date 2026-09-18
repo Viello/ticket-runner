@@ -519,10 +519,21 @@ class WorkerSupervisor:
             else:
                 exit_code = await handle.wait()
 
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(self._terminate_ladder(handle))
+            except Exception:
+                pass
+            raise
         except Exception:
             await self._terminate_ladder(handle)
             raise
         finally:
+            if hasattr(handle, "close"):
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             self._current_handle = None
             if log_file is not None:
                 try:

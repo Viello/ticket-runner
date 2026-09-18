@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.cli.windows_job import WindowsJobObject
 from runner.domain.exceptions import CommandNotFoundError, DoctorError, GitError, ConfigError, TicketRunnerError
 from runner.ports.command_runner import CommandResult, CommandRunner, ProcessHandle
 from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
@@ -449,4 +450,169 @@ def test_fake_command_runner_spawn_validations() -> None:
 
     with pytest.raises(ValueError, match="Command list cannot be empty"):
         asyncio.run(fake.spawn([]))
+
+
+# --- Windows Job Object and SubprocessProcessHandle Tests ---
+
+def test_windows_job_object_create_and_lifecycle() -> None:
+    """Verify WindowsJobObject creates, assigns, and idempotently closes on Windows."""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only test")
+
+    job = WindowsJobObject.create()
+    assert job is not None
+    assert job.is_open is True
+    assert job.handle is not None
+
+    # Self-assignment of the current Python test process PID
+    assigned = job.assign_process(os.getpid())
+    assert isinstance(assigned, bool)
+
+    job.close()
+    assert job.is_open is False
+    assert job.handle is None
+    # Idempotent close
+    job.close()
+    assert job.is_open is False
+
+
+def test_windows_job_object_non_windows_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify WindowsJobObject.create returns None on non-Windows platforms."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    job = WindowsJobObject.create()
+    assert job is None
+
+
+def _is_pid_running_win32(pid: int) -> bool:
+    """Helper to check if a process is still active on Windows."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    import ctypes.wintypes
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return False
+    exit_code = ctypes.wintypes.DWORD()
+    kernel32.GetExitCodeProcess(h, ctypes.byref(exit_code))
+    kernel32.CloseHandle(h)
+    return exit_code.value == 259  # STILL_ACTIVE
+
+
+def test_subprocess_handle_reaps_detached_grandchild_on_terminate() -> None:
+    """A spawned process that detaches a grandchild is reaped when terminate() is called."""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only test")
+
+    runner = SubprocessRunner()
+    # Child script spawns a detached grandchild process, prints its PID, and sleeps
+    child_code = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(100)'], "
+        "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n"
+        "print(p.pid, flush=True)\n"
+        "time.sleep(100)\n"
+    )
+
+    async def _run() -> None:
+        handle = await runner.spawn([sys.executable, "-c", child_code])
+        assert handle.job is not None
+        assert handle.job.is_open is True
+
+        grandchild_pid = None
+        async for line in handle.stdout_lines():
+            line_str = line.strip()
+            if line_str.isdigit():
+                grandchild_pid = int(line_str)
+                break
+
+        assert grandchild_pid is not None
+        assert _is_pid_running_win32(grandchild_pid) is True
+
+        await handle.terminate()
+        exit_code = await handle.wait()
+        assert exit_code != 0
+        assert handle.job is None
+
+        # Allow OS kernel moment to finish process cleanup
+        await asyncio.sleep(0.5)
+        assert _is_pid_running_win32(grandchild_pid) is False
+
+    asyncio.run(_run())
+
+
+def test_subprocess_handle_reaps_detached_grandchild_on_normal_exit() -> None:
+    """A spawned process whose child detaches is reaped when the process exits normally and job closes."""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only test")
+
+    runner = SubprocessRunner()
+    # Child script spawns a detached grandchild and exits cleanly with 0
+    child_code = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(100)'], "
+        "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n"
+        "print(p.pid, flush=True)\n"
+        "sys.exit(0)\n"
+    )
+
+    async def _run() -> None:
+        handle = await runner.spawn([sys.executable, "-c", child_code])
+
+        grandchild_pid = None
+        async for line in handle.stdout_lines():
+            line_str = line.strip()
+            if line_str.isdigit():
+                grandchild_pid = int(line_str)
+                break
+
+        assert grandchild_pid is not None
+        # Wait for normal child exit (should close the Job Object)
+        exit_code = await handle.wait()
+        assert exit_code == 0
+        assert handle.job is None
+
+        # Grandchild should be reaped because Job Object was closed
+        await asyncio.sleep(0.5)
+        assert _is_pid_running_win32(grandchild_pid) is False
+
+    asyncio.run(_run())
+
+
+def test_subprocess_handle_taskkill_fallback_when_job_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the Job Object is unavailable (job=None), terminate() falls back to taskkill /T /F."""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only test")
+
+    runner = SubprocessRunner()
+    # Force job=None on Windows
+    monkeypatch.setattr(WindowsJobObject, "create", classmethod(lambda cls: None))
+
+    taskkill_commands: list[list[str]] = []
+    original_exec = asyncio.create_subprocess_exec
+
+    async def _spy_exec(*args, **kwargs):
+        if args and args[0] == "taskkill":
+            taskkill_commands.append(list(args))
+        return await original_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spy_exec)
+
+    code = "import time; time.sleep(60)"
+
+    async def _run() -> None:
+        handle = await runner.spawn([sys.executable, "-c", code])
+        assert handle.job is None
+
+        await handle.terminate()
+        await handle.wait()
+
+        assert any(
+            cmd[:2] == ["taskkill", "/PID"] and "/T" in cmd and "/F" in cmd
+            for cmd in taskkill_commands
+        )
+
+    asyncio.run(_run())
+
 

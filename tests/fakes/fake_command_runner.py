@@ -36,6 +36,7 @@ class FakeProcessHandle:
         self._pid = pid
         self._delay = delay
         self.terminated = False
+        self.closed = False
 
     @property
     def pid(self) -> int:
@@ -50,7 +51,7 @@ class FakeProcessHandle:
     async def stdout_lines(self) -> AsyncIterator[str]:
         """Yield scripted stdout lines with line endings stripped."""
         for line in self._raw_lines:
-            if self.terminated:
+            if self.terminated or self.closed:
                 break
             if self._delay > 0:
                 await asyncio.sleep(self._delay)
@@ -61,12 +62,18 @@ class FakeProcessHandle:
         return self.stdout_lines()
 
     async def wait(self) -> int:
-        """Return scripted exit code."""
+        """Return scripted exit code and close handle."""
+        self.closed = True
         return self._exit_code
 
     async def terminate(self) -> None:
-        """Mark handle as terminated within bounded wait."""
+        """Mark handle as terminated and closed within bounded wait."""
         self.terminated = True
+        self.closed = True
+
+    def close(self) -> None:
+        """Mark handle as closed."""
+        self.closed = True
 
 
 class FakeCommandRunner:
