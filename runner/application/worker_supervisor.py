@@ -139,6 +139,7 @@ class WorkerSupervisor:
         on_budget_action: Callable[[BudgetAction, int], None] | None = None,
         signal_grace_timeout: float = SIGNAL_GRACE_SECONDS,
         signal_repository: SignalRepository | None = None,
+        default_reasoning: str = "",
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -155,11 +156,17 @@ class WorkerSupervisor:
         self._on_budget_action = on_budget_action
         self._signal_grace_timeout = float(signal_grace_timeout)
         self._signal_repository = signal_repository
+        self._default_reasoning = default_reasoning.strip() if default_reasoning else ""
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def default_reasoning(self) -> str:
+        """Configured default reasoning variant."""
+        return self._default_reasoning
 
     @property
     def signal_grace_timeout(self) -> float:
@@ -284,7 +291,14 @@ class WorkerSupervisor:
             SessionRunResult with termination reason, session ID, telemetry, and log paths.
         """
         ticket_id = ticket.id if isinstance(ticket, Ticket) else str(ticket)
-        cmd = build_opencode_run_command(prompt=prompt, session_id=session_id)
+        variant = (
+            (ticket.reasoning.strip() if ticket.reasoning else "")
+            if isinstance(ticket, Ticket)
+            else ""
+        ) or self._default_reasoning
+        cmd = build_opencode_run_command(
+            prompt=prompt, session_id=session_id, variant=variant
+        )
 
         handle = await self._command_runner.spawn(cmd, cwd=self._cwd)
         self._current_handle = handle

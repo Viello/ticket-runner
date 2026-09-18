@@ -419,5 +419,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Requiring the new `model:` configuration block in `YamlConfigLoader` or `REQUIRED_SECTIONS` causes smoke tests loading untracked live local `config.yaml` files to fail before developers have updated their local workspace configuration.
 - **Solution**: Keep `model:` optional in `YamlConfigLoader` (defaulting absent or null blocks to `ModelConfig()`), append `model: ModelConfig = field(default_factory=ModelConfig)` as the final field of `RunnerConfig` to maintain positional compatibility, treat empty YAML `default_reasoning:` (which parses as `None`) as `""`, and let the Doctor's pre-flight check own the non-empty `model.models` validation guard with an actionable remediation block.
 
+### Subprocess Argument Positioning and Untrusted Variant Handling
+- **Problem**: Passing untrusted ticket frontmatter such as `Reasoning:` directly into subprocess CLI arguments risks token misalignment or injection if shell-quoted or split. Additionally, appending CLI flags in the wrong position can break existing downstream tests or CLI parsers expecting `--auto <prompt>` as the terminal arguments, or tests indexing fixed token positions (`cmd[4]`, `cmd[5]`, `cmd[7]`).
+- **Solution**: Insert `--variant <variant>` strictly after `--session <id>` and before `--auto <prompt>`, only when variant is non-empty after stripping whitespace. Pass the value as a single argv token without shell quoting or word-splitting. In test doubles (`FakeCommandRunner`), verify spawned subprocesses via `fake_runner.spawns` rather than `fake_runner.commands` (which only captures `run()` calls).
+
+
+
 
 

@@ -60,6 +60,67 @@ def test_build_opencode_run_command_rejects_invalid_inputs() -> None:
         build_opencode_run_command("prompt", session_id="../../escape")
 
 
+def test_build_opencode_run_command_with_variant() -> None:
+    cmd = build_opencode_run_command("p", variant="high")
+    assert cmd == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--variant",
+        "high",
+        "--auto",
+        "p",
+    ]
+
+
+def test_build_opencode_run_command_with_session_and_variant() -> None:
+    cmd = build_opencode_run_command("p", session_id="ses_01ABC123", variant="high")
+    assert cmd == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--session",
+        "ses_01ABC123",
+        "--variant",
+        "high",
+        "--auto",
+        "p",
+    ]
+
+
+@pytest.mark.parametrize("empty_variant", ["", "   ", None])
+def test_build_opencode_run_command_omits_empty_or_none_variant(
+    empty_variant: str | None,
+) -> None:
+    cmd = build_opencode_run_command("p", variant=empty_variant)
+    assert cmd == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--auto",
+        "p",
+    ]
+
+
+@pytest.mark.parametrize("invalid_variant", [123, True, False, ["high"], {"variant": "high"}])
+def test_build_opencode_run_command_rejects_non_str_variant(invalid_variant: object) -> None:
+    with pytest.raises(TypeError, match="Variant must be a string"):
+        build_opencode_run_command("p", variant=invalid_variant)  # type: ignore[arg-type]
+
+
+def test_build_opencode_run_command_preserves_variant_as_single_token() -> None:
+    untrusted = "custom-variant; rm -rf /"
+    cmd = build_opencode_run_command("p", variant=untrusted)
+    assert cmd[4] == "--variant"
+    assert cmd[5] == "custom-variant; rm -rf /"
+    assert cmd[6] == "--auto"
+    assert cmd[7] == "p"
+
+
+
 # --- Event Decoding Tests ---
 
 

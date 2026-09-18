@@ -245,3 +245,34 @@ def test_parse_security_tolerates_non_required_values(
     path = _write_ticket(tmp_path, content)
 
     assert TicketMarkdownParser().parse(path).security_required is False
+
+
+@pytest.mark.parametrize(
+    ("header_line", "expected_reasoning"),
+    [
+        ("Reasoning: HIGH", "HIGH"),
+        ("reasoning: high", "high"),
+        ("Reasoning:", ""),
+        ("Reasoning:   ", ""),
+        ("Reasoning:   medium   ", "medium"),
+        ("reasoning: low", "low"),
+    ],
+)
+def test_parse_reasoning_header(
+    tmp_path: Path, header_line: str, expected_reasoning: str
+) -> None:
+    content = WELL_FORMED_TICKET.replace(
+        "Status: pending\n",
+        f"Status: pending\n{header_line}\n",
+    )
+    path = _write_ticket(tmp_path, content)
+
+    ticket = TicketMarkdownParser().parse(path)
+    assert ticket.reasoning == expected_reasoning
+
+
+def test_parse_ticket_without_reasoning_yields_empty_string(tmp_path: Path) -> None:
+    path = _write_ticket(tmp_path, WELL_FORMED_TICKET)
+    ticket = TicketMarkdownParser().parse(path)
+    assert ticket.reasoning == ""
+

@@ -1,5 +1,6 @@
 # T050 — Reasoning variant flows ticket frontmatter to every Session Run
-Status: pending
+Status: completed
+Completed: 2026-09-18T08:54:00Z
 Spec: docs/specs/07-model-selection-and-reasoning-variant.md
 Blocked by: T049
 Security: required

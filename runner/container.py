@@ -162,6 +162,7 @@ def build_container(
         cwd=cwd,
         clock=clock or time.monotonic,
         signal_repository=resolved_signal_repo,
+        default_reasoning=resolved_config.model.default_reasoning,
     )
 
     resolved_coordinator = coordinator or HandoffCoordinator(
