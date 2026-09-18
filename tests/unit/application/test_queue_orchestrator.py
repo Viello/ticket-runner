@@ -944,3 +944,169 @@ def test_run_lifecycle_standby_honors_poll_interval_override(
     assert exit_code == 0
     assert recorded_sleeps == [0.25]
 
+
+# --- T041: Completion Summary and Exit Code Contract ---
+
+def test_run_lifecycle_prints_completion_summary_on_terminate(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="Approved Ticket")
+    t2 = _make_ticket("T002", title="Skipped Ticket")
+    ticket_repo = FakeTicketRepository([t1, t2])
+    printed: list[str] = []
+
+    current_time = [100.0]
+
+    def fake_clock() -> float:
+        val = current_time[0]
+        current_time[0] += 7.75
+        return val
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        if ticket.id == "T001":
+            return TicketOutcome.approved(changes=["change1"])
+        return TicketOutcome.skipped(details="skipped reason")
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+        clock=fake_clock,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append, clock=fake_clock)
+    )
+
+    assert exit_code == 0
+    # Assert summary elements
+    assert any("Completion Summary" in p for p in printed)
+    assert any("2 (1 approved, 1 skipped, 0 aborted)" in p for p in printed)
+    assert any("aaaaaaa" in p for p in printed)
+    assert any("agent/ticket-runner" in p for p in printed)
+    assert any("Elapsed time:" in p for p in printed)
+    assert len(orchestrator.lifecycle_outcomes) == 2
+
+
+def test_run_lifecycle_preserves_outcomes_across_standby_drain_and_resume(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    t1 = _make_ticket("T001", title="Initial Ticket")
+    ticket_repo = FakeTicketRepository([t1])
+    printed: list[str] = []
+    stop_event = asyncio.Event()
+
+    fake_runner.register(["git", "commit", "-m"], stdout="")
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        if ticket.id == "T003":
+            stop_event.set()
+            return TicketOutcome.skipped(details="Skipped T003")
+        return TicketOutcome.approved(changes=[f"Change {ticket.id}"])
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    async def scenario() -> int:
+        async def add_tickets_later() -> None:
+            await asyncio.sleep(0.02)
+            ticket_repo.add_ticket(_make_ticket("T002", title="Second Ticket"))
+            ticket_repo.add_ticket(_make_ticket("T003", title="Third Ticket"))
+
+        add_task = asyncio.create_task(add_tickets_later())
+        run_task = asyncio.create_task(
+            orchestrator.run_lifecycle(
+                lifecycle="standby",
+                poll_interval=0.01,
+                printer=printed.append,
+                stop_event=stop_event,
+            )
+        )
+        await add_task
+        return await run_task
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0
+    assert len(orchestrator.lifecycle_outcomes) == 3
+    assert orchestrator.lifecycle_outcomes[0].is_approved
+    assert orchestrator.lifecycle_outcomes[1].is_approved
+    assert orchestrator.lifecycle_outcomes[2].is_skipped
+
+    assert any("Completion Summary" in p for p in printed)
+    assert any("3 (2 approved, 1 skipped, 0 aborted)" in p for p in printed)
+    assert any("bbbbbbb" in p for p in printed)
+
+
+def test_run_lifecycle_keyboard_interrupt_prints_summary_and_returns_130(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="Interrupted Ticket")
+    ticket_repo = FakeTicketRepository([t1])
+    printed: list[str] = []
+
+    async def interrupt_processor(ticket: Ticket) -> TicketOutcome:
+        raise KeyboardInterrupt()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=interrupt_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+    )
+
+    assert exit_code == 130
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert any("Completion Summary" in p for p in printed)
+
+
+def test_run_lifecycle_runtime_error_returns_1(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="Failing Ticket")
+    ticket_repo = FakeTicketRepository([t1])
+    printed: list[str] = []
+
+    async def failing_processor(ticket: Ticket) -> TicketOutcome:
+        raise RuntimeError("Unexpected pipeline failure during execution")
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=failing_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+    )
+
+    assert exit_code == 1
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    assert any("Runtime error" in p for p in printed)
+
+

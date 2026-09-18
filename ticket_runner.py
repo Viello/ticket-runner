@@ -18,11 +18,21 @@ from runner.container import RunnerContainer, build_container
 from runner.domain.exceptions import UserAbortError
 
 
+EXIT_CODE_CONTRACT = """Exit codes:
+  0    Clean termination (queue drained under terminate policy, or standby exited via stop)
+  1    Runtime error
+  2    Operator abort (UserAbortError)
+  130  Graceful SIGINT (single or forced second press)
+"""
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create top-level ArgumentParser with subcommands."""
     parser = argparse.ArgumentParser(
         prog="ticket_runner",
         description="Ticket Runner: Local orchestrator for autonomous ticket execution.",
+        epilog=EXIT_CODE_CONTRACT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--local-only",
@@ -59,6 +69,8 @@ def create_parser() -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser(
         "start",
         help="Start the ticket queue execution (Spec 02+).",
+        epilog=EXIT_CODE_CONTRACT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     start_parser.add_argument(
         "--local-only",
@@ -139,6 +151,7 @@ async def run_start(
     container_instance: RunnerContainer | None = None,
     stop_event: asyncio.Event | None = None,
     supervisor_instance: WorkerSupervisor | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -165,7 +178,7 @@ async def run_start(
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
     else:
-        container = build_container(config=config)
+        container = build_container(config=config, clock=clock)
         orchestrator = container.orchestrator
         if supervisor is None:
             supervisor = container.supervisor
@@ -211,6 +224,7 @@ async def run_start(
             lifecycle=config.lifecycle,
             poll_interval=effective_poll_interval,
             stop_event=stop_event,
+            clock=clock,
         )
         if shutting_down:
             return 130
@@ -230,6 +244,11 @@ async def run_start(
                 handle = active_supervisor._current_handle
                 if handle is not None:
                     await active_supervisor._terminate_ladder(handle)
+            except Exception:
+                pass
+        if hasattr(orchestrator, "print_completion_summary"):
+            try:
+                await orchestrator.print_completion_summary()
             except Exception:
                 pass
         if hasattr(orchestrator, "release_lock"):

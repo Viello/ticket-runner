@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+import time
 from typing import Any, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
@@ -138,8 +139,13 @@ class QueueOrchestrator:
         spec_slug: str | None = None,
         cwd: Path | None = None,
         clean_slate_archiver: CleanSlateArchiver | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._cwd = cwd
+        self._clock: Callable[[], float] = clock or time.monotonic
+        self._lifecycle_outcomes: list[TicketOutcome] = []
+        self._lifecycle_start_time: float | None = None
+        self._summary_printed: bool = False
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
         elif self._cwd:
@@ -186,6 +192,11 @@ class QueueOrchestrator:
         self._last_outcome: TicketOutcome | None = None
 
     @property
+    def lifecycle_outcomes(self) -> list[TicketOutcome]:
+        """List of ticket outcomes collected across the current or most recent lifecycle run."""
+        return list(self._lifecycle_outcomes)
+
+    @property
     def last_outcome(self) -> TicketOutcome | None:
         """Outcome of the most recently processed ticket."""
         return self._last_outcome
@@ -194,6 +205,48 @@ class QueueOrchestrator:
     def is_paused(self) -> bool:
         """Return True if queue execution is paused, False otherwise."""
         return self._is_paused
+
+    async def print_completion_summary(
+        self,
+        printer: Callable[[str], None] = print,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        """Print compact completion summary on graceful exit."""
+        if self._summary_printed:
+            return
+        self._summary_printed = True
+
+        approved = sum(1 for o in self._lifecycle_outcomes if o.is_approved)
+        skipped = sum(1 for o in self._lifecycle_outcomes if o.is_skipped)
+        aborted = sum(1 for o in self._lifecycle_outcomes if o.is_aborted)
+        total = len(self._lifecycle_outcomes)
+
+        commit_shas = [o.commit_sha[:7] for o in self._lifecycle_outcomes if o.commit_sha]
+        commits_str = ", ".join(commit_shas) if commit_shas else "none"
+
+        try:
+            branch = await self._git_operations.get_current_branch()
+            branch = branch.strip() if branch else "unknown"
+        except Exception:
+            branch = "unknown"
+
+        active_clock = clock or self._clock
+        start = (
+            self._lifecycle_start_time
+            if self._lifecycle_start_time is not None
+            else active_clock()
+        )
+        duration = max(0.0, active_clock() - start)
+
+        printer("[Queue] --- Completion Summary ---")
+        printer(
+            f"[Queue] Tickets processed: {total} "
+            f"({approved} approved, {skipped} skipped, {aborted} aborted)"
+        )
+        printer(f"[Queue] Commits authored: {commits_str}")
+        printer(f"[Queue] Working branch: {branch}")
+        printer(f"[Queue] Elapsed time: {duration:.1f}s")
+        printer("[Queue] --------------------------")
 
     @property
     def is_locked(self) -> bool:
@@ -423,6 +476,7 @@ class QueueOrchestrator:
         max_standby_iterations: int | None = None,
         clean_slate_policy: str | None = None,
         sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> int:
         """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
 
@@ -435,9 +489,10 @@ class QueueOrchestrator:
             max_standby_iterations: Optional iteration limit for tests.
             clean_slate_policy: Optional override for clean_slate policy (e.g. 'always' / 'never').
             sleep_fn: Optional injected async sleep callable for deterministic clock tests.
+            clock: Optional injected clock callable for deterministic duration tests.
 
         Returns:
-            Exit status code (0 for clean termination or standby exit).
+            Exit status code (0 clean terminate/stop, 1 runtime error, 2 abort, 130 SIGINT).
 
         Raises:
             RuntimeError: If pending tickets exist or arrive without a configured processor.
@@ -445,6 +500,10 @@ class QueueOrchestrator:
         """
         active_processor = processor or self._processor
         active_sleep = sleep_fn or asyncio.sleep
+        self._lifecycle_outcomes = []
+        self._summary_printed = False
+        active_clock = clock or self._clock
+        self._lifecycle_start_time = active_clock()
 
         config_poll_interval = 5.0
         if isinstance(lifecycle, RunnerConfig):
@@ -483,10 +542,14 @@ class QueueOrchestrator:
                     outcome = await self.run_next(processor=active_processor)
                     if outcome is None:
                         break
+                    self._lifecycle_outcomes.append(outcome)
                     if stop_event is not None and stop_event.is_set():
                         break
 
             if self._is_paused or (stop_event is not None and stop_event.is_set()):
+                self.release_lock()
+                await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+                await self.print_completion_summary(printer=printer, clock=active_clock)
                 return 0
 
             # 3. Queue is exhausted
@@ -498,6 +561,7 @@ class QueueOrchestrator:
             # 4. Apply lifecycle policy
             if policy == "terminate":
                 printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
+                await self.print_completion_summary(printer=printer, clock=active_clock)
                 return 0
 
             # Standby mode: release sentinel lock before entering idle watch loop
@@ -538,6 +602,7 @@ class QueueOrchestrator:
                         outcome = await self.run_next(processor=active_processor)
                         if outcome is None:
                             break
+                        self._lifecycle_outcomes.append(outcome)
                         if stop_event is not None and stop_event.is_set():
                             break
 
@@ -548,17 +613,35 @@ class QueueOrchestrator:
                     await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                     if policy == "terminate":
                         printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
+                        await self.print_completion_summary(printer=printer, clock=active_clock)
                         return 0
 
                     self.release_lock()
                     printer(STANDBY_BANNER)
 
+            self.release_lock()
+            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+            await self.print_completion_summary(printer=printer, clock=active_clock)
             return 0
+        except KeyboardInterrupt:
+            self.release_lock()
+            printer("\n[Queue] Interrupted by SIGINT.")
+            await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
+            await self.print_completion_summary(printer=printer, clock=active_clock)
+            return 130
         except UserAbortError as exc:
             if self._last_outcome is None or not self._last_outcome.is_aborted:
                 self._last_outcome = TicketOutcome.aborted(details=str(exc))
+            if self._last_outcome not in self._lifecycle_outcomes:
+                self._lifecycle_outcomes.append(self._last_outcome)
             printer(f"\n[Queue] Aborted by operator: {exc}")
             return 2
+        except RuntimeError as exc:
+            if str(exc) == "No ticket processor configured.":
+                raise
+            self.release_lock()
+            printer(f"\n[Queue] Runtime error: {exc}")
+            return 1
         finally:
             self.release_lock()
 

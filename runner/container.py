@@ -205,6 +205,7 @@ def build_container(
         spec_slug=spec_slug,
         cwd=cwd,
         clean_slate_archiver=clean_slate_archiver,
+        clock=clock,
     )
 
     return RunnerContainer(

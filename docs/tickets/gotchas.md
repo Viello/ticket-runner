@@ -391,3 +391,8 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When a process is undergoing cooperative graceful shutdown (terminating worker subprocesses and releasing sentinels), subsequent SIGINT interrupts can restart or re-enter the graceful shutdown path, creating a trap where an operator cannot force-exit a wedged shutdown.
 - **Solution**: Maintain an atomic `shutting_down` latch: the first interrupt begins cooperative shutdown and marshals stop events, while any subsequent interrupt observed while `shutting_down` is active immediately triggers an ungraceful hard exit via `sys.exit(130)`.
 
+### Preserving Ticket Outcomes Across Multi-Cycle Standby Runs
+- **Problem**: In multi-phase lifecycle executions where `QueueOrchestrator.run_lifecycle` drains the initial queue and settles into standby mode, discarding the return value of `run_next` causes completion summaries to report incomplete ticket counts and drop authored commit SHAs when new tickets arrive and get processed during subsequent standby cycles.
+- **Solution**: Accumulate all `TicketOutcome` instances into a persistent lifecycle list across both the initial drain loop and all standby resumption cycles, ensuring graceful exit completion summaries accurately aggregate total processed tickets (approved, skipped, aborted), all authored commit SHAs, current branch, and elapsed time measured via an injectable clock.
+
+

@@ -469,3 +469,103 @@ def test_cli_main_catches_keyboard_interrupt_returns_130(
     monkeypatch.setattr(ticket_runner, "run_start", raise_keyboard_interrupt)
     code = ticket_runner.main(["start", "--local-only"])
     assert code == 130
+
+
+# --- T041: CLI Exit Code Contract and Summary Tests ---
+
+def test_cli_help_documents_exit_code_contract(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = ticket_runner.main([])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Exit codes:" in captured.out
+    assert "0" in captured.out
+    assert "1" in captured.out
+    assert "2" in captured.out
+    assert "130" in captured.out
+    assert "Clean termination" in captured.out
+    assert "Runtime error" in captured.out
+    assert "Operator abort" in captured.out
+    assert "SIGINT" in captured.out
+
+
+def test_cli_start_prints_completion_summary_on_clean_terminate(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T041",
+        title="Summary Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T041-summary.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_runner = FakeCommandRunner()
+    fake_runner.register(["git", "symbolic-ref", "--short", "HEAD"], stdout="agent/ticket-runner\n")
+    fake_runner.register(["git", "add", "."], stdout="")
+    fake_runner.register(["git", "commit", "-m"], stdout="")
+    fake_runner.register(["git", "rev-parse", "HEAD"], stdout="c" * 40 + "\n")
+    fake_git_ops = GitOperations(runner=fake_runner)
+
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        git_operations=fake_git_ops,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: asyncio.sleep(0.001, result=TicketOutcome.approved()),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Completion Summary" in captured.out
+    assert "Tickets processed: 1 (1 approved, 0 skipped, 0 aborted)" in captured.out
+    assert "Commits authored: ccccccc" in captured.out
+    assert "Working branch: agent/ticket-runner" in captured.out
+    assert "Elapsed time:" in captured.out
+
+
+def test_cli_start_runtime_error_returns_code_1(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Failing Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-fail.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: (_ for _ in ()).throw(RuntimeError("Unexpected pipeline fault")),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "error" in captured.out.lower() or "error" in captured.err.lower()
+

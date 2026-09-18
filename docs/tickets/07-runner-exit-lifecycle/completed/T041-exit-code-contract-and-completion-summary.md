@@ -1,5 +1,6 @@
 # T041 — Exit code contract and completion summary
-Status: pending
+Status: completed
+Completed: 2026-09-18T04:27:30Z
 Spec: docs/specs/07-runner-exit-lifecycle.md
 Blocked by: T040
 
