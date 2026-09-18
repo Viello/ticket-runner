@@ -26,6 +26,7 @@ CHECK_OPENCODE = "opencode"
 CHECK_GIT = "git"
 CHECK_QUEUE = "queue"
 CHECK_CONFIG = "config"
+CHECK_MODEL = "model"
 CHECK_VERIFICATION_COMMANDS = "verification_commands"
 CHECK_HOOK = "pre_push_hook"
 CHECK_AGENTS_MD = "agents_md"
@@ -288,6 +289,41 @@ class Doctor:
                 remediation=remediation,
             )
 
+    async def check_model(self) -> CheckResult:
+        """Verify model configuration defines at least one selectable model."""
+        if self._loaded_config is None:
+            return CheckResult(
+                name=CHECK_MODEL,
+                passed=True,
+                message="Model configuration check skipped (configuration not loaded).",
+                remediation=None,
+            )
+
+        models = self._loaded_config.model.models
+        if not models:
+            return CheckResult(
+                name=CHECK_MODEL,
+                passed=False,
+                message="Configuration does not define any models under 'model.models'.",
+                remediation=(
+                    "Add a 'model:' block to your configuration file with at least one model, e.g.:\n"
+                    "model:\n"
+                    "  default_reasoning: \"\"\n"
+                    "  models:\n"
+                    "    - id: \"deepseek/deepseek-chat\"\n"
+                    "      label: \"DeepSeek Chat\"\n"
+                    "    - id: \"qwen/qwen-plus\"\n"
+                    "      label: \"Qwen Plus\""
+                ),
+            )
+
+        return CheckResult(
+            name=CHECK_MODEL,
+            passed=True,
+            message=f"Model configuration verified with {len(models)} model(s) available.",
+            remediation=None,
+        )
+
     async def check_verification_commands(self) -> CheckResult:
         """Resolve leading tokens of configured verification commands against PATH.
 
@@ -487,6 +523,7 @@ class Doctor:
             self.check_git,
             self.check_queue,
             self.check_config,
+            self.check_model,
             self.check_verification_commands,
             self.check_hook,
             self.check_agents_md,

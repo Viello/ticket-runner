@@ -1,5 +1,6 @@
 # T049 — `model:` config block and Doctor model guard
-Status: pending
+Status: completed
+Completed: 2026-09-18T08:21:00Z
 Spec: docs/specs/07-model-selection-and-reasoning-variant.md
 Blocked by: None
 Reasoning: medium

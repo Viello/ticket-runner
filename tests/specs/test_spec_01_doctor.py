@@ -48,6 +48,15 @@ project:
 worker:
   execution_skill: ".agents/skills/implement/SKILL.md"
 
+model:
+  default_reasoning: ""
+  models:
+    - id: "deepseek/deepseek-chat"
+      label: "DeepSeek Chat"
+    - id: "qwen/qwen-plus"
+      label: "Qwen Plus"
+
+
 verification:
   test_cmd: "python -m pytest"
   build_cmd: ""
@@ -471,7 +480,7 @@ async def test_doctor_all_prerequisites_satisfied_succeeds(tmp_path: Path) -> No
 
     report = await doctor.run(local_only=False, halt_on_failure=True)
     assert report.passed is True
-    assert len(report.checks) == 9
+    assert len(report.checks) == 10
     assert all(c.passed for c in report.checks)
 
 

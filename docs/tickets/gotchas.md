@@ -415,4 +415,9 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Attempting automatic read-modify-write merges inside low-level state persistence adapters tightly couples the storage layer to specific document schemas and can silently mask key deletion or clobber concurrent updates.
 - **Solution**: Keep the `StateStore` port protocol strictly as an exact-document writer (`write(document)` writes exactly the supplied mapping atomically without reading), requiring high-level application interactors to own schema evolution and explicit read-modify-write merge semantics.
 
+### Tolerant Configuration Loader with Doctor Model Guard
+- **Problem**: Requiring the new `model:` configuration block in `YamlConfigLoader` or `REQUIRED_SECTIONS` causes smoke tests loading untracked live local `config.yaml` files to fail before developers have updated their local workspace configuration.
+- **Solution**: Keep `model:` optional in `YamlConfigLoader` (defaulting absent or null blocks to `ModelConfig()`), append `model: ModelConfig = field(default_factory=ModelConfig)` as the final field of `RunnerConfig` to maintain positional compatibility, treat empty YAML `default_reasoning:` (which parses as `None`) as `""`, and let the Doctor's pre-flight check own the non-empty `model.models` validation guard with an actionable remediation block.
+
+
 

@@ -11,6 +11,8 @@ from runner.domain.config import (
     DiscordConfig,
     GitConfig,
     LifecycleConfig,
+    ModelConfig,
+    ModelEntry,
     PresenceConfig,
     ProjectConfig,
     RunnerConfig,
@@ -220,6 +222,55 @@ class YamlConfigLoader(ConfigLoader):
             enforce_pre_push_hook=git_dict.get("enforce_pre_push_hook", True),
         )
 
+        # 9. Model section (optional)
+        model_dict = data.get("model")
+        if model_dict is None:
+            model = ModelConfig()
+        elif not isinstance(model_dict, dict):
+            raise ConfigError(
+                f"Section 'model' must be a mapping, got: {type(model_dict).__name__}"
+            )
+        else:
+            raw_default_reasoning = model_dict.get("default_reasoning", "")
+            if raw_default_reasoning is None:
+                default_reasoning = ""
+            elif not isinstance(raw_default_reasoning, str):
+                raise ConfigError(
+                    f"Field 'default_reasoning' in section 'model' must be a string, got: {type(raw_default_reasoning).__name__}"
+                )
+            else:
+                default_reasoning = raw_default_reasoning
+
+            raw_models = model_dict.get("models", ())
+            if raw_models is None:
+                raw_models = ()
+            elif not isinstance(raw_models, (list, tuple)):
+                raise ConfigError(
+                    f"Field 'models' in section 'model' must be a list, got: {type(raw_models).__name__}"
+                )
+
+            model_entries: list[ModelEntry] = []
+            for idx, entry in enumerate(raw_models):
+                if not isinstance(entry, dict):
+                    raise ConfigError(
+                        f"Entry {idx} in section 'model.models' must be a mapping, got: {type(entry).__name__}"
+                    )
+                if "id" not in entry:
+                    raise ConfigError(f"Missing required field 'id' in model entry {idx}")
+                if "label" not in entry:
+                    raise ConfigError(f"Missing required field 'label' in model entry {idx}")
+                model_entries.append(
+                    ModelEntry(
+                        id=entry["id"],
+                        label=entry["label"],
+                    )
+                )
+
+            model = ModelConfig(
+                models=tuple(model_entries),
+                default_reasoning=default_reasoning,
+            )
+
         return RunnerConfig(
             project=project,
             worker=worker,
@@ -229,4 +280,6 @@ class YamlConfigLoader(ConfigLoader):
             discord=discord,
             lifecycle=lifecycle,
             git=git,
+            model=model,
         )
+

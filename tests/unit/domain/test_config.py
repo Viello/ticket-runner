@@ -7,6 +7,8 @@ from runner.domain.config import (
     DiscordConfig,
     GitConfig,
     LifecycleConfig,
+    ModelConfig,
+    ModelEntry,
     PresenceConfig,
     ProjectConfig,
     RunnerConfig,
@@ -211,3 +213,100 @@ def test_runner_config_composite() -> None:
     assert config.discord == discord
     assert config.lifecycle == lifecycle
     assert config.git == git
+    assert config.model == ModelConfig()
+
+
+def test_model_entry_valid() -> None:
+    entry = ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat")
+    assert entry.id == "deepseek/deepseek-chat"
+    assert entry.label == "DeepSeek Chat"
+
+
+@pytest.mark.parametrize(
+    ("entry_id", "label"),
+    [
+        ("", "Label"),
+        ("   ", "Label"),
+        (123, "Label"),
+        (None, "Label"),
+        ("id", ""),
+        ("id", "   "),
+        ("id", 456),
+        ("id", None),
+    ],
+)
+def test_model_entry_invalid(entry_id: object, label: object) -> None:
+    with pytest.raises(ConfigError):
+        ModelEntry(id=entry_id, label=label)  # type: ignore[arg-type]
+
+
+def test_model_config_default() -> None:
+    cfg = ModelConfig()
+    assert cfg.models == ()
+    assert cfg.default_reasoning == ""
+
+
+def test_model_config_valid() -> None:
+    e1 = ModelEntry(id="m1", label="Model 1")
+    e2 = ModelEntry(id="m2", label="Model 2")
+    cfg = ModelConfig(models=(e1, e2), default_reasoning="high")
+    assert cfg.models == (e1, e2)
+    assert cfg.default_reasoning == "high"
+
+
+def test_model_config_converts_list_to_tuple() -> None:
+    e1 = ModelEntry(id="m1", label="Model 1")
+    cfg = ModelConfig(models=[e1])
+    assert cfg.models == (e1,)
+    assert isinstance(cfg.models, tuple)
+
+
+def test_model_config_handles_none_default_reasoning() -> None:
+    cfg = ModelConfig(default_reasoning=None)  # type: ignore[arg-type]
+    assert cfg.default_reasoning == ""
+
+
+@pytest.mark.parametrize(
+    "invalid_reasoning",
+    [123, True, False, ["high"], {"reasoning": "high"}],
+)
+def test_model_config_invalid_default_reasoning(invalid_reasoning: object) -> None:
+    with pytest.raises(ConfigError, match="default_reasoning"):
+        ModelConfig(default_reasoning=invalid_reasoning)  # type: ignore[arg-type]
+
+
+def test_model_config_rejects_non_sequence_models() -> None:
+    with pytest.raises(ConfigError, match="models"):
+        ModelConfig(models="not-a-sequence")  # type: ignore[arg-type]
+
+
+def test_model_config_rejects_non_model_entry_elements() -> None:
+    with pytest.raises(ConfigError, match="ModelEntry"):
+        ModelConfig(models=(ModelEntry(id="m1", label="M1"), "invalid"))  # type: ignore[arg-type]
+
+
+def test_model_config_rejects_duplicate_ids() -> None:
+    e1 = ModelEntry(id="deepseek/chat", label="DeepSeek Chat 1")
+    e2 = ModelEntry(id="deepseek/chat", label="DeepSeek Chat 2")
+    with pytest.raises(ConfigError, match="Duplicate model id"):
+        ModelConfig(models=(e1, e2))
+
+
+def test_runner_config_with_custom_model_config() -> None:
+    model_cfg = ModelConfig(
+        models=(ModelEntry(id="custom/model", label="Custom Model"),),
+        default_reasoning="low",
+    )
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="b", base_branch="main"),
+        worker=WorkerConfig(execution_skill="s"),
+        verification=VerificationConfig(test_cmd="pytest"),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(),
+        git=GitConfig(),
+        model=model_cfg,
+    )
+    assert config.model == model_cfg
+

@@ -13,6 +13,17 @@ worker:
   # Skill path guiding the OpenCode worker during ticket execution
   execution_skill: ".agents/skills/implement/SKILL.md"
 
+model:
+  # Default reasoning variant passed as --variant (omitted when empty)
+  default_reasoning: ""
+  # Selectable models presented at startup or passed to OpenCode with -m
+  models:
+    - id: "deepseek/deepseek-chat"
+      label: "DeepSeek Chat"
+    - id: "qwen/qwen-plus"
+      label: "Qwen Plus"
+
+
 verification:
   # Independent test command run by Gatekeeper to verify ticket implementation
   test_cmd: "python -m pytest"
