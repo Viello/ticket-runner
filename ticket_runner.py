@@ -6,13 +6,24 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 from pathlib import Path
+import signal
 import sys
+from typing import Any
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.application.doctor import Doctor, DoctorReport
 from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
 from runner.domain.exceptions import UserAbortError
+
+
+EXIT_CODE_CONTRACT = """Exit codes:
+  0    Clean termination (queue drained under terminate policy, or standby exited via stop)
+  1    Runtime error
+  2    Operator abort (UserAbortError)
+  130  Graceful SIGINT (single or forced second press)
+"""
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -20,6 +31,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ticket_runner",
         description="Ticket Runner: Local orchestrator for autonomous ticket execution.",
+        epilog=EXIT_CODE_CONTRACT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--local-only",
@@ -56,6 +69,8 @@ def create_parser() -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser(
         "start",
         help="Start the ticket queue execution (Spec 02+).",
+        epilog=EXIT_CODE_CONTRACT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     start_parser.add_argument(
         "--local-only",
@@ -132,8 +147,11 @@ async def run_start(
     local_only: bool,
     doctor_instance: Doctor | None = None,
     orchestrator_instance: QueueOrchestrator | None = None,
-    poll_interval: float = 5.0,
+    poll_interval: float | None = None,
     container_instance: RunnerContainer | None = None,
+    stop_event: asyncio.Event | None = None,
+    supervisor_instance: WorkerSupervisor | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -150,25 +168,110 @@ async def run_start(
         loader = YamlConfigLoader()
         config = loader.load(config_path)
 
-    if orchestrator_instance is not None:
-        orchestrator = orchestrator_instance
-    elif container_instance is not None:
+    supervisor: WorkerSupervisor | None = supervisor_instance
+    if container_instance is not None:
         orchestrator = container_instance.orchestrator
+        if supervisor is None:
+            supervisor = container_instance.supervisor
+    elif orchestrator_instance is not None:
+        orchestrator = orchestrator_instance
+        if supervisor is None:
+            supervisor = getattr(orchestrator, "supervisor", None)
     else:
-        container = build_container(config=config)
+        container = build_container(config=config, clock=clock)
         orchestrator = container.orchestrator
+        if supervisor is None:
+            supervisor = container.supervisor
 
+    if stop_event is None:
+        stop_event = asyncio.Event()
+
+    effective_poll_interval = (
+        poll_interval if poll_interval is not None else config.lifecycle.poll_interval
+    )
+
+    loop = asyncio.get_running_loop()
+    shutting_down = False
+
+    def _trigger_graceful_stop() -> None:
+        nonlocal shutting_down
+        shutting_down = True
+        if stop_event is not None and not stop_event.is_set():
+            stop_event.set()
+        active_supervisor = supervisor or getattr(orchestrator, "supervisor", None)
+        if active_supervisor is not None:
+            active_supervisor.request_kill(RunTerminationReason.KILLED_INTERRUPT)
+
+    def _sigint_handler(signum: int, frame: Any) -> None:
+        nonlocal shutting_down
+        if shutting_down:
+            sys.exit(130)
+        shutting_down = True
+        try:
+            loop.call_soon_threadsafe(_trigger_graceful_stop)
+        except RuntimeError:
+            pass
+
+    old_sigint = None
     try:
-        return await orchestrator.run_lifecycle(
+        old_sigint = signal.signal(signal.SIGINT, _sigint_handler)
+    except (ValueError, AttributeError):
+        pass
+
+    draining = False
+    try:
+        exit_code = await orchestrator.run_lifecycle(
             lifecycle=config.lifecycle,
-            poll_interval=poll_interval,
+            poll_interval=effective_poll_interval,
+            stop_event=stop_event,
+            clock=clock,
         )
+        if shutting_down:
+            return 130
+        return exit_code
+    except KeyboardInterrupt:
+        if draining:
+            sys.exit(130)
+        draining = True
+        shutting_down = True
+        _trigger_graceful_stop()
+        active_supervisor = supervisor or getattr(orchestrator, "supervisor", None)
+        if (
+            active_supervisor is not None
+            and getattr(active_supervisor, "_current_handle", None) is not None
+        ):
+            try:
+                handle = active_supervisor._current_handle
+                if handle is not None:
+                    await active_supervisor._terminate_ladder(handle)
+            except Exception:
+                pass
+        if hasattr(orchestrator, "print_completion_summary"):
+            try:
+                await orchestrator.print_completion_summary()
+            except Exception:
+                pass
+        if hasattr(orchestrator, "release_lock"):
+            orchestrator.release_lock()
+        return 130
     except UserAbortError as exc:
+        if shutting_down:
+            return 130
         print(f"\n[Runner] Aborted: {exc}")
         return 2
     except RuntimeError as exc:
+        if shutting_down:
+            return 130
         print(f"\n[Runner] Error: {exc}")
         return 1
+    finally:
+        if old_sigint is not None:
+            try:
+                signal.signal(signal.SIGINT, old_sigint)
+            except (ValueError, AttributeError):
+                pass
+        if hasattr(orchestrator, "release_lock"):
+            orchestrator.release_lock()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -183,13 +286,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     local_only = getattr(args, "local_only", False)
     config_path = getattr(args, "config", Path("config.yaml"))
 
-    if args.command == "doctor":
-        return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
-    elif args.command == "start":
-        return asyncio.run(run_start(config_path=config_path, local_only=local_only))
-    elif args.command in ("pause", "status"):
-        print(f"Command '{args.command}' is not yet implemented (scheduled in upcoming specs).")
-        return 0
+    try:
+        if args.command == "doctor":
+            return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
+        elif args.command == "start":
+            return asyncio.run(run_start(config_path=config_path, local_only=local_only))
+        elif args.command in ("pause", "status"):
+            print(f"Command '{args.command}' is not yet implemented (scheduled in upcoming specs).")
+            return 0
+    except KeyboardInterrupt:
+        return 130
 
     parser.print_help()
     return 0

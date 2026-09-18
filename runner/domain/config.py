@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from runner.domain.exceptions import ConfigError
 
@@ -123,6 +124,7 @@ class LifecycleConfig:
 
     queue_completion: str = "standby"
     clean_slate: str = "interactive"
+    poll_interval: float = 5.0
 
     def __post_init__(self) -> None:
         if self.queue_completion not in VALID_QUEUE_COMPLETIONS:
@@ -133,6 +135,17 @@ class LifecycleConfig:
             raise ConfigError(
                 f"Lifecycle clean_slate must be one of {sorted(VALID_CLEAN_SLATE_POLICIES)}, got: '{self.clean_slate}'"
             )
+        if (
+            isinstance(self.poll_interval, bool)
+            or not isinstance(self.poll_interval, (int, float))
+            or not math.isfinite(self.poll_interval)
+            or self.poll_interval <= 0
+        ):
+            raise ConfigError(
+                f"Lifecycle poll_interval must be a positive finite number, got: {self.poll_interval!r}"
+            )
+        if not isinstance(self.poll_interval, float):
+            object.__setattr__(self, "poll_interval", float(self.poll_interval))
 
 
 @dataclass(frozen=True)

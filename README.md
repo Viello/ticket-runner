@@ -12,6 +12,7 @@ A local Python orchestrator that coordinates OpenCode to execute sequential deve
 - [Installation & Setup](#installation--setup)
 - [How to Use](#how-to-use)
   - [CLI Commands](#cli-commands)
+    - [Exit Codes](#exit-codes)
   - [Terminal UI & Hotkeys](#terminal-ui--hotkeys)
   - [Presence Modes: Nearby vs. Away](#presence-modes-nearby-vs-away)
 - [How It Works](#how-it-works)
@@ -124,6 +125,17 @@ python ticket_runner.py status
 # Pause the active runner and release the queue lock for edits
 python ticket_runner.py pause
 ```
+
+#### Exit Codes
+
+Ticket Runner codifies a stable exit code contract for operators, scripts, and supervisors:
+
+| Exit Code | Meaning | Description |
+| :--- | :--- | :--- |
+| `0` | **Clean Termination** | Queue drained cleanly under `terminate` policy, or standby watch loop exited via cooperative stop. |
+| `1` | **Runtime Error** | Pre-flight Doctor check failure, misconfiguration, or unhandled runtime pipeline error. |
+| `2` | **Operator Abort** | Operator selected abort (`UserAbortError`) at circuit-breaker escalation prompt. |
+| `130` | **Graceful SIGINT** | Graceful shutdown via Ctrl+C (single cooperative stop or forced second press). |
 
 ### Terminal UI & Hotkeys
 
