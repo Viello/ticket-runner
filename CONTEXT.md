@@ -80,5 +80,23 @@ _Avoid_: Summary, abstract, snippet
 A structured methodology handbook stored as a markdown file under `.agents/skills/<name>/SKILL.md` that guides Worker discipline across lifecycle phases (implementation, pre-signal review, security, and debugging) via direct file reads.
 _Avoid_: Plugin, slash command, agent tool
 
+**TUI Session**:
+An OpenCode session run in interactive TUI mode (without `--format json`) against the same session id as the active Worker Session, launched by the Runner after pausing at a signal boundary to allow direct user inspection or input. The Runner is blind to all activity during a TUI Session: tokens are untracked, Signals are not emitted, and the Gatekeeper does not run.
+_Avoid_: Live session, interactive session, direct session, manual session
 
+**Status Card**:
+The pinned message at the top of a Ticket's Discord thread, edited in-place at every phase transition, showing ticket ID, slug, spec, current phase, attempt count, token usage, and start/last-updated timestamps. A stale Last updated timestamp is the canonical indicator of a crashed bot or frozen Runner.
+_Avoid_: Pinned header, ticket dashboard, summary message
+
+**Live Digest**:
+A single plain-text Discord message posted at the start of each Session Run and edited in-place to show a rolling 500-character window of the LLM's current response content. Always posted regardless of Presence Mode. Marked `[done]` when the Session Run ends.
+_Avoid_: LLM stream, rolling excerpt, live feed, output log
+
+**DiscordGateway**:
+The raw Discord API seam (a protocol/interface) exposing primitive operations — `post_message`, `edit_message`, `pin_message`, `create_thread`, `edit_thread`, `archive_thread` — without embedding any routing or formatting logic. Implemented by the real discord.py adapter and by in-memory test doubles.
+_Avoid_: Discord client, Discord adapter, bot interface
+
+**DiscordLogger**:
+The logging logic port that sits above `DiscordGateway`. Owns severity routing (critical vs routine), embed construction, message chunking at 1,950 characters, Status Card edits, and Live Digest rate-limited edits. Accepts structured log events from the Runner and decides format, targeting, and dispatch.
+_Avoid_: Discord notifier, log sink, message sender
 
