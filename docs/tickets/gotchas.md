@@ -342,3 +342,31 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### cmd.exe Shell Wrapping Inherits the Runner PATH
 - **Problem**: Gatekeeper verification commands run via `cmd.exe /d /s /c` and inherit the Runner's PATH, which may not include the Python `Scripts` directory, so bare console-script names like `pytest` report "command not found" and get mistaken for plain test failures (exit code 1).
 - **Solution**: Author verification commands with portable invocation forms (`python -m <tool>` over bare script names). The Runner resolves each command's leading token via `shutil.which` before wrapping it in the shell and reports unresolvable commands as a distinct command-not-found diagnostic at both Gatekeeper and Doctor time.
+
+### Resilient Markdown Header Extraction and Fallback Invariants
+- **Problem**: Extracting specific sections (such as `## Invariants`) from markdown files like `AGENTS.md` can fail if the file is missing, permission-locked, or reworded without standard headings, causing unhandled exceptions during worker prompt generation.
+- **Solution**: Wrap filesystem reads in defensive error handling and fall back to hardcoded canonical core invariants whenever the heading or file is absent, guaranteeing resilient prompt rendering.
+
+### Token Budgeting for Inlined Markdown Guardrails
+- **Problem**: Inlining operational guardrails into prompt strings risks ballooning command-line argument lengths past the Windows 32,767 character ceiling if entire documents are embedded verbatim.
+- **Solution**: Restrict inlining strictly to targeted high-impact sections (`## Invariants`, ~250 tokens), pair with explicit file-reading directives (`read`) for broader documentation, and verify total command length in automated tests.
+
+### Mixed Path Separator Normalization for OpenCode Stream Telemetry
+- **Problem**: On Windows, OpenCode emits absolute and relative file paths in tool calls with mixed separators (e.g. `D:\Projects\.agents\skills\implement\SKILL.md`, `D:/Projects/...`, or escaped JSON backslashes `\\\\`), causing naive substring or POSIX-only regex matching to fail silently during tool use and resource access detection.
+- **Solution**: Normalize all file paths and raw stream text with `.replace("\\", "/").lower()` before applying skill folder extraction or `AGENTS.md` regex matching, guaranteeing cross-platform telemetry detection across Windows and POSIX environments.
+
+### Non-Blocking Resource Telemetry Extraction Isolation
+- **Problem**: Unexpected payload schemas or regex backtracking anomalies during stream decoding of `tool_use` events could raise unhandled exceptions in the telemetry extraction loop, crashing the supervisor and killing active worker sessions.
+- **Solution**: Wrap `extract_resource_access` calls defensively inside a `try...except Exception` block in the supervisor streaming loop, logging warnings for extraction failures while permitting session execution and watchdog monitoring to proceed uninterrupted.
+
+### Non-Blocking Soft Warnings and Multi-Cycle Resource Accumulation
+- **Problem**: Failing verification attempts or tripping the circuit breaker when review skills or `AGENTS.md` are not read prematurely aborts viable solutions and violates Gatekeeper independence. Conversely, discarding accessed resources between retries causes repetitive warnings on subsequent cycles even when the agent has already consulted the required skill.
+- **Solution**: Emit soft warnings strictly via `_notify` and `logger.warning` without modifying attempt budgets or blocking Gatekeeper test execution, and accumulate accessed resources across cycles within the verification loop so earlier consultations satisfy compliance on retry.
+
+### Doctor Pre-Flight Checks Must Respect Injected Workspace Paths
+- **Problem**: Resolving workspace-root files (such as `AGENTS.md` and `.agents/skills/...`) using unanchored relative paths (`Path("AGENTS.md")`) or paths relative to `Path.cwd()` causes Doctor pre-flight checks in integration tests or isolated workspace runs to probe the host repository rather than the injected test workspace (`tmp_path`), triggering false passes on missing files or false failures on foreign environments.
+- **Solution**: Resolve `AGENTS.md` and skill paths relative to `self._cwd` when provided, permit optional explicit path overrides in the `Doctor` constructor, and ensure all pre-flight inspections remain strictly read-only (`is_file()` and `open(..., "r")`).
+
+
+
+

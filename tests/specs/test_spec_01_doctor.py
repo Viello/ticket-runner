@@ -105,6 +105,17 @@ def setup_workspace_environment(
     if with_valid_config:
         config_path.write_text(SAMPLE_VALID_CONFIG_YAML, encoding="utf-8")
 
+    # 4. AGENTS.md
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text("# AGENTS.md\n\n## Invariants\n- Workspace invariants\n", encoding="utf-8")
+
+    # 5. Skills
+    skills_dir = tmp_path / ".agents" / "skills"
+    for skill_name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / skill_name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill: {skill_name}\n", encoding="utf-8")
+
     return tmp_path, git_dir, tickets_dir, config_path
 
 
@@ -460,7 +471,7 @@ async def test_doctor_all_prerequisites_satisfied_succeeds(tmp_path: Path) -> No
 
     report = await doctor.run(local_only=False, halt_on_failure=True)
     assert report.passed is True
-    assert len(report.checks) == 7
+    assert len(report.checks) == 9
     assert all(c.passed for c in report.checks)
 
 

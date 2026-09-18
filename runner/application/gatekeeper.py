@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
 import inspect
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -28,6 +29,8 @@ from runner.ports.intervention import (
     InterventionGateway,
 )
 from runner.ports.signal_repository import SignalRepository
+
+logger = logging.getLogger(__name__)
 
 TAIL_LINE_LIMIT: int = 100
 """Number of trailing output lines retained per command and injected as diagnostics."""
@@ -345,6 +348,7 @@ def build_verification_failure_prompt(
     diagnostics: str,
     hint: str | None = None,
     max_lines: int = MAX_DIAGNOSTIC_LINES,
+    attempt: int = 1,
 ) -> str:
     """Format an actionable diagnostic resume prompt with bounded error tail and optional operator hint.
 
@@ -353,6 +357,7 @@ def build_verification_failure_prompt(
         diagnostics: Captured diagnostic output (failed test tail, signal error, or escalation).
         hint: Optional operator guidance from the intervention menu.
         max_lines: Maximum lines of diagnostics retained (default 100).
+        attempt: Verification attempt number (1-based). When >= 2, prepends diagnosing-bugs instruction.
 
     Returns:
         Rendered resume prompt string.
@@ -380,7 +385,17 @@ def build_verification_failure_prompt(
         "",
         f"Please address the failure, verify your changes locally, and emit `.agent/signals/{ticket.id}_ready.json` when complete.",
     ])
-    return "\n".join(parts)
+    prompt = "\n".join(parts)
+
+    if attempt >= 2:
+        directive = (
+            f"Gatekeeper verification failed (attempt {attempt}). "
+            "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+            "using your file reading tool to diagnose and isolate the root cause.\n\n"
+        )
+        return f"{directive}{prompt}"
+
+    return prompt
 
 
 class VerificationLoopStatus(str, Enum):
@@ -401,6 +416,7 @@ class VerificationLoopResult:
     diagnostics: str | None = None
     session_id: str | None = None
     attempts: int = 0
+    resources_accessed: frozenset[str] = frozenset()
 
     @property
     def is_passed(self) -> bool:
@@ -430,6 +446,7 @@ class VerificationLoopResult:
         report: VerificationReport,
         attempts: int,
         session_id: str | None = None,
+        resources_accessed: frozenset[str] = frozenset(),
     ) -> VerificationLoopResult:
         return cls(
             status=VerificationLoopStatus.PASSED,
@@ -437,6 +454,7 @@ class VerificationLoopResult:
             verification_report=report,
             attempts=attempts,
             session_id=session_id,
+            resources_accessed=resources_accessed,
         )
 
     @classmethod
@@ -445,12 +463,14 @@ class VerificationLoopResult:
         diagnostics: str,
         attempts: int,
         session_id: str | None = None,
+        resources_accessed: frozenset[str] = frozenset(),
     ) -> VerificationLoopResult:
         return cls(
             status=VerificationLoopStatus.SKIPPED,
             diagnostics=diagnostics,
             attempts=attempts,
             session_id=session_id,
+            resources_accessed=resources_accessed,
         )
 
     @classmethod
@@ -494,6 +514,7 @@ class VerificationLoop:
         max_attempts: int | None = None,
         initial_prompt: str | None = None,
         initial_session_id: str | None = None,
+        notify: Callable[[str], None] | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -510,6 +531,39 @@ class VerificationLoop:
         self._attempts: int = 0
         self._pending_prompt: str | None = initial_prompt
         self._last_diagnostics: str = ""
+        self._notify = notify
+        self._accumulated_resources: set[str] = set()
+
+    @property
+    def accumulated_resources(self) -> frozenset[str]:
+        """Resources accessed across all worker execution cycles."""
+        return frozenset(self._accumulated_resources)
+
+    def _check_ready_warnings(self) -> list[str]:
+        """Emit soft warnings if required review skills or AGENTS.md were not accessed."""
+        warnings: list[str] = []
+        if "code-review" not in self._accumulated_resources:
+            warnings.append(
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+            )
+        if "AGENTS.md" not in self._accumulated_resources:
+            warnings.append(
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
+            )
+        if self._ticket.security_required and "security-review" not in self._accumulated_resources:
+            warnings.append(
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+            )
+
+        for warning in warnings:
+            logger.warning(warning)
+            if self._notify is not None:
+                try:
+                    self._notify(warning)
+                except Exception:
+                    pass
+
+        return warnings
 
     @property
     def ticket(self) -> Ticket:
@@ -582,6 +636,16 @@ class VerificationLoop:
             if run_result.session_id:
                 self._active_session_id = run_result.session_id
 
+            # Accumulate resources accessed during this cycle
+            if hasattr(run_result, "resources_accessed") and run_result.resources_accessed:
+                self._accumulated_resources.update(run_result.resources_accessed)
+            elif hasattr(run_result, "skills_accessed") and run_result.skills_accessed:
+                self._accumulated_resources.update(run_result.skills_accessed)
+            if hasattr(run_result, "run_results"):
+                for sr in getattr(run_result, "run_results", ()):
+                    if hasattr(sr, "resources_accessed"):
+                        self._accumulated_resources.update(sr.resources_accessed)
+
             # Reset pending prompt since it has been consumed
             self._pending_prompt = None
 
@@ -598,6 +662,9 @@ class VerificationLoop:
                 self._clean_question(self._ticket.id)
                 self._signal_repository.consume_ready(self._ticket.id)
 
+                # Check soft warnings before proceeding to verification
+                self._check_ready_warnings()
+
                 # Execute Gatekeeper independent verification commands
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
@@ -607,6 +674,7 @@ class VerificationLoop:
                         report=report,
                         attempts=self._attempts,
                         session_id=self._active_session_id,
+                        resources_accessed=frozenset(self._accumulated_resources),
                     )
 
                 # Verification failed
@@ -619,6 +687,7 @@ class VerificationLoop:
                         diagnostics=self._last_diagnostics,
                         attempts=self._attempts,
                         session_id=self._active_session_id,
+                        resources_accessed=frozenset(self._accumulated_resources),
                     )
                 continue
 
@@ -736,6 +805,7 @@ class VerificationLoop:
             ticket=self._ticket,
             diagnostics=diagnostics,
             hint=None,
+            attempt=self._attempts,
         )
         return None
 

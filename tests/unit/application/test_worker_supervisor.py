@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 import pytest
 
@@ -1446,5 +1447,211 @@ def test_ceiling_takes_precedence_over_signal_grace(tmp_path: Path) -> None:
     assert handle.terminated is True
 
 
+# --- AC 14: Resource Telemetry and Skill Access Tracking (T045) ---
 
 
+def test_session_run_result_resources_accessed_defaults_and_normalization() -> None:
+    """SessionRunResult defaults resources_accessed to empty frozenset and normalizes iterables."""
+    default_result = SessionRunResult()
+    assert default_result.resources_accessed == frozenset()
+    assert default_result.skills_accessed == frozenset()
+
+    custom_result = SessionRunResult(resources_accessed={"implement", "AGENTS.md"})
+    assert custom_result.resources_accessed == frozenset({"implement", "AGENTS.md"})
+    assert isinstance(custom_result.resources_accessed, frozenset)
+    assert custom_result.skills_accessed == frozenset({"implement", "AGENTS.md"})
+
+
+def test_supervisor_tracks_streaming_tool_use_resources_and_logs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Streaming tool_use events populate resources_accessed on SessionRunResult and log info lines."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_telemetry1"
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": ".agents/skills/implement/SKILL.md"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": ".agents/skills/code-review/SKILL.md"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": "AGENTS.md"}},
+            },
+        }) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    ticket = _make_ticket("T045")
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(supervisor.run(ticket=ticket, prompt="test prompt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.resources_accessed == frozenset({"implement", "code-review", "AGENTS.md"})
+    assert result.skills_accessed == frozenset({"implement", "code-review", "AGENTS.md"})
+
+    # Verify structured info logging
+    assert "[T045] Worker accessed resource: implement" in caplog.text
+    assert "[T045] Worker accessed resource: code-review" in caplog.text
+    assert "[T045] Worker accessed resource: AGENTS.md" in caplog.text
+
+
+def test_supervisor_deduplicates_multiple_resource_accesses(tmp_path: Path) -> None:
+    """Multiple tool_use events accessing the same resource deduplicate in resources_accessed frozenset."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_telemetry2"
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": ".agents/skills/implement/SKILL.md"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": ".agents\\skills\\implement\\SKILL.md"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "read",
+                "state": {"input": {"filePath": "d:/Projects/AGENTS.md"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": session_id,
+            "part": {
+                "tool": "bash",
+                "state": {"input": {"command": "cat AGENTS.md"}},
+            },
+        }) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    ticket = _make_ticket("T045")
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="test prompt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.resources_accessed == frozenset({"implement", "AGENTS.md"})
+
+
+def test_supervisor_detects_resource_from_raw_fallback_lines(tmp_path: Path) -> None:
+    """Unparseable stdout lines mentioning skills are caught by raw fallback scanner."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_telemetry3"
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        "Inspecting .agents/skills/security-review/SKILL.md directly from shell output\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    ticket = _make_ticket("T045")
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="test prompt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert "security-review" in result.resources_accessed
+
+
+def test_supervisor_resource_extraction_exception_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An exception raised during resource extraction does not abort the supervisor session run."""
+    import runner.application.worker_supervisor as ws_mod
+
+    def _failing_extract(*args: Any, **kwargs: Any) -> frozenset[str]:
+        raise RuntimeError("Simulated extraction explosion")
+
+    monkeypatch.setattr(ws_mod, "extract_resource_access", _failing_extract)
+
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_telemetry4"
+
+    lines = [
+        json.dumps({"type": "step_start", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "text", "sessionID": session_id, "part": {"text": "working..."}}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "test prompt"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+    )
+
+    ticket = _make_ticket("T045")
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(supervisor.run(ticket=ticket, prompt="test prompt"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.resources_accessed == frozenset()
+    assert "Failed to extract resource access" in caplog.text

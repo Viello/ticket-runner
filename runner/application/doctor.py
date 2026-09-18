@@ -28,11 +28,19 @@ CHECK_QUEUE = "queue"
 CHECK_CONFIG = "config"
 CHECK_VERIFICATION_COMMANDS = "verification_commands"
 CHECK_HOOK = "pre_push_hook"
+CHECK_AGENTS_MD = "agents_md"
+CHECK_SKILLS = "skills"
 CHECK_DISCORD = "discord"
 
 DEFAULT_BRANCH = "agent/ticket-runner"
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
+DEFAULT_AGENTS_MD_PATH = Path("AGENTS.md")
+DEFAULT_EXECUTION_SKILL = ".agents/skills/implement/SKILL.md"
+REQUIRED_SKILL_PATHS = (
+    ".agents/skills/code-review/SKILL.md",
+    ".agents/skills/diagnosing-bugs/SKILL.md",
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,8 @@ class Doctor:
         env: Mapping[str, str] | None = None,
         target_branch: str = DEFAULT_BRANCH,
         path_resolver: Callable[[str], str | None] | None = None,
+        agents_md_path: Path | str | None = None,
+        execution_skill_path: Path | str | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -114,6 +124,17 @@ class Doctor:
             self._git_dir = self._cwd / ".git"
         else:
             self._git_dir = Path(".git")
+
+        if agents_md_path is not None:
+            self._agents_md_path = Path(agents_md_path)
+        elif self._cwd:
+            self._agents_md_path = self._cwd / DEFAULT_AGENTS_MD_PATH
+        else:
+            self._agents_md_path = DEFAULT_AGENTS_MD_PATH
+
+        self._execution_skill_path = (
+            Path(execution_skill_path) if execution_skill_path is not None else None
+        )
 
         self._env = env if env is not None else os.environ
         self._target_branch = target_branch
@@ -372,6 +393,85 @@ class Doctor:
             remediation=None,
         )
 
+    async def check_agents_md(self) -> CheckResult:
+        """Verify AGENTS.md exists and is readable at workspace root."""
+        display_path = (
+            self._agents_md_path.relative_to(self._cwd).as_posix()
+            if self._cwd and self._agents_md_path.is_relative_to(self._cwd)
+            else str(self._agents_md_path)
+        )
+        try:
+            if not self._agents_md_path.is_file():
+                return CheckResult(
+                    name=CHECK_AGENTS_MD,
+                    passed=False,
+                    message=f"Operating rules file '{display_path}' was not found at workspace root.",
+                    remediation=f"Create '{display_path}' at workspace root defining repository invariants and workflow discipline.",
+                )
+            with open(self._agents_md_path, "r", encoding="utf-8") as f:
+                f.read(1)
+        except OSError as exc:
+            return CheckResult(
+                name=CHECK_AGENTS_MD,
+                passed=False,
+                message=f"Operating rules file '{display_path}' cannot be read: {exc}",
+                remediation=f"Ensure '{display_path}' has read permissions.",
+            )
+
+        return CheckResult(
+            name=CHECK_AGENTS_MD,
+            passed=True,
+            message=f"Operating rules file verified at '{display_path}'.",
+            remediation=None,
+        )
+
+    async def check_skills(self) -> CheckResult:
+        """Verify configured execution skill and required review skills exist and are readable on disk."""
+        if self._execution_skill_path is not None:
+            execution_skill = str(self._execution_skill_path)
+        elif self._loaded_config is not None:
+            execution_skill = self._loaded_config.worker.execution_skill
+        else:
+            execution_skill = DEFAULT_EXECUTION_SKILL
+
+        skill_specs: list[str] = [execution_skill]
+        for req in REQUIRED_SKILL_PATHS:
+            if req not in skill_specs:
+                skill_specs.append(req)
+
+        missing: list[str] = []
+        for skill in skill_specs:
+            skill_path = Path(skill)
+            if not skill_path.is_absolute() and self._cwd:
+                resolved = self._cwd / skill_path
+            else:
+                resolved = skill_path
+
+            try:
+                if not resolved.is_file():
+                    missing.append(skill)
+                else:
+                    with open(resolved, "r", encoding="utf-8") as f:
+                        f.read(1)
+            except OSError:
+                missing.append(skill)
+
+        if missing:
+            missing_names = ", ".join(f"'{m}'" for m in missing)
+            return CheckResult(
+                name=CHECK_SKILLS,
+                passed=False,
+                message=f"Required skill files are missing or unreadable: {missing_names}.",
+                remediation=f"Ensure the following skill files exist and are readable: {missing_names}.",
+            )
+
+        return CheckResult(
+            name=CHECK_SKILLS,
+            passed=True,
+            message=f"All {len(skill_specs)} required skill files verified on disk.",
+            remediation=None,
+        )
+
     async def run(self, local_only: bool = False, halt_on_failure: bool = True) -> DoctorReport:
         """Execute pre-flight checks in order, optionally halting on first failure.
 
@@ -389,6 +489,8 @@ class Doctor:
             self.check_config,
             self.check_verification_commands,
             self.check_hook,
+            self.check_agents_md,
+            self.check_skills,
             lambda: self.check_discord(local_only=local_only),
         ]
 
