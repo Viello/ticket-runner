@@ -12,10 +12,13 @@ from typing import Any
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.filesystem.json_state_store import JsonStateStore
+from runner.adapters.ui.keyboard import KeyboardPoller
 from runner.adapters.ui.model_prompt import ModelPrompt
 from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.doctor import Doctor, DoctorReport
+from runner.application.hotkey_dispatch import HotkeyDispatcher
 from runner.application.model_selection import ModelSelectionInteractor
+from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.queue_orchestrator import QueueOrchestrator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
@@ -171,6 +174,9 @@ async def run_start(
     crash_recovery_instance: CrashRecoveryCoordinator | None = None,
     sleep_fn: Callable[[float], Awaitable[None]] | None = None,
     console: Any | None = None,
+    keyboard_poller: KeyboardPoller | None = None,
+    keyboard_key_reader: Callable[[], str | None] | None = None,
+    presence_coordinator: PresenceCoordinator | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     _configure_console_encoding()
@@ -190,18 +196,29 @@ async def run_start(
 
     supervisor: WorkerSupervisor | None = supervisor_instance
     crash_recovery: CrashRecoveryCoordinator | None = crash_recovery_instance
+    state_coordinator = None
+    terminal_display = None
+    ui_event_sink = None
     if container_instance is not None:
         orchestrator = container_instance.orchestrator
         if supervisor is None:
-            supervisor = container_instance.supervisor
+            supervisor = getattr(container_instance, "supervisor", None)
         if crash_recovery is None:
             crash_recovery = getattr(container_instance, "crash_recovery", None)
+        state_coordinator = getattr(container_instance, "state_coordinator", None)
+        terminal_display = getattr(container_instance, "terminal_display", None)
+        ui_event_sink = getattr(container_instance, "ui_event_sink", None)
+        if presence_coordinator is None:
+            presence_coordinator = getattr(container_instance, "presence_coordinator", None)
     elif orchestrator_instance is not None:
         orchestrator = orchestrator_instance
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
         if crash_recovery is None:
             crash_recovery = getattr(orchestrator, "crash_recovery", None)
+        state_coordinator = getattr(orchestrator, "state_coordinator", None)
+        terminal_display = getattr(orchestrator, "terminal_display", None)
+        ui_event_sink = getattr(orchestrator, "ui_event_sink", None)
     else:
         if model_id is not None:
             valid_model_ids = [m.id for m in config.model.models]
@@ -240,11 +257,22 @@ async def run_start(
             model_id=model_id,
             state_store=effective_state_store,
         )
-        orchestrator = container.orchestrator
+        orchestrator = getattr(container, "orchestrator", None)
         if supervisor is None:
-            supervisor = container.supervisor
+            supervisor = getattr(container, "supervisor", None)
         if crash_recovery is None:
             crash_recovery = getattr(container, "crash_recovery", None)
+        state_coordinator = getattr(container, "state_coordinator", None)
+        terminal_display = getattr(container, "terminal_display", None)
+        ui_event_sink = getattr(container, "ui_event_sink", None)
+        if presence_coordinator is None:
+            presence_coordinator = getattr(container, "presence_coordinator", None)
+
+    resolved_presence = presence_coordinator or PresenceCoordinator(
+        state_coordinator=state_coordinator,
+        terminal_display=terminal_display,
+        ui_event_sink=ui_event_sink,
+    )
 
     if crash_recovery is not None:
         try:
@@ -286,6 +314,23 @@ async def run_start(
         old_sigint = signal.signal(signal.SIGINT, _sigint_handler)
     except (ValueError, AttributeError):
         pass
+
+    hotkey_dispatcher = HotkeyDispatcher(
+        orchestrator=orchestrator,
+        presence_coordinator=resolved_presence,
+        supervisor=supervisor,
+        stop_event=stop_event,
+        state_coordinator=state_coordinator,
+        ui_event_sink=ui_event_sink,
+        terminal_display=terminal_display,
+        on_shutdown=_trigger_graceful_stop,
+    )
+
+    poller = keyboard_poller or KeyboardPoller(
+        key_reader=keyboard_key_reader,
+        on_key=hotkey_dispatcher,
+    )
+    poller.start()
 
     draining = False
     try:
@@ -336,6 +381,7 @@ async def run_start(
         print(f"\n[Runner] Error: {exc}")
         return 1
     finally:
+        await poller.stop()
         if old_sigint is not None:
             try:
                 signal.signal(signal.SIGINT, old_sigint)

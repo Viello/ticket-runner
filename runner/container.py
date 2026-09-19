@@ -22,6 +22,7 @@ from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.gatekeeper import GatekeeperCommandExecutor
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import EscalationNotice, HandoffCoordinator
+from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.prompt_builder import PromptBuilder
 from runner.application.queue_orchestrator import DEFAULT_TICKETS_DIR, QueueOrchestrator
 from runner.application.state_coordinator import StateCoordinator
@@ -84,6 +85,7 @@ class RunnerContainer:
     crash_recovery: CrashRecoveryCoordinator
     terminal_display: TerminalDisplay | None = None
     ui_event_sink: UiEventSink | None = None
+    presence_coordinator: PresenceCoordinator | None = None
 
 
 def build_container(
@@ -120,6 +122,7 @@ def build_container(
     crash_recovery: CrashRecoveryCoordinator | None = None,
     terminal_display: TerminalDisplay | None = None,
     ui_event_sink: UiEventSink | None = None,
+    presence_coordinator: PresenceCoordinator | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -268,6 +271,12 @@ def build_container(
         clock=clock,
     )
 
+    resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
+        state_coordinator=resolved_state_coordinator,
+        terminal_display=terminal_display,
+        ui_event_sink=resolved_event_sink,
+    )
+
     return RunnerContainer(
         config=resolved_config,
         orchestrator=resolved_orchestrator,
@@ -288,4 +297,5 @@ def build_container(
         crash_recovery=resolved_crash_recovery,
         terminal_display=terminal_display,
         ui_event_sink=resolved_event_sink,
+        presence_coordinator=resolved_presence_coordinator,
     )

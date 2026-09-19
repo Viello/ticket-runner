@@ -19,6 +19,7 @@ from runner.application.git_operations import GitOperations
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.exceptions import UserAbortError
+from runner.domain.state import StateStatus
 from runner.domain.ticket import Ticket
 from runner.ports.terminal_display import UiEventSink
 from runner.ports.ticket_repository import TicketRepository
@@ -446,6 +447,20 @@ class QueueOrchestrator:
     def resume(self) -> None:
         """Resume queue progression and re-acquire sentinel lock."""
         self._is_paused = False
+        if self._state_coordinator is not None:
+            try:
+                state = self._state_coordinator.get_or_create_state()
+                if state.status == StateStatus.PAUSE_REQUESTED:
+                    if state.active_ticket_id:
+                        self._state_coordinator.transition_to_working(
+                            ticket_id=state.active_ticket_id,
+                            session_id=state.opencode_session_id,
+                            verification_attempts=state.verification_attempts,
+                        )
+                    else:
+                        self._state_coordinator.transition_to_idle()
+            except Exception:
+                pass
         if self._ui_event_sink is not None:
             try:
                 self._ui_event_sink.emit("runner", "Queue execution resumed")
@@ -717,25 +732,28 @@ class QueueOrchestrator:
             if pending is not None and active_processor is None:
                 raise RuntimeError("No ticket processor configured.")
 
-            # 2. Process initial queue until empty or paused
+            # 2. Process initial queue until empty, waiting if paused
             if active_processor is not None:
-                while not self._is_paused:
-                    if stop_event is not None and stop_event.is_set():
-                        break
+                while not (stop_event is not None and stop_event.is_set()):
+                    if self._is_paused:
+                        self.release_lock()
+                        if stop_event is not None and sleep_fn is None:
+                            try:
+                                await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                                break
+                            except asyncio.TimeoutError:
+                                pass
+                        else:
+                            await active_sleep(effective_poll_interval)
+                        continue
+
                     outcome = await self.run_next(processor=active_processor)
                     if outcome is None:
                         break
                     self._lifecycle_outcomes.append(outcome)
-                    if stop_event is not None and stop_event.is_set():
-                        break
-
-            if self._is_paused:
-                self.release_lock()
-                await self.print_completion_summary(printer=printer, clock=active_clock)
-                return 0
 
             pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
-            if pending is not None:
+            if pending is not None and (stop_event is not None and stop_event.is_set()):
                 # Execution was stopped before queue drained
                 self.release_lock()
                 await self.print_completion_summary(printer=printer, clock=active_clock)
@@ -776,11 +794,24 @@ class QueueOrchestrator:
             self.release_lock()
             printer(STANDBY_BANNER)
             iteration = 0
-            while not self._is_paused:
-                if stop_event is not None and stop_event.is_set():
-                    break
+            while not (stop_event is not None and stop_event.is_set()):
                 if max_standby_iterations is not None and iteration >= max_standby_iterations:
                     break
+
+                if self._is_paused:
+                    self.release_lock()
+                    if stop_event is not None and sleep_fn is None:
+                        try:
+                            await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                            break
+                        except asyncio.TimeoutError:
+                            pass
+                    else:
+                        try:
+                            await active_sleep(effective_poll_interval)
+                        except asyncio.CancelledError:
+                            raise
+                    continue
 
                 if stop_event is not None and sleep_fn is None:
                     try:
@@ -796,7 +827,7 @@ class QueueOrchestrator:
 
                 iteration += 1
 
-                if self._is_paused or (stop_event is not None and stop_event.is_set()):
+                if stop_event is not None and stop_event.is_set():
                     break
 
                 pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
@@ -804,18 +835,22 @@ class QueueOrchestrator:
                     printer(f"[Queue] Detected new pending ticket '{pending.id}'. Resuming queue execution...")
                     if active_processor is None:
                         raise RuntimeError("No ticket processor configured.")
-                    while not self._is_paused:
-                        if stop_event is not None and stop_event.is_set():
-                            break
+                    while not (stop_event is not None and stop_event.is_set()):
+                        if self._is_paused:
+                            self.release_lock()
+                            if stop_event is not None and sleep_fn is None:
+                                try:
+                                    await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                                    break
+                                except asyncio.TimeoutError:
+                                    pass
+                            else:
+                                await active_sleep(effective_poll_interval)
+                            continue
                         outcome = await self.run_next(processor=active_processor)
                         if outcome is None:
                             break
                         self._lifecycle_outcomes.append(outcome)
-                        if stop_event is not None and stop_event.is_set():
-                            break
-
-                    if self._is_paused:
-                        break
 
                     remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
                     if remaining is None:

@@ -479,5 +479,14 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Computing token percentages via `current / ceiling * 100` can divide by zero if ceiling is zero, exceed 100% when sessions consume tokens past the 150,000 ceiling, or format negative percentages when `tokens.current` is unset or negative.
 - **Solution**: Enforce `max(0, current)` and clamp the calculated percentage with `min(100, max(0, round(current / ceiling * 100)))` alongside a zero check on `ceiling`, ensuring stable 10-character progress bar formatting across all token count bounds.
 
+### Non-Blocking Windows Console Key Reading and Two-Byte Prefix Handling
+- **Problem**: Reading console keystrokes via `msvcrt.kbhit()` and `msvcrt.getch()` on Windows returns two-byte sequences for arrow keys, function keys, and navigation keys (starting with byte `\x00` or `\xe0`). Failing to consume the second byte leaves stray characters in the input buffer, triggering phantom hotkey actions on subsequent polling loop iterations.
+- **Solution**: Inspect the initial byte returned by `msvcrt.getch()`; if it matches `\x00` or `\xe0`, check `msvcrt.kbhit()` and discard the second byte immediately, normalizing all valid single-byte ASCII characters to lowercase for case-insensitive hotkey routing.
 
+### Test Isolation for Durable State and Crash Recovery Cascades
+- **Problem**: CLI unit tests executing entry points like `ticket_runner.main(["start", ...])` without isolating `RuntimePaths` mutate the live workspace `.agent/state.json`. If a test exercises an operator abort while a ticket is `WORKING`, it leaves dirty state on disk. Subsequent tests invoking `run_start` trigger `CrashRecoveryCoordinator.recover()`, which treats the dirty state as an in-flight crash and attempts to reconnect via live subprocess execution (`opencode run ...`), hanging the test suite indefinitely.
+- **Solution**: Always isolate `RuntimePaths` to a per-test temporary directory (`tmp_path / ".agent"`) in CLI test fixtures, ensuring unit tests never read or contaminate workspace runtime state.
 
+### Grandchild Pipe Inheritance and Job Object Reaping Order
+- **Problem**: On Windows, child processes spawning background or detached grandchildren inherit standard I/O pipes unless explicitly spawned with `DEVNULL` streams. If an async process wrapper awaits stderr/stdout stream draining before closing the Windows Job Object (`KILL_ON_JOB_CLOSE`), the open pipe handles held by the grandchild prevent EOF, causing `handle.wait()` to hang until the grandchild exits.
+- **Solution**: In process wrappers, close the Job Object immediately upon parent process exit (`_proc.wait()`) so the OS kernel reaps all detached descendants before awaiting stream draining tasks with a bounded timeout, and pass `DEVNULL` streams when spawning detached test grandchildren.

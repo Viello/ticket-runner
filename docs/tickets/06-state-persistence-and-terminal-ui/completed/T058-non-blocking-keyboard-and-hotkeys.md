@@ -1,5 +1,6 @@
 # T058 — Non-blocking Windows keyboard dispatcher and hotkey event loop
-Status: pending
+Status: completed
+Completed: 2026-09-20T00:41:00+08:00
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: T057
 Reasoning: medium

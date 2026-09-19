@@ -464,11 +464,19 @@ def test_windows_job_object_create_and_lifecycle() -> None:
     assert job.is_open is True
     assert job.handle is not None
 
-    # Self-assignment of the current Python test process PID
-    assigned = job.assign_process(os.getpid())
-    assert isinstance(assigned, bool)
+    import subprocess
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+    try:
+        assigned = job.assign_process(proc.pid)
+        assert isinstance(assigned, bool)
+    finally:
+        job.close()
+        try:
+            proc.kill()
+            proc.wait()
+        except Exception:
+            pass
 
-    job.close()
     assert job.is_open is False
     assert job.handle is None
     # Idempotent close
@@ -552,7 +560,8 @@ def test_subprocess_handle_reaps_detached_grandchild_on_normal_exit() -> None:
     child_code = (
         "import subprocess, sys, time\n"
         "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(100)'], "
-        "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n"
+        "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
         "print(p.pid, flush=True)\n"
         "sys.exit(0)\n"
     )

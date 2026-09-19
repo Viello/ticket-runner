@@ -99,8 +99,12 @@ class SubprocessProcessHandle:
         """Wait for process completion, ensure stderr is drained, and return exit code."""
         try:
             code = await self._proc.wait()
+            self.close()
             if self._stderr_drain_task is not None:
-                await self._stderr_drain_task
+                try:
+                    await asyncio.wait_for(self._stderr_drain_task, timeout=2.0)
+                except Exception:
+                    pass
             return code
         finally:
             self.close()
