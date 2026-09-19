@@ -107,3 +107,15 @@ _Avoid_: Model switch, model picker, LLM choice
 **Reasoning Variant**:
 The per-ticket reasoning depth setting declared in a ticket's `Reasoning:` frontmatter field and passed to OpenCode as `--variant`. Controls the model's thinking effort (e.g. `low`, `medium`, `high`, `max` on Anthropic; provider-specific strings on others). Resolved in priority order: ticket `Reasoning:` field → `model.default_reasoning` in config → flag omitted (OpenCode default). Applied uniformly across all Session Runs under the ticket.
 _Avoid_: Thinking level, reasoning mode, inference depth
+
+**Crash Recovery**:
+The startup procedure that inspects `.agent/state.json` and `git status --porcelain` to safely resume an in-flight ticket, reconnect to an active Worker Session, or restore from a Checkpoint after an unexpected termination.
+_Avoid_: Reboot recovery, auto-resume, restart handler
+
+**State Store**:
+The persistence seam responsible for atomic, durable reads and writes of runner execution state to `.agent/state.json`.
+_Avoid_: State manager, DB, cache
+
+**Terminal Display**:
+The local terminal user interface built with Rich Live that renders the pinned status header, token gauge, scrolling telemetry ring buffer, and hotkey legends during execution.
+_Avoid_: Dashboard, console UI, terminal viewer
