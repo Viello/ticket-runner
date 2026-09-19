@@ -490,3 +490,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 ### Grandchild Pipe Inheritance and Job Object Reaping Order
 - **Problem**: On Windows, child processes spawning background or detached grandchildren inherit standard I/O pipes unless explicitly spawned with `DEVNULL` streams. If an async process wrapper awaits stderr/stdout stream draining before closing the Windows Job Object (`KILL_ON_JOB_CLOSE`), the open pipe handles held by the grandchild prevent EOF, causing `handle.wait()` to hang until the grandchild exits.
 - **Solution**: In process wrappers, close the Job Object immediately upon parent process exit (`_proc.wait()`) so the OS kernel reaps all detached descendants before awaiting stream draining tasks with a bounded timeout, and pass `DEVNULL` streams when spawning detached test grandchildren.
+
+### Rich Markup Literal `[r]` Reverse Tag Escaping
+- **Problem**: In Rich console markup, `[r]` is built-in shorthand for the `reverse` style tag. Rendering literal text like `Text.from_markup("[r] Resume")` causes Rich to interpret `[r]` as a formatting tag and swallow it, rendering `"Resume"` with inverted colors instead of the literal bracketed hotkey shortcut.
+- **Solution**: Always escape literal bracketed keyboard shortcuts in Rich markup strings with a leading backslash (e.g. `Text.from_markup("\\[r] Resume")`), or construct plain text renderables without markup interpretation.
+
+### Rich Layout Child Pane Existence Check
+- **Problem**: Checking whether a named layout pane exists in `rich.layout.Layout` using `"header" in layout` invokes `__contains__` which falls back to integer indexing `layout[0]`, raising `KeyError: 'No layout with name 0'`.
+- **Solution**: Check layout pane existence using `layout.get("header") is not None` rather than the `in` operator.
+
+### Async Mock Process Stream Delay in Event Loop Tests
+- **Problem**: In asynchronous event loop unit tests, using zero-delay mock process handles that finish instantaneously before scheduled keypress handlers run causes active-session state checks (e.g. `supervisor.is_running`) to evaluate to `False` prematurely, triggering unexpected synchronous code paths that await completion events indefinitely.
+- **Solution**: Inject a small delay (`delay=0.05`) into mock process streams or coordinate step-by-step with `asyncio.Event` flags to ensure test coroutines execute in their intended realistic sequence.
+

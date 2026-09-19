@@ -20,6 +20,7 @@ from runner.application.hotkey_dispatch import HotkeyDispatcher
 from runner.application.model_selection import ModelSelectionInteractor
 from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
 from runner.domain.exceptions import NonInteractiveError, UserAbortError
@@ -177,6 +178,7 @@ async def run_start(
     keyboard_poller: KeyboardPoller | None = None,
     keyboard_key_reader: Callable[[], str | None] | None = None,
     presence_coordinator: PresenceCoordinator | None = None,
+    tui_coordinator: TuiCoordinator | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     _configure_console_encoding()
@@ -199,6 +201,7 @@ async def run_start(
     state_coordinator = None
     terminal_display = None
     ui_event_sink = None
+    tui_coord: TuiCoordinator | None = tui_coordinator
     if container_instance is not None:
         orchestrator = container_instance.orchestrator
         if supervisor is None:
@@ -210,6 +213,8 @@ async def run_start(
         ui_event_sink = getattr(container_instance, "ui_event_sink", None)
         if presence_coordinator is None:
             presence_coordinator = getattr(container_instance, "presence_coordinator", None)
+        if tui_coord is None:
+            tui_coord = getattr(container_instance, "tui_coordinator", None)
     elif orchestrator_instance is not None:
         orchestrator = orchestrator_instance
         if supervisor is None:
@@ -219,6 +224,8 @@ async def run_start(
         state_coordinator = getattr(orchestrator, "state_coordinator", None)
         terminal_display = getattr(orchestrator, "terminal_display", None)
         ui_event_sink = getattr(orchestrator, "ui_event_sink", None)
+        if tui_coord is None:
+            tui_coord = getattr(orchestrator, "tui_coordinator", None)
     else:
         if model_id is not None:
             valid_model_ids = [m.id for m in config.model.models]
@@ -267,6 +274,8 @@ async def run_start(
         ui_event_sink = getattr(container, "ui_event_sink", None)
         if presence_coordinator is None:
             presence_coordinator = getattr(container, "presence_coordinator", None)
+        if tui_coord is None:
+            tui_coord = getattr(container, "tui_coordinator", None)
 
     resolved_presence = presence_coordinator or PresenceCoordinator(
         state_coordinator=state_coordinator,
@@ -324,6 +333,7 @@ async def run_start(
         ui_event_sink=ui_event_sink,
         terminal_display=terminal_display,
         on_shutdown=_trigger_graceful_stop,
+        tui_coordinator=tui_coord,
     )
 
     poller = keyboard_poller or KeyboardPoller(

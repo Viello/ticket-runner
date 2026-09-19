@@ -1,5 +1,6 @@
 # T059 — TUI Session pause-and-open protocol, warning panel, and process lifecycle
-Status: pending
+Status: completed
+Completed: 2026-09-20T01:15:00+08:00
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: T054, T055, T058
 Security: required

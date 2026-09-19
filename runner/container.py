@@ -17,6 +17,7 @@ from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, Gotchas
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
+from runner.adapters.ui.tui_launcher import TuiLauncher
 from runner.application.clean_slate import CleanSlateArchiver
 from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.gatekeeper import GatekeeperCommandExecutor
@@ -27,6 +28,7 @@ from runner.application.prompt_builder import PromptBuilder
 from runner.application.queue_orchestrator import DEFAULT_TICKETS_DIR, QueueOrchestrator
 from runner.application.state_coordinator import StateCoordinator
 from runner.application.ticket_processor import TicketProcessor
+from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import WorkerSupervisor
 from runner.domain.config import (
     DiscordConfig,
@@ -86,6 +88,8 @@ class RunnerContainer:
     terminal_display: TerminalDisplay | None = None
     ui_event_sink: UiEventSink | None = None
     presence_coordinator: PresenceCoordinator | None = None
+    tui_launcher: TuiLauncher | None = None
+    tui_coordinator: TuiCoordinator | None = None
 
 
 def build_container(
@@ -123,6 +127,8 @@ def build_container(
     terminal_display: TerminalDisplay | None = None,
     ui_event_sink: UiEventSink | None = None,
     presence_coordinator: PresenceCoordinator | None = None,
+    tui_launcher: TuiLauncher | None = None,
+    tui_coordinator: TuiCoordinator | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -277,6 +283,25 @@ def build_container(
         ui_event_sink=resolved_event_sink,
     )
 
+    resolved_tui_launcher = tui_launcher or TuiLauncher(
+        command_runner=resolved_command_runner,
+    )
+
+    resolved_terminal_host = getattr(getattr(resolved_config, "ui", None), "session_terminal", "") or "wt.exe"
+
+    resolved_tui_coordinator = tui_coordinator or TuiCoordinator(
+        terminal_display=terminal_display,
+        launcher=resolved_tui_launcher,
+        state_coordinator=resolved_state_coordinator,
+        terminal_host=resolved_terminal_host,
+        supervisor=resolved_supervisor,
+        ui_event_sink=resolved_event_sink,
+        cwd=cwd,
+    )
+
+    if resolved_supervisor.tui_coordinator is None:
+        resolved_supervisor.tui_coordinator = resolved_tui_coordinator
+
     return RunnerContainer(
         config=resolved_config,
         orchestrator=resolved_orchestrator,
@@ -298,4 +323,7 @@ def build_container(
         terminal_display=terminal_display,
         ui_event_sink=resolved_event_sink,
         presence_coordinator=resolved_presence_coordinator,
+        tui_launcher=resolved_tui_launcher,
+        tui_coordinator=resolved_tui_coordinator,
     )
+

@@ -205,6 +205,7 @@ class WorkerSupervisor:
         model_id: str | None = None,
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
+        tui_coordinator: Any | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -225,11 +226,26 @@ class WorkerSupervisor:
         self._model_id = model_id.strip() if (model_id and model_id.strip()) else None
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
+        self._tui_coordinator = tui_coordinator
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def is_running(self) -> bool:
+        """True if an OpenCode session run subprocess is currently active."""
+        return self._current_handle is not None
+
+    @property
+    def tui_coordinator(self) -> Any | None:
+        """Configured TuiCoordinator interactor."""
+        return self._tui_coordinator
+
+    @tui_coordinator.setter
+    def tui_coordinator(self, value: Any | None) -> None:
+        self._tui_coordinator = value
 
     @property
     def ui_event_sink(self) -> UiEventSink | None:
@@ -712,7 +728,7 @@ class WorkerSupervisor:
         else:
             reason = RunTerminationReason.EXITED
 
-        return SessionRunResult(
+        result = SessionRunResult(
             reason=reason,
             session_id=active_session_id,
             exit_code=exit_code,
@@ -725,5 +741,16 @@ class WorkerSupervisor:
             has_error_event=has_error_event,
             resources_accessed=frozenset(resources_accessed),
         )
+
+        # Check for queued TUI session intent at signal boundary
+        if self._tui_coordinator is not None and getattr(self._tui_coordinator, "is_queued", False):
+            resumed_result = await self._tui_coordinator.on_signal_boundary(
+                session_id=active_session_id or session_id,
+                ticket=ticket_id,
+            )
+            if resumed_result is not None:
+                return resumed_result
+
+        return result
 
     run_session = run

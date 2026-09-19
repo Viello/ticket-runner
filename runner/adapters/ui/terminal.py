@@ -65,6 +65,29 @@ def calculate_token_bar(
     return bar_markup, bar_plain, pct
 
 
+def build_warning_panel() -> Panel:
+    """Construct frozen TUI session warning panel matching Spec 06 verbatim."""
+    lines = [
+        Text.from_markup("[bold yellow]⚠  OpenCode TUI open — Runner is paused & blind[/bold yellow]"),
+        Text.from_markup(
+            "[dim white]   Execution is paused: no Gatekeeper, no Circuit Breaker, no token tracking.[/dim white]"
+        ),
+        Text.from_markup(
+            "[dim white]   Tokens consumed in TUI are NOT tracked against the 135k handoff budget.[/dim white]"
+        ),
+        Text.from_markup(
+            "[dim white]   Work done in TUI bypasses the Gatekeeper and Signal protocol.[/dim white]"
+        ),
+        Text.from_markup(
+            "[dim white]   Close the terminal window to resume managed execution.[/dim white]"
+        ),
+        Text.from_markup(
+            "[bold green]   \\[r] Resume  (required if using Windows Terminal)[/bold green]"
+        ),
+    ]
+    return Panel(Group(*lines), border_style="yellow")
+
+
 class RichTerminalDisplay(TerminalDisplay):
     """Terminal display adapter rendering split interactive dashboard using rich.live.Live."""
 
@@ -79,6 +102,7 @@ class RichTerminalDisplay(TerminalDisplay):
         self._queue_remaining: int = 0
         self._legend_state: str = "normal"
         self._is_active: bool = False
+        self._show_warning: bool = False
         self._layout = self._build_layout()
         self._live: Live | None = None
 
@@ -86,6 +110,13 @@ class RichTerminalDisplay(TerminalDisplay):
     def is_active(self) -> bool:
         """Whether the Live display is currently started."""
         return self._is_active
+
+    @property
+    def is_warning_visible(self) -> bool:
+        """Whether the TUI warning panel is currently displayed."""
+        return self._show_warning or (
+            self._current_state is not None and self._current_state.tui_open
+        )
 
     @property
     def ring_buffer(self) -> RingBuffer:
@@ -98,6 +129,18 @@ class RichTerminalDisplay(TerminalDisplay):
             valid_states = ", ".join(sorted(HOTKEY_LEGENDS.keys()))
             raise ValueError(f"Invalid legend state '{state}'. Valid states: {valid_states}")
         self._legend_state = state
+        self._update_layout()
+
+    def show_warning_panel(self) -> None:
+        """Freeze live dashboard and display full-screen TUI warning panel."""
+        self._show_warning = True
+        self._legend_state = "tui_open"
+        self._update_layout()
+
+    def restore_dashboard(self) -> None:
+        """Restore normal split live dashboard and clear warning display."""
+        self._show_warning = False
+        self._legend_state = "normal"
         self._update_layout()
 
     def update_state(self, state: RunnerState, queue_remaining: int) -> None:
@@ -171,18 +214,32 @@ class RichTerminalDisplay(TerminalDisplay):
     def _build_layout(self) -> Layout:
         """Construct the split Layout container."""
         layout = Layout()
-        layout.split_column(
-            Layout(self._build_top_panel(), name="header", size=8),
-            Layout(self._build_bottom_panel(), name="body"),
-        )
+        if self._show_warning or (self._current_state is not None and self._current_state.tui_open):
+            layout.update(build_warning_panel())
+        else:
+            layout.split_column(
+                Layout(self._build_top_panel(), name="header", size=8),
+                Layout(self._build_bottom_panel(), name="body"),
+            )
         return layout
 
     def _update_layout(self) -> None:
         """Update the existing layout in place with fresh panel content."""
-        self._layout["header"].update(self._build_top_panel())
-        self._layout["body"].update(self._build_bottom_panel())
+        if self._show_warning or (self._current_state is not None and self._current_state.tui_open):
+            self._layout.split()
+            self._layout.update(build_warning_panel())
+        else:
+            if self._layout.get("header") is not None and self._layout.get("body") is not None:
+                self._layout["header"].update(self._build_top_panel())
+                self._layout["body"].update(self._build_bottom_panel())
+            else:
+                self._layout.split()
+                self._layout.split_column(
+                    Layout(self._build_top_panel(), name="header", size=8),
+                    Layout(self._build_bottom_panel(), name="body"),
+                )
         if self._is_active and self._live is not None:
-            self._live.refresh()
+            self._live.update(self._layout, refresh=True)
 
     def render_to_console(self) -> None:
         """Helper to render the current layout snapshot directly to the console."""
@@ -211,3 +268,4 @@ class RichTerminalDisplay(TerminalDisplay):
         self._update_layout()
         if self._is_active and self._live is not None:
             self._live.refresh()
+

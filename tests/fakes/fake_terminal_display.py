@@ -18,6 +18,8 @@ class FakeTerminalDisplay(TerminalDisplay):
         self.started: bool = False
         self.stopped: bool = False
         self.refresh_count: int = 0
+        self.legend_state: str = "normal"
+        self.is_warning_visible: bool = False
 
     @property
     def current_state(self) -> RunnerState | None:
@@ -34,9 +36,26 @@ class FakeTerminalDisplay(TerminalDisplay):
         """Current ring buffer lines."""
         return self.ring_buffer.lines
 
+    def set_legend_state(self, state: str) -> None:
+        """Record legend state update."""
+        self.legend_state = state
+
+    def show_warning_panel(self) -> None:
+        """Record warning panel shown and set legend state to tui_open."""
+        self.is_warning_visible = True
+        self.legend_state = "tui_open"
+
+    def restore_dashboard(self) -> None:
+        """Record warning panel dismissed and restore normal legend."""
+        self.is_warning_visible = False
+        self.legend_state = "normal"
+
     def update_state(self, state: RunnerState, queue_remaining: int) -> None:
         """Record state snapshot."""
         self.snapshots.append((state, queue_remaining))
+        if state.tui_open:
+            self.is_warning_visible = True
+            self.legend_state = "tui_open"
 
     def emit(self, source: str, message: str) -> None:
         """Record telemetry event and append to internal ring buffer."""
@@ -61,3 +80,4 @@ class FakeTerminalDisplay(TerminalDisplay):
     def refresh(self) -> None:
         """Record refresh invocation."""
         self.refresh_count += 1
+

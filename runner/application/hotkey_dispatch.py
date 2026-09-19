@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from runner.application.presence_coordinator import PresenceCoordinator
     from runner.application.queue_orchestrator import QueueOrchestrator
     from runner.application.state_coordinator import StateCoordinator
+    from runner.application.tui_coordinator import TuiCoordinator
     from runner.application.worker_supervisor import WorkerSupervisor
     from runner.ports.terminal_display import TerminalDisplay, UiEventSink
 
@@ -29,6 +30,7 @@ class HotkeyDispatcher:
         ui_event_sink: UiEventSink | None = None,
         terminal_display: TerminalDisplay | None = None,
         on_shutdown: Callable[[], Any] | None = None,
+        tui_coordinator: TuiCoordinator | None = None,
     ) -> None:
         self._orchestrator = orchestrator
         self._presence_coordinator = presence_coordinator
@@ -38,6 +40,7 @@ class HotkeyDispatcher:
         self._ui_event_sink = ui_event_sink
         self._terminal_display = terminal_display
         self._on_shutdown = on_shutdown
+        self._tui_coordinator = tui_coordinator
 
         self._handlers: dict[str, Callable[[], Any]] = {
             "p": self.handle_pause,
@@ -112,7 +115,30 @@ class HotkeyDispatcher:
 
     def dispatch(self, key: str) -> Any:
         """Dispatch a single keypress string to its registered handler."""
-        handler = self._handlers.get(key.lower())
+        k = key.lower()
+        if self._tui_coordinator is not None:
+            if self._tui_coordinator.is_confirm_pending:
+                if k == "y":
+                    res = self._tui_coordinator.handle_key_y()
+                    if asyncio.iscoroutine(res):
+                        return asyncio.create_task(res)
+                    return res
+                elif k == "n":
+                    return self._tui_coordinator.handle_key_n()
+                # Disregard all other keys during confirm modal
+                return None
+            elif self._tui_coordinator.is_tui_open:
+                if k == "r":
+                    res = self._tui_coordinator.handle_key_r()
+                    if asyncio.iscoroutine(res):
+                        return asyncio.create_task(res)
+                    return res
+                # All other keys suspended during TUI open
+                return None
+            elif k == "o":
+                return self._tui_coordinator.handle_key_o()
+
+        handler = self._handlers.get(k)
         if handler is not None:
             return handler()
         return None
@@ -120,3 +146,4 @@ class HotkeyDispatcher:
     def __call__(self, key: str) -> Any:
         """Callable protocol support to pass dispatcher directly as on_key callback."""
         return self.dispatch(key)
+
