@@ -474,7 +474,11 @@ def test_run_lifecycle_terminate_empty_queue(
     )
 
     exit_code = asyncio.run(
-        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            printer=printed.append,
+            banner_delay=0.0,
+        )
     )
 
     assert exit_code == 0
@@ -508,7 +512,11 @@ def test_run_lifecycle_terminate_after_draining_queue(
     )
 
     exit_code = asyncio.run(
-        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append)
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            printer=printed.append,
+            banner_delay=0.0,
+        )
     )
 
     assert exit_code == 0
@@ -982,7 +990,12 @@ def test_run_lifecycle_prints_completion_summary_on_terminate(
     )
 
     exit_code = asyncio.run(
-        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed.append, clock=fake_clock)
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            printer=printed.append,
+            clock=fake_clock,
+            banner_delay=0.0,
+        )
     )
 
     assert exit_code == 0
@@ -1537,5 +1550,173 @@ def test_queue_orchestrator_state_transitions(
     assert store.doc["status"] == "PAUSE_REQUESTED"
 
 
+# --- T056: Queue Completion Policy, Standby Polling, and Celebration Banner ---
+
+def test_format_celebration_banner_exact_layout_and_rounding() -> None:
+    from runner.application.queue_orchestrator import format_celebration_banner
+
+    banner = format_celebration_banner(tickets_committed=2, total_tokens=120_400)
+    lines = banner.split("\n")
+    assert len(lines) == 4
+
+    assert lines[0] == "╔══════════════════════════════════════════════════╗"
+    assert lines[1] == "║  🎉  Queue complete! All tickets committed.      ║"
+    assert lines[2] == "║  2 tickets  ·  0 failed  ·  ~120k tokens         ║"
+    assert lines[3] == "╚══════════════════════════════════════════════════╝"
+
+    # Test token rounding cases
+    banner_48k = format_celebration_banner(tickets_committed=5, total_tokens=48_200)
+    assert "║  5 tickets  ·  0 failed  ·  ~48k tokens          ║" in banner_48k
+
+    banner_120k = format_celebration_banner(tickets_committed=1, total_tokens=119_600)
+    assert "║  1 tickets  ·  0 failed  ·  ~120k tokens         ║" in banner_120k
+
+    banner_0k = format_celebration_banner(tickets_committed=0, total_tokens=0)
+    assert "║  0 tickets  ·  0 failed  ·  ~0k tokens           ║" in banner_0k
+
+    banner_1k = format_celebration_banner(tickets_committed=3, total_tokens=500)
+    assert "║  3 tickets  ·  0 failed  ·  ~1k tokens           ║" in banner_1k
 
 
+def test_run_lifecycle_terminate_renders_celebration_banner_and_pauses_2s(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="Ticket One")
+    t2 = _make_ticket("T002", title="Ticket Two")
+    ticket_repo = FakeTicketRepository([t1, t2])
+    printed: list[str] = []
+    sleeps: list[float] = []
+
+    async def fake_sleep(duration: float) -> None:
+        sleeps.append(duration)
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(
+            changes=[f"Work {ticket.id}"],
+            tokens_consumed=60_000,
+        )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            printer=printed.append,
+            sleep_fn=fake_sleep,
+        )
+    )
+
+    assert exit_code == 0
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+    # Assert celebration banner lines were output
+    assert any("╔══════════════════════════════════════════════════╗" in p for p in printed)
+    assert any("🎉  Queue complete! All tickets committed." in p for p in printed)
+    assert any("2 tickets  ·  0 failed  ·  ~120k tokens" in p for p in printed)
+    assert any("╚══════════════════════════════════════════════════╝" in p for p in printed)
+    # Assert 2-second sleep was invoked before clean exit
+    assert 2.0 in sleeps
+
+
+def test_run_lifecycle_terminate_renders_to_rich_console(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    import io
+    from rich.console import Console
+
+    t1 = _make_ticket("T001", title="Ticket One")
+    ticket_repo = FakeTicketRepository([t1])
+    string_io = io.StringIO()
+    console = Console(file=string_io, record=True, width=80)
+    sleeps: list[float] = []
+
+    async def fake_sleep(duration: float) -> None:
+        sleeps.append(duration)
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(
+            changes=[f"Work {ticket.id}"],
+            tokens_consumed=48_200,
+        )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            console=console,
+            sleep_fn=fake_sleep,
+        )
+    )
+
+    assert exit_code == 0
+    output = console.export_text()
+    assert "╔══════════════════════════════════════════════════╗" in output
+    assert "🎉  Queue complete! All tickets committed." in output
+    assert "1 tickets  ·  0 failed  ·  ~48k tokens" in output
+    assert "╚══════════════════════════════════════════════════╝" in output
+
+
+def test_run_lifecycle_standby_does_not_render_celebration_banner(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="Ticket One")
+    ticket_repo = FakeTicketRepository([t1])
+    printed: list[str] = []
+    stop_event = asyncio.Event()
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.approved(
+            changes=[f"Work {ticket.id}"],
+            tokens_consumed=25_000,
+        )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    async def scenario() -> int:
+        async def stop_soon() -> None:
+            # Wait until queue drains and standby banner is printed
+            while not any("standing by" in p.lower() for p in printed):
+                await asyncio.sleep(0.005)
+            # Verify lock is released while standing by
+            assert orchestrator.is_locked is False
+            assert queue_lock.is_locked is False
+            stop_event.set()
+
+        asyncio.create_task(stop_soon())
+        return await orchestrator.run_lifecycle(
+            lifecycle="standby",
+            poll_interval=0.01,
+            printer=printed.append,
+            stop_event=stop_event,
+        )
+
+    exit_code = asyncio.run(scenario())
+    assert exit_code == 0
+    # Banner must NOT be rendered while standing by
+    assert not any("Queue complete! All tickets committed." in p for p in printed)
+    assert not any("╔══════════════════════════════════════════════════╗" in p for p in printed)

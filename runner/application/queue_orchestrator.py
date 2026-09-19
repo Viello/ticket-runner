@@ -48,6 +48,7 @@ class TicketOutcome:
     commit_prefix: str | None = None
     details: str | Mapping[str, Any] | None = None
     commit_sha: str | None = None
+    tokens_consumed: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.status, str) and not isinstance(self.status, TicketOutcomeStatus):
@@ -80,6 +81,7 @@ class TicketOutcome:
         scope: str | None = None,
         commit_prefix: str | None = None,
         commit_sha: str | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct an approved ticket outcome."""
         return cls(
@@ -89,29 +91,55 @@ class TicketOutcome:
             scope=scope,
             commit_prefix=commit_prefix,
             commit_sha=commit_sha,
+            tokens_consumed=tokens_consumed,
         )
 
     @classmethod
     def skipped(
         cls,
         details: str | Mapping[str, Any] | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct a skipped ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.SKIPPED,
             details=details,
+            tokens_consumed=tokens_consumed,
         )
 
     @classmethod
     def aborted(
         cls,
         details: str | Mapping[str, Any] | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct an aborted ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.ABORTED,
             details=details,
+            tokens_consumed=tokens_consumed,
         )
+
+
+def format_celebration_banner(tickets_committed: int, total_tokens: int) -> str:
+    """Format the verbatim Spec 06 double-bordered celebration banner.
+
+    Args:
+        tickets_committed: Count of tickets committed in the lifecycle run ({n}).
+        total_tokens: Total tokens accumulated across sessions, rounded to nearest thousand ({k}).
+
+    Returns:
+        Exact 4-line boxed banner formatted in double-line border characters.
+    """
+    k = (total_tokens + 500) // 1000 if total_tokens >= 0 else 0
+    middle = f"  {tickets_committed} tickets  ·  0 failed  ·  ~{k}k tokens"
+    pad = " " * max(0, 50 - len(middle))
+    return (
+        "╔══════════════════════════════════════════════════╗\n"
+        "║  🎉  Queue complete! All tickets committed.      ║\n"
+        f"║{middle}{pad}║\n"
+        "╚══════════════════════════════════════════════════╝"
+    )
 
 
 @runtime_checkable
@@ -195,6 +223,7 @@ class QueueOrchestrator:
         self._cleaned_spec_slugs: set[str] = set()
         self._deferred_clean_slate: bool = False
         self._last_outcome: TicketOutcome | None = None
+        self._accumulated_tokens: int = 0
 
     @property
     def has_deferred_clean_slate(self) -> bool:
@@ -210,6 +239,71 @@ class QueueOrchestrator:
     def last_outcome(self) -> TicketOutcome | None:
         """Outcome of the most recently processed ticket."""
         return self._last_outcome
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens consumed across all sessions in this lifecycle run."""
+        outcomes_tokens = sum(o.tokens_consumed for o in self._lifecycle_outcomes)
+        total = self._accumulated_tokens + outcomes_tokens
+        if total > 0:
+            return total
+        if self.supervisor is not None and hasattr(self.supervisor, "cumulative_tokens"):
+            return int(getattr(self.supervisor, "cumulative_tokens", 0))
+        if self._state_coordinator is not None:
+            state = self._state_coordinator.current_state
+            if state and state.tokens.current > 0:
+                return state.tokens.current
+        return 0
+
+    def record_tokens(self, count: int) -> None:
+        """Accumulate token consumption into this lifecycle run."""
+        self._accumulated_tokens += max(0, count)
+
+    def format_celebration_banner(
+        self,
+        tickets_committed: int | None = None,
+        total_tokens: int | None = None,
+    ) -> str:
+        """Render the verbatim completion banner with current or provided metrics."""
+        committed = (
+            tickets_committed
+            if tickets_committed is not None
+            else sum(1 for o in self._lifecycle_outcomes if o.is_approved)
+        )
+        tokens = total_tokens if total_tokens is not None else self.total_tokens
+        return format_celebration_banner(tickets_committed=committed, total_tokens=tokens)
+
+    async def print_celebration_banner(
+        self,
+        printer: Callable[[str], None] = print,
+        console: Any | None = None,
+        sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+        delay: float = 2.0,
+        tickets_committed: int | None = None,
+        total_tokens: int | None = None,
+    ) -> None:
+        """Render celebration banner in bold green and pause before clean exit."""
+        banner = self.format_celebration_banner(
+            tickets_committed=tickets_committed,
+            total_tokens=total_tokens,
+        )
+        if console is not None:
+            console.print(banner, style="bold green")
+            if printer is not print:
+                for line in banner.splitlines():
+                    printer(line)
+        else:
+            if printer is print:
+                from rich.console import Console
+
+                Console().print(banner, style="bold green")
+            else:
+                for line in banner.splitlines():
+                    printer(line)
+
+        active_sleep = sleep_fn or asyncio.sleep
+        if delay > 0:
+            await active_sleep(delay)
 
     @property
     def is_paused(self) -> bool:
@@ -516,6 +610,9 @@ class QueueOrchestrator:
         clean_slate_policy: str | None = None,
         sleep_fn: Callable[[float], Awaitable[None]] | None = None,
         clock: Callable[[], float] | None = None,
+        banner_delay: float = 2.0,
+        console: Any | None = None,
+        total_tokens: int | None = None,
     ) -> int:
         """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
 
@@ -529,6 +626,9 @@ class QueueOrchestrator:
             clean_slate_policy: Optional override for clean_slate policy (e.g. 'always' / 'never').
             sleep_fn: Optional injected async sleep callable for deterministic clock tests.
             clock: Optional injected clock callable for deterministic duration tests.
+            banner_delay: Delay in seconds to display celebration banner before clean exit.
+            console: Optional Rich Console for bold green banner formatting.
+            total_tokens: Optional total tokens consumed override for tests.
 
         Returns:
             Exit status code (0 clean terminate/stop, 1 runtime error, 2 abort, 130 SIGINT).
@@ -540,6 +640,7 @@ class QueueOrchestrator:
         active_processor = processor or self._processor
         active_sleep = sleep_fn or asyncio.sleep
         self._lifecycle_outcomes = []
+        self._accumulated_tokens = 0
         self._summary_printed = False
         self._deferred_clean_slate = False
         self._cleaned_spec_slugs.clear()
@@ -610,6 +711,13 @@ class QueueOrchestrator:
                 await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                 printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                 await self.print_completion_summary(printer=printer, clock=active_clock)
+                await self.print_celebration_banner(
+                    printer=printer,
+                    console=console,
+                    sleep_fn=active_sleep,
+                    delay=banner_delay,
+                    total_tokens=total_tokens,
+                )
                 return 0
 
             # Standby mode: archive at drain for 'always', defer prompt for 'interactive'

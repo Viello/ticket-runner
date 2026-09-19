@@ -169,8 +169,11 @@ async def run_start(
     model_prompt: ModelPrompt | None = None,
     key_reader: Callable[[], str] | None = None,
     crash_recovery_instance: CrashRecoveryCoordinator | None = None,
+    sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+    console: Any | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
+    _configure_console_encoding()
     doctor = doctor_instance or Doctor(config_path=config_path)
     doctor_code = await run_doctor(
         config_path=config_path,
@@ -291,6 +294,8 @@ async def run_start(
             poll_interval=effective_poll_interval,
             stop_event=stop_event,
             clock=clock,
+            sleep_fn=sleep_fn,
+            console=console,
         )
         if shutting_down:
             return 130

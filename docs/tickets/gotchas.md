@@ -463,3 +463,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Pre-flight checks prompting for user input hang headless CI pipelines, subshells, and non-interactive runs when candidate terminal hosts exist but stdin is not a TTY.
 - **Solution**: Check TTY availability via `sys.stdin.isatty()` before rendering interactive selection menus; in non-interactive mode, auto-select the highest-priority detected candidate host (`wt.exe` > `pwsh.exe` > `powershell.exe` > `cmd.exe`) silently and persist it without blocking.
 
+### Windows Console Unicode Output Encoding for Celebration Box Drawing and Emoji
+- **Problem**: Rendering celebration boxes using Unicode box-drawing characters (`╔`, `═`, `║`, `╚`, `╝`) and emoji (`🎉`) on standard Windows terminals using legacy single-byte encodings (e.g. `cp1252`) raises `UnicodeEncodeError: 'charmap' codec can't encode characters`.
+- **Solution**: Reconfigure `sys.stdout` and `sys.stderr` to UTF-8 using `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` early in CLI command execution (`run_start`) before rich terminal banners or box characters are printed.
+
+### Disjoint Token Accumulation Between Ticket Outcomes and Lifecycle Accumulator
+- **Problem**: When tracking session token usage across the queue lifecycle, adding `outcome.tokens_consumed` to a running accumulator inside `run_next` while also computing total tokens by summing `_lifecycle_outcomes` causes token counts to be double-counted.
+- **Solution**: Maintain `_lifecycle_outcomes` as the authoritative record for completed ticket tokens, and reserve the manual `record_tokens` accumulator strictly for tokens logged outside individual ticket outcomes or across resumed cycles without double-adding.
+
+
