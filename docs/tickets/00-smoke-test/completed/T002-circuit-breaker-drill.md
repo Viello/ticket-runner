@@ -1,9 +1,10 @@
 # T002 — Circuit breaker verification drill
-Status: pending
+Status: skipped
 Spec: docs/specs/00-smoke-test.md
 Blocked by: T001
 Security: None
 Reasoning: 
+Failure: Malformed ready Signal file '.agent\signals\T002_ready.json': Ready signal field 'status' must be 'ready_for_verification', got: 'ready'
 
 ### Requirements
 - Append an intentional failing test to `tests/unit/test_smoke.py`:
