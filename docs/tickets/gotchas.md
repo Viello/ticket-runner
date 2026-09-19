@@ -471,4 +471,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When tracking session token usage across the queue lifecycle, adding `outcome.tokens_consumed` to a running accumulator inside `run_next` while also computing total tokens by summing `_lifecycle_outcomes` causes token counts to be double-counted.
 - **Solution**: Maintain `_lifecycle_outcomes` as the authoritative record for completed ticket tokens, and reserve the manual `record_tokens` accumulator strictly for tokens logged outside individual ticket outcomes or across resumed cycles without double-adding.
 
+### Fixed Top Panel Height in Rich Live Layout
+- **Problem**: In dynamic terminal dashboards updating live with varying telemetry length, variable header panel height causes vertical jitter and visual jumping of dashboard rows.
+- **Solution**: Constrain the top header panel to an explicit fixed height (8 lines: 6 rows + 2 panel borders) by setting `Panel(..., height=8)` and `Layout(size=8)` so that live updates refresh seamlessly without layout shifts.
+
+### Clamping and Zero-Division Protection in Token Progress Calculation
+- **Problem**: Computing token percentages via `current / ceiling * 100` can divide by zero if ceiling is zero, exceed 100% when sessions consume tokens past the 150,000 ceiling, or format negative percentages when `tokens.current` is unset or negative.
+- **Solution**: Enforce `max(0, current)` and clamp the calculated percentage with `min(100, max(0, round(current / ceiling * 100)))` alongside a zero check on `ceiling`, ensuring stable 10-character progress bar formatting across all token count bounds.
+
+
 

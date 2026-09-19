@@ -43,6 +43,7 @@ from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.state_store import StateStore
+from runner.ports.terminal_display import TerminalDisplay, UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
 
@@ -81,6 +82,8 @@ class RunnerContainer:
     state_coordinator: StateCoordinator
     state_store: StateStore
     crash_recovery: CrashRecoveryCoordinator
+    terminal_display: TerminalDisplay | None = None
+    ui_event_sink: UiEventSink | None = None
 
 
 def build_container(
@@ -115,6 +118,8 @@ def build_container(
     commit_scope: str = "queue",
     spec_slug: str | None = None,
     crash_recovery: CrashRecoveryCoordinator | None = None,
+    terminal_display: TerminalDisplay | None = None,
+    ui_event_sink: UiEventSink | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -157,10 +162,15 @@ def build_container(
         cwd=cwd,
     )
 
+    resolved_event_sink = ui_event_sink or terminal_display
+
     resolved_executor = executor or GatekeeperCommandExecutor(
         command_runner=resolved_command_runner,
         cwd=cwd,
+        ui_event_sink=resolved_event_sink,
     )
+    if hasattr(resolved_executor, "ui_event_sink") and resolved_executor.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_executor.ui_event_sink = resolved_event_sink
 
     resolved_state_store = state_store or JsonStateStore(
         path=resolved_runtime_paths.state_path
@@ -187,9 +197,12 @@ def build_container(
         default_reasoning=resolved_config.model.default_reasoning,
         model_id=model_id,
         state_coordinator=resolved_state_coordinator,
+        ui_event_sink=resolved_event_sink,
     )
     if resolved_supervisor.state_coordinator is None:
         resolved_supervisor.state_coordinator = resolved_state_coordinator
+    if hasattr(resolved_supervisor, "ui_event_sink") and resolved_supervisor.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_supervisor.ui_event_sink = resolved_event_sink
 
     resolved_coordinator = coordinator or HandoffCoordinator(
         supervisor=resolved_supervisor,
@@ -237,9 +250,12 @@ def build_container(
         clean_slate_archiver=clean_slate_archiver,
         clock=clock,
         state_coordinator=resolved_state_coordinator,
+        ui_event_sink=resolved_event_sink,
     )
     if hasattr(resolved_orchestrator, "_state_coordinator") and resolved_orchestrator.state_coordinator is None:
         resolved_orchestrator._state_coordinator = resolved_state_coordinator
+    if hasattr(resolved_orchestrator, "ui_event_sink") and resolved_orchestrator.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_orchestrator.ui_event_sink = resolved_event_sink
 
     resolved_crash_recovery = crash_recovery or CrashRecoveryCoordinator(
         state_store=resolved_state_store,
@@ -270,4 +286,6 @@ def build_container(
         state_coordinator=resolved_state_coordinator,
         state_store=resolved_state_store,
         crash_recovery=resolved_crash_recovery,
+        terminal_display=terminal_display,
+        ui_event_sink=resolved_event_sink,
     )

@@ -1,5 +1,6 @@
 # T057 — TerminalDisplay port, RingBuffer telemetry sink, and Rich Live dashboard layout
-Status: pending
+Status: completed
+Completed: 2026-09-19T14:46:00Z
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: T053
 Reasoning: medium

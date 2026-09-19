@@ -29,6 +29,11 @@ from runner.domain.exceptions import (
     TicketRunnerError,
     UserAbortError,
 )
+from runner.domain.ring_buffer import (
+    MAX_RING_BUFFER_ENTRIES,
+    RingBuffer,
+    VALID_RING_BUFFER_SOURCES,
+)
 from runner.domain.runtime_paths import DEFAULT_AGENT_DIR, RuntimePaths
 from runner.domain.signal import (
     QuestionSignal,
@@ -61,6 +66,7 @@ __all__ = [
     "GitConfig",
     "GitError",
     "LifecycleConfig",
+    "MAX_RING_BUFFER_ENTRIES",
     "ModelConfig",
     "ModelEntry",
     "NonInteractiveError",
@@ -70,6 +76,7 @@ __all__ = [
     "QuestionSignal",
     "QuestionType",
     "ReadySignal",
+    "RingBuffer",
     "RunnerConfig",
     "RunnerState",
     "RuntimePaths",
@@ -86,6 +93,7 @@ __all__ = [
     "TokenUsage",
     "UIConfig",
     "UserAbortError",
+    "VALID_RING_BUFFER_SOURCES",
     "VerificationConfig",
     "WorkerConfig",
     "effective_ceiling",

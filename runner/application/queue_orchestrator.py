@@ -20,6 +20,7 @@ from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.exceptions import UserAbortError
 from runner.domain.ticket import Ticket
+from runner.ports.terminal_display import UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
@@ -170,6 +171,7 @@ class QueueOrchestrator:
         clean_slate_archiver: CleanSlateArchiver | None = None,
         clock: Callable[[], float] | None = None,
         state_coordinator: StateCoordinator | None = None,
+        ui_event_sink: UiEventSink | None = None,
     ) -> None:
         self._cwd = cwd
         self._clock: Callable[[], float] = clock or time.monotonic
@@ -177,6 +179,7 @@ class QueueOrchestrator:
         self._lifecycle_start_time: float | None = None
         self._summary_printed: bool = False
         self._state_coordinator = state_coordinator
+        self._ui_event_sink = ui_event_sink
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
         elif self._cwd:
@@ -419,16 +422,35 @@ class QueueOrchestrator:
         if self._lock.is_locked:
             self._lock.release()
 
+    @property
+    def ui_event_sink(self) -> UiEventSink | None:
+        """UiEventSink telemetry sink."""
+        return self._ui_event_sink
+
+    @ui_event_sink.setter
+    def ui_event_sink(self, value: UiEventSink | None) -> None:
+        self._ui_event_sink = value
+
     def pause(self) -> None:
         """Pause queue progression and release the sentinel lock for external edits."""
         self._is_paused = True
         if self._state_coordinator is not None:
             self._state_coordinator.transition_to_pause_requested()
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", "Queue execution paused")
+            except Exception:
+                pass
         self.release_lock()
 
     def resume(self) -> None:
         """Resume queue progression and re-acquire sentinel lock."""
         self._is_paused = False
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", "Queue execution resumed")
+            except Exception:
+                pass
         self.acquire_lock()
 
     def close(self) -> None:
@@ -486,6 +508,12 @@ class QueueOrchestrator:
             ):
                 active_processor.state_coordinator = self._state_coordinator
 
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", f"Starting ticket {ticket.id}")
+            except Exception:
+                pass
+
         slug = None
         if ticket.spec_path:
             slug = Path(ticket.spec_path).stem
@@ -527,6 +555,13 @@ class QueueOrchestrator:
             final_outcome = outcome.with_commit_sha(sha)
             self._last_outcome = final_outcome
 
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", f"Authoring commit: {prefix}: {ticket.title}")
+                    self._ui_event_sink.emit("runner", f"Ticket {ticket.id} approved")
+                except Exception:
+                    pass
+
         elif outcome.is_skipped:
             # 1. Reset working tree to pristine state
             await self._git_operations.reset_working_tree()
@@ -535,6 +570,12 @@ class QueueOrchestrator:
             self._ticket_store.finalize_skipped(ticket, details=outcome.details)
             final_outcome = outcome
             self._last_outcome = final_outcome
+
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", f"Ticket {ticket.id} skipped")
+                except Exception:
+                    pass
 
         elif outcome.is_aborted:
             self._last_outcome = outcome
@@ -702,6 +743,11 @@ class QueueOrchestrator:
 
             # 3. Queue is exhausted
             printer("[Queue] Queue exhausted: no pending tickets.")
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", "Queue complete: all tickets processed")
+                except Exception:
+                    pass
             if self._state_coordinator is not None:
                 self._state_coordinator.transition_to_idle()
 

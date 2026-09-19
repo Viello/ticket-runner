@@ -28,6 +28,7 @@ from runner.domain.telemetry import BudgetAction, BudgetMonitor
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.terminal_display import UiEventSink
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,66 @@ def _default_notify(notice: str) -> None:
     sys.stderr.flush()
 
 
+def _format_tool_event(event: OpenCodeEvent) -> str:
+    """Format an OpenCode tool event into a human-readable telemetry line."""
+    tool_name = ""
+    part = event.part if isinstance(event.part, dict) else {}
+    raw = event.raw if isinstance(event.raw, dict) else {}
+
+    for container in (part, raw):
+        for k in ("tool", "name", "tool_name"):
+            v = container.get(k)
+            if isinstance(v, str) and v.strip():
+                tool_name = v.strip()
+                break
+        if tool_name:
+            break
+
+    target = ""
+    input_dicts: list[dict[str, Any]] = []
+    if isinstance(part.get("state"), dict) and isinstance(part["state"].get("input"), dict):
+        input_dicts.append(part["state"]["input"])
+
+    for container in (part, raw):
+        for key in ("input", "args", "arguments", "parameters"):
+            val = container.get(key)
+            if isinstance(val, dict):
+                input_dicts.append(val)
+            elif isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, dict):
+                        input_dicts.append(parsed)
+                except Exception:
+                    pass
+
+    for inp in input_dicts:
+        for fk in (
+            "filePath",
+            "file_path",
+            "path",
+            "file",
+            "filename",
+            "command",
+            "cmd",
+            "query",
+            "pattern",
+            "target",
+        ):
+            fval = inp.get(fk)
+            if isinstance(fval, str) and fval.strip():
+                target = fval.strip()
+                break
+        if target:
+            break
+
+    display_name = tool_name.capitalize() if tool_name else "Tool"
+    if target:
+        short_target = target if len(target) <= 60 else f"{target[:57]}..."
+        return f"Tool: {display_name} {short_target}"
+    return f"Tool: {display_name}"
+
+
 class WorkerSupervisor:
     """Supervises OpenCode Worker subprocess session runs with telemetry, watchdog, and termination ladder."""
 
@@ -143,6 +204,7 @@ class WorkerSupervisor:
         default_reasoning: str = "",
         model_id: str | None = None,
         state_coordinator: StateCoordinator | None = None,
+        ui_event_sink: UiEventSink | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -162,11 +224,21 @@ class WorkerSupervisor:
         self._default_reasoning = default_reasoning.strip() if default_reasoning else ""
         self._model_id = model_id.strip() if (model_id and model_id.strip()) else None
         self._state_coordinator = state_coordinator
+        self._ui_event_sink = ui_event_sink
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def ui_event_sink(self) -> UiEventSink | None:
+        """Configured UiEventSink for telemetry output."""
+        return self._ui_event_sink
+
+    @ui_event_sink.setter
+    def ui_event_sink(self, value: UiEventSink | None) -> None:
+        self._ui_event_sink = value
 
     @property
     def state_coordinator(self) -> StateCoordinator | None:
@@ -519,6 +591,13 @@ class WorkerSupervisor:
 
                 if self._on_event is not None:
                     self._on_event(event)
+
+                if self._ui_event_sink is not None and event.type in ("tool_call", "tool_use"):
+                    try:
+                        tool_msg = _format_tool_event(event)
+                        self._ui_event_sink.emit("worker", tool_msg)
+                    except Exception:
+                        pass
 
                 if active_session_id is None and event.session_id:
                     active_session_id = event.session_id
