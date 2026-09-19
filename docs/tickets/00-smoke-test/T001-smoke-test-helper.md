@@ -23,7 +23,11 @@ Reasoning:
   ```json
   {
     "ticket_id": "T001",
-    "status": "ready"
+    "status": "ready",
+    "modified_files": ["runner/smoke.py", "tests/unit/test_smoke.py"],
+    "self_review_notes": "Implemented smoke helper and verified with unit test",
+    "new_gotchas": [],
+    "timestamp": "2026-09-19T06:00:00Z"
   }
   ```
 - Do NOT author any git commits directly (the Gatekeeper alone authors commits upon passing verification).

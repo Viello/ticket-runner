@@ -15,7 +15,11 @@ Reasoning:
   ```json
   {
     "ticket_id": "T002",
-    "status": "ready"
+    "status": "ready",
+    "modified_files": ["tests/unit/test_smoke.py"],
+    "self_review_notes": "Added intentional failure to exercise circuit breaker",
+    "new_gotchas": [],
+    "timestamp": "2026-09-19T06:00:00Z"
   }
   ```
 - Keep the intentional failure in place across any retry feedback attempts to allow the Gatekeeper to exhaust all 3 verification attempts and trip the circuit breaker.
