@@ -447,6 +447,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In Python, `isinstance(True, int)` evaluates to `True`, which allows boolean values to silently pass naive integer typechecks (`isinstance(value, int)`) for token counts or verification attempt fields in domain models.
 - **Solution**: Explicitly check `isinstance(value, bool)` before `isinstance(value, int)` in domain entity validation (`TokenState` and `RunnerState`) to reject booleans and raise `StateFormatError` deterministically.
 
+### Working Tree Preservation and Runtime Filtering During Crash Recovery
+- **Problem**: Running `git reset --hard` or `git clean` during crash recovery destroys uncommitted worker edits, while naively parsing `git status --porcelain` includes runtime state (`.agent/`) and untracked build artifacts (`__pycache__`, `.pyc`, `.coverage`, `dist/`), polluting reconnection prompts and confusing the model.
+- **Solution**: Never reset or clean the working tree during crash recovery; parse porcelain output with path normalization and filter out `.agent/` prefix alongside common build artifact directories and extensions before listing uncommitted files in the reconnection prompt.
+
+### Cross-Platform Filename Safety for Corrupt State Quarantine
+- **Problem**: Using standard ISO-8601 UTC timestamp strings (`YYYY-MM-DDTHH:MM:SSZ`) containing colons (`:`) in quarantine filenames (`state.json.corrupt.<timestamp>`) fails on Windows because NTFS prohibits colons in file paths.
+- **Solution**: Format quarantine timestamps without colons using `%Y%m%dT%H%M%SZ` (e.g. `state.json.corrupt.20260919T100500Z`), ensuring cross-platform safety on Windows, Linux, and macOS without renaming errors.
+
+
 
 
 

@@ -1,5 +1,6 @@
 # T054 — Crash recovery orchestrator with uncommitted git working tree resumption
-Status: pending
+Status: completed
+Completed: 2026-09-19T09:07:00Z
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: T053
 Reasoning: medium

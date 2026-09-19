@@ -13,6 +13,7 @@ from typing import Any
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.ui.model_prompt import ModelPrompt
+from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.doctor import Doctor, DoctorReport
 from runner.application.model_selection import ModelSelectionInteractor
 from runner.application.queue_orchestrator import QueueOrchestrator
@@ -167,6 +168,7 @@ async def run_start(
     state_store: StateStore | None = None,
     model_prompt: ModelPrompt | None = None,
     key_reader: Callable[[], str] | None = None,
+    crash_recovery_instance: CrashRecoveryCoordinator | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -184,14 +186,19 @@ async def run_start(
         config = loader.load(config_path)
 
     supervisor: WorkerSupervisor | None = supervisor_instance
+    crash_recovery: CrashRecoveryCoordinator | None = crash_recovery_instance
     if container_instance is not None:
         orchestrator = container_instance.orchestrator
         if supervisor is None:
             supervisor = container_instance.supervisor
+        if crash_recovery is None:
+            crash_recovery = getattr(container_instance, "crash_recovery", None)
     elif orchestrator_instance is not None:
         orchestrator = orchestrator_instance
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
+        if crash_recovery is None:
+            crash_recovery = getattr(orchestrator, "crash_recovery", None)
     else:
         if model_id is not None:
             valid_model_ids = [m.id for m in config.model.models]
@@ -224,10 +231,23 @@ async def run_start(
             print(f"\n[Runner] Error: State persistence failed: {exc}")
             return 1
 
-        container = build_container(config=config, clock=clock, model_id=model_id)
+        container = build_container(
+            config=config,
+            clock=clock,
+            model_id=model_id,
+            state_store=effective_state_store,
+        )
         orchestrator = container.orchestrator
         if supervisor is None:
             supervisor = container.supervisor
+        if crash_recovery is None:
+            crash_recovery = getattr(container, "crash_recovery", None)
+
+    if crash_recovery is not None:
+        try:
+            await crash_recovery.recover()
+        except Exception as exc:
+            print(f"\n[Runner] Error during crash recovery: {exc}")
 
     if stop_event is None:
         stop_event = asyncio.Event()

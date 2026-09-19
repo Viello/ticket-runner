@@ -18,6 +18,7 @@ from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
 from runner.application.clean_slate import CleanSlateArchiver
+from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.gatekeeper import GatekeeperCommandExecutor
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import EscalationNotice, HandoffCoordinator
@@ -79,6 +80,7 @@ class RunnerContainer:
     command_runner: CommandRunner
     state_coordinator: StateCoordinator
     state_store: StateStore
+    crash_recovery: CrashRecoveryCoordinator
 
 
 def build_container(
@@ -112,6 +114,7 @@ def build_container(
     gotchas_path: Path | str | None = None,
     commit_scope: str = "queue",
     spec_slug: str | None = None,
+    crash_recovery: CrashRecoveryCoordinator | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -238,6 +241,17 @@ def build_container(
     if hasattr(resolved_orchestrator, "_state_coordinator") and resolved_orchestrator.state_coordinator is None:
         resolved_orchestrator._state_coordinator = resolved_state_coordinator
 
+    resolved_crash_recovery = crash_recovery or CrashRecoveryCoordinator(
+        state_store=resolved_state_store,
+        git_operations=resolved_git_ops,
+        worker_supervisor=resolved_supervisor,
+        state_coordinator=resolved_state_coordinator,
+        runtime_paths=resolved_runtime_paths,
+        ticket_store=resolved_ticket_store,
+        printer=printer,
+        clock=clock,
+    )
+
     return RunnerContainer(
         config=resolved_config,
         orchestrator=resolved_orchestrator,
@@ -255,4 +269,5 @@ def build_container(
         command_runner=resolved_command_runner,
         state_coordinator=resolved_state_coordinator,
         state_store=resolved_state_store,
+        crash_recovery=resolved_crash_recovery,
     )
