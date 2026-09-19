@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import pytest
 
-from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.cli.subprocess_runner import SubprocessRunner, unwrap_batch_file
 from runner.adapters.cli.windows_job import WindowsJobObject
 from runner.domain.exceptions import CommandNotFoundError, DoctorError, GitError, ConfigError, TicketRunnerError
 from runner.ports.command_runner import CommandResult, CommandRunner, ProcessHandle
@@ -614,5 +614,101 @@ def test_subprocess_handle_taskkill_fallback_when_job_unavailable(monkeypatch: p
         )
 
     asyncio.run(_run())
+
+
+# --- Batch File Wrapper Unwrapping and Multiline Argument Tests ---
+
+def test_unwrap_batch_file_returns_none_for_non_batch_or_missing(tmp_path: Path) -> None:
+    """Non-.cmd/.bat files or missing files return None."""
+    non_batch = tmp_path / "app.exe"
+    non_batch.touch()
+    assert unwrap_batch_file(str(non_batch)) is None
+    assert unwrap_batch_file(str(tmp_path / "missing.cmd")) is None
+
+
+def test_unwrap_batch_file_npm_binary_pattern(tmp_path: Path) -> None:
+    """Resolves npm-style binary wrapper '%dp0%\\node_modules\\...\\name.exe' to real PE binary."""
+    bin_dir = tmp_path / "node_modules" / "opencode-ai" / "bin"
+    bin_dir.mkdir(parents=True)
+    real_exe = bin_dir / "opencode.exe"
+    real_exe.touch()
+
+    cmd_file = tmp_path / "opencode.cmd"
+    cmd_file.write_text(
+        '@ECHO off\n"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe" %*\n',
+        encoding="utf-8",
+    )
+
+    result = unwrap_batch_file(str(cmd_file))
+    assert result is not None
+    target_exe, extra_args = result
+    assert Path(target_exe).resolve() == real_exe.resolve()
+    assert extra_args == []
+
+
+def test_unwrap_batch_file_node_script_pattern(tmp_path: Path) -> None:
+    """Resolves npm-style node script wrapper '%_prog%' '%dp0%\\dist\\cli.js'."""
+    script_dir = tmp_path / "dist"
+    script_dir.mkdir(parents=True)
+    script_file = script_dir / "cli.js"
+    script_file.touch()
+
+    cmd_file = tmp_path / "tool.cmd"
+    cmd_file.write_text(
+        '@ECHO off\n"%_prog%" "%dp0%\\dist\\cli.js" %*\n',
+        encoding="utf-8",
+    )
+
+    result = unwrap_batch_file(str(cmd_file))
+    assert result is not None
+    target_exe, extra_args = result
+    assert "node" in Path(target_exe).stem.lower()
+    assert len(extra_args) == 1
+    assert Path(extra_args[0]).resolve() == script_file.resolve()
+
+
+def test_subprocess_runner_preserves_multiline_arg_via_batch_wrapper(tmp_path: Path) -> None:
+    """Verify that SubprocessRunner unwraps Windows batch scripts so multiline prompt arguments are not truncated."""
+    if sys.platform != "win32":
+        pytest.skip("Windows batch wrapper unwrap test")
+
+    runner = SubprocessRunner()
+
+    record_py = tmp_path / "record_argv.py"
+    received_json = tmp_path / "received.json"
+    record_py.write_text(
+        "import sys, json\n"
+        f"with open(r'{received_json}', 'w', encoding='utf-8') as f:\n"
+        "    json.dump(sys.argv[1:], f)\n",
+        encoding="utf-8",
+    )
+
+    fake_cmd = tmp_path / "fake_tool.cmd"
+    fake_cmd.write_text(
+        f'@ECHO off\n"{sys.executable}" "{record_py}" %*\n',
+        encoding="utf-8",
+    )
+
+    multiline_prompt = (
+        "# Ticket Task: T001 — Smoke test\n\n"
+        "## Execution Skill & Discipline\n"
+        "Before writing or modifying any code, read AGENTS.md.\n\n"
+        "## Active Ticket Details\n"
+        "Requirements here."
+    )
+
+    async def _run() -> None:
+        handle = await runner.spawn([str(fake_cmd), "--auto", multiline_prompt])
+        exit_code = await handle.wait()
+        assert exit_code == 0
+
+        import json
+        data = json.loads(received_json.read_text(encoding="utf-8"))
+        assert len(data) == 2
+        assert data[0] == "--auto"
+        assert data[1] == multiline_prompt
+
+    asyncio.run(_run())
+
 
 
