@@ -54,18 +54,22 @@ class OpenCodeEvent:
 def build_opencode_run_command(
     prompt: str,
     session_id: str | None = None,
+    variant: str | None = None,
+    model_id: str | None = None,
 ) -> list[str]:
     """Construct the argv token list for opencode run.
 
     Args:
         prompt: Task instruction or resume message. Must be a non-empty string.
         session_id: Optional session identifier for resuming an existing session.
+        variant: Optional reasoning variant flag passed via ``--variant``.
+        model_id: Optional model identifier flag passed via ``-m``.
 
     Returns:
         Token list: ['opencode', 'run', '--format', 'json', ...]
 
     Raises:
-        TypeError: If prompt is not a string.
+        TypeError: If prompt, variant, or model_id is not a string.
         ValueError: If prompt is empty or session_id fails the session allowlist.
     """
     if not isinstance(prompt, str):
@@ -82,8 +86,23 @@ def build_opencode_run_command(
             )
         cmd.extend(["--session", session_id])
 
+    if model_id is not None:
+        if not isinstance(model_id, str):
+            raise TypeError(f"Model ID must be a string, got {type(model_id).__name__}")
+        clean_model_id = model_id.strip()
+        if clean_model_id:
+            cmd.extend(["-m", clean_model_id])
+
+    if variant is not None:
+        if not isinstance(variant, str):
+            raise TypeError(f"Variant must be a string, got {type(variant).__name__}")
+        clean_variant = variant.strip()
+        if clean_variant:
+            cmd.extend(["--variant", clean_variant])
+
     cmd.extend(["--auto", prompt])
     return cmd
+
 
 
 def _extract_token_usage(tokens_data: Any) -> TokenUsage | None:

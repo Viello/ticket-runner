@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
-from runner.domain.config import RunnerConfig
+from runner.domain.config import ModelConfig, ModelEntry, RunnerConfig
 from runner.domain.exceptions import ConfigError
 from runner.ports.config_loader import ConfigLoader
 
@@ -331,4 +331,147 @@ def test_load_discord_numeric_channel_id_as_int() -> None:
 
     config = loader.load_from_dict(data)
     assert config.discord.channel_id == "123456789012345678"
+
+
+def test_load_config_without_model_section_defaults() -> None:
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(VALID_CONFIG_YAML)
+    assert isinstance(config.model, ModelConfig)
+    assert config.model.models == ()
+    assert config.model.default_reasoning == ""
+
+
+def test_load_config_with_valid_model_section() -> None:
+    yaml_with_model = VALID_CONFIG_YAML + """
+model:
+  default_reasoning: "medium"
+  models:
+    - id: "deepseek/deepseek-chat"
+      label: "DeepSeek Chat"
+    - id: "qwen/qwen-plus"
+      label: "Qwen Plus"
+"""
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_with_model)
+    assert config.model.default_reasoning == "medium"
+    assert len(config.model.models) == 2
+    assert config.model.models[0] == ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat")
+    assert config.model.models[1] == ModelEntry(id="qwen/qwen-plus", label="Qwen Plus")
+
+
+def test_load_config_example_yaml_model_section() -> None:
+    example_path = Path("config.example.yaml")
+    loader = YamlConfigLoader()
+    config = loader.load(example_path)
+    assert len(config.model.models) == 2
+    assert config.model.models[0] == ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat")
+    assert config.model.models[1] == ModelEntry(id="qwen/qwen-plus", label="Qwen Plus")
+    assert config.model.default_reasoning == ""
+
+
+def test_load_model_section_null() -> None:
+    yaml_null_model = VALID_CONFIG_YAML + "\nmodel: null\n"
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_null_model)
+    assert config.model == ModelConfig()
+
+
+def test_load_model_section_not_dict() -> None:
+    yaml_invalid_model = VALID_CONFIG_YAML + "\nmodel: 'not a mapping'\n"
+    loader = YamlConfigLoader()
+    with pytest.raises(ConfigError, match="Section 'model' must be a mapping"):
+        loader.load_from_string(yaml_invalid_model)
+
+
+def test_load_model_models_not_list() -> None:
+    yaml_invalid = VALID_CONFIG_YAML + """
+model:
+  models: "not-a-list"
+"""
+    loader = YamlConfigLoader()
+    with pytest.raises(ConfigError, match="Field 'models' in section 'model' must be a list"):
+        loader.load_from_string(yaml_invalid)
+
+
+def test_load_model_models_entry_not_dict() -> None:
+    yaml_invalid = VALID_CONFIG_YAML + """
+model:
+  models:
+    - "just-a-string"
+"""
+    loader = YamlConfigLoader()
+    with pytest.raises(ConfigError, match="must be a mapping"):
+        loader.load_from_string(yaml_invalid)
+
+
+@pytest.mark.parametrize(
+    "bad_entry",
+    [
+        {"label": "No ID"},
+        {"id": "", "label": "Empty ID"},
+        {"id": "   ", "label": "Whitespace ID"},
+    ],
+)
+def test_load_model_models_invalid_id(bad_entry: dict[str, str]) -> None:
+    import yaml
+    loader = YamlConfigLoader()
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["model"] = {"models": [bad_entry]}
+    with pytest.raises(ConfigError):
+        loader.load_from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "bad_entry",
+    [
+        {"id": "valid/id"},
+        {"id": "valid/id", "label": ""},
+        {"id": "valid/id", "label": "   "},
+    ],
+)
+def test_load_model_models_invalid_label(bad_entry: dict[str, str]) -> None:
+    import yaml
+    loader = YamlConfigLoader()
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["model"] = {"models": [bad_entry]}
+    with pytest.raises(ConfigError):
+        loader.load_from_dict(data)
+
+
+def test_load_model_models_duplicate_id() -> None:
+    import yaml
+    loader = YamlConfigLoader()
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["model"] = {
+        "models": [
+            {"id": "provider/model", "label": "Model 1"},
+            {"id": "provider/model", "label": "Model 2"},
+        ]
+    }
+    with pytest.raises(ConfigError, match="Duplicate model id"):
+        loader.load_from_dict(data)
+
+
+def test_load_model_default_reasoning_null() -> None:
+    yaml_content = VALID_CONFIG_YAML + """
+model:
+  default_reasoning:
+  models:
+    - id: "deepseek/chat"
+      label: "DeepSeek Chat"
+"""
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_content)
+    assert config.model.default_reasoning == ""
+
+
+@pytest.mark.parametrize("invalid_reasoning", [123, True, ["low"]])
+def test_load_model_default_reasoning_invalid(invalid_reasoning: object) -> None:
+    import yaml
+    loader = YamlConfigLoader()
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["model"] = {"default_reasoning": invalid_reasoning}
+    with pytest.raises(ConfigError, match="default_reasoning"):
+        loader.load_from_dict(data)
+
 

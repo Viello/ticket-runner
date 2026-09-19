@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 from runner.domain.exceptions import ConfigError
@@ -166,6 +166,52 @@ class GitConfig:
 
 
 @dataclass(frozen=True)
+class ModelEntry:
+    """A selectable LLM option with provider/model id and human-readable label."""
+
+    id: str
+    label: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ConfigError("ModelEntry id must be a non-empty string")
+        if not isinstance(self.label, str) or not self.label.strip():
+            raise ConfigError("ModelEntry label must be a non-empty string")
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """Configured LLM options and default reasoning variant."""
+
+    models: tuple[ModelEntry, ...] = ()
+    default_reasoning: str = ""
+
+    def __post_init__(self) -> None:
+        if self.default_reasoning is None:
+            object.__setattr__(self, "default_reasoning", "")
+        elif not isinstance(self.default_reasoning, str):
+            raise ConfigError("ModelConfig default_reasoning must be a string")
+
+        if not isinstance(self.models, (tuple, list)):
+            raise ConfigError("ModelConfig models must be a tuple or list of ModelEntry")
+
+        for entry in self.models:
+            if not isinstance(entry, ModelEntry):
+                raise ConfigError(
+                    f"ModelConfig models entries must be ModelEntry, got: {type(entry).__name__}"
+                )
+
+        if not isinstance(self.models, tuple):
+            object.__setattr__(self, "models", tuple(self.models))
+
+        seen_ids: set[str] = set()
+        for entry in self.models:
+            if entry.id in seen_ids:
+                raise ConfigError(f"Duplicate model id detected in ModelConfig: '{entry.id}'")
+            seen_ids.add(entry.id)
+
+
+@dataclass(frozen=True)
 class RunnerConfig:
     """Authoritative composite configuration for Ticket Runner."""
 
@@ -177,8 +223,10 @@ class RunnerConfig:
     discord: DiscordConfig
     lifecycle: LifecycleConfig
     git: GitConfig
+    model: ModelConfig = field(default_factory=ModelConfig)
 
     @property
     def token_budget(self) -> TokenBudgetConfig:
         """Convenience alias for tokens configuration."""
         return self.tokens
+

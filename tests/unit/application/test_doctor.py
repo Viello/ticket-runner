@@ -11,6 +11,7 @@ from runner.application.doctor import (
     CHECK_DISCORD,
     CHECK_GIT,
     CHECK_HOOK,
+    CHECK_MODEL,
     CHECK_OPENCODE,
     CHECK_QUEUE,
     CHECK_SKILLS,
@@ -78,18 +79,27 @@ def _make_config(
     test_cmd: str = "python -m pytest",
     build_cmd: str = "",
     execution_skill: str = ".agents/skills/implement/SKILL.md",
+    model: ModelConfig | None = None,
 ) -> RunnerConfig:
     """Construct a minimal valid RunnerConfig with scripted verification commands."""
     from runner.domain.config import (
         DiscordConfig,
         GitConfig,
         LifecycleConfig,
+        ModelConfig,
+        ModelEntry,
         PresenceConfig,
         ProjectConfig,
         TokenBudgetConfig,
         VerificationConfig,
         WorkerConfig,
     )
+
+    if model is None:
+        model = ModelConfig(
+            models=(ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat"),),
+            default_reasoning="",
+        )
 
     return RunnerConfig(
         project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
@@ -100,7 +110,9 @@ def _make_config(
         discord=DiscordConfig(enabled=False),
         lifecycle=LifecycleConfig(),
         git=GitConfig(),
+        model=model,
     )
+
 
 
 def test_doctor_report_helpers() -> None:
@@ -441,6 +453,58 @@ async def test_check_verification_commands_skipped_without_config() -> None:
 
 
 @pytest.mark.anyio
+async def test_check_model_passes_when_models_configured() -> None:
+    """Doctor check_model passes when at least one model is configured."""
+    from runner.domain.config import ModelConfig, ModelEntry
+
+    config = _make_config(
+        model=ModelConfig(
+            models=(
+                ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat"),
+                ModelEntry(id="qwen/qwen-plus", label="Qwen Plus"),
+            )
+        )
+    )
+    doctor = Doctor(config_loader=FakeConfigLoader(config=config))
+    await doctor.check_config()
+
+    result = await doctor.check_model()
+    assert result.passed is True
+    assert result.name == CHECK_MODEL
+    assert result.remediation is None
+    assert "2 model(s)" in result.message
+
+
+@pytest.mark.anyio
+async def test_check_model_fails_when_models_empty() -> None:
+    """Doctor check_model fails when models list is empty, naming model.models in message and remediation."""
+    from runner.domain.config import ModelConfig
+
+    config = _make_config(model=ModelConfig(models=()))
+    doctor = Doctor(config_loader=FakeConfigLoader(config=config))
+    await doctor.check_config()
+
+    result = await doctor.check_model()
+    assert result.passed is False
+    assert result.name == CHECK_MODEL
+    assert "model.models" in result.message
+    assert result.remediation is not None
+    assert "model:" in result.remediation
+    assert "models:" in result.remediation
+    assert "default_reasoning:" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_model_skipped_without_config() -> None:
+    """Doctor check_model skips gracefully when configuration is not loaded."""
+    doctor = Doctor()
+    result = await doctor.check_model()
+    assert result.passed is True
+    assert result.name == CHECK_MODEL
+    assert "skipped" in result.message.lower()
+
+
+@pytest.mark.anyio
 async def test_run_halts_on_first_failure(tmp_path: Path) -> None:
     """Verify run() halts on the first failed check when halt_on_failure=True."""
     runner = FakeCommandRunner()
@@ -475,8 +539,9 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
     report = await doctor.run(local_only=False, halt_on_failure=False)
 
     assert report.passed is False
-    # All 9 checks executed
-    assert len(report.checks) == 9
+    # All 10 checks executed
+    assert len(report.checks) == 10
+
 
 
 @pytest.mark.anyio
@@ -706,4 +771,43 @@ async def test_doctor_run_includes_agents_md_and_skills_checks(tmp_path: Path) -
     check_names = [c.name for c in report.checks]
     assert CHECK_AGENTS_MD in check_names
     assert CHECK_SKILLS in check_names
+
+
+@pytest.mark.anyio
+async def test_doctor_run_order_includes_model_after_config(tmp_path: Path) -> None:
+    """Verify Doctor.run() includes CHECK_MODEL immediately after CHECK_CONFIG."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    config = _make_config()
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,
+    )
+
+    report = await doctor.run(local_only=True, halt_on_failure=False)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_MODEL in check_names
+    config_idx = check_names.index(CHECK_CONFIG)
+    model_idx = check_names.index(CHECK_MODEL)
+    assert model_idx == config_idx + 1
+
 

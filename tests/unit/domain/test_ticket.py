@@ -40,6 +40,19 @@ def test_ticket_carries_all_fields() -> None:
     assert ticket.gotchas == ("Keep repo style.",)
     assert ticket.path == Path("docs/tickets/02-queue-and-tickets/T006-ticket-entity.md")
     assert ticket.security_required is False
+    assert ticket.reasoning == ""
+
+
+def test_ticket_accepts_explicit_reasoning() -> None:
+    assert _ticket(reasoning="high").reasoning == "high"
+    assert _ticket(reasoning="").reasoning == ""
+
+
+@pytest.mark.parametrize("invalid_value", [123, True, False, None, [], {}])
+def test_ticket_rejects_non_str_reasoning(invalid_value: object) -> None:
+    with pytest.raises(TicketFormatError, match="reasoning"):
+        _ticket(reasoning=invalid_value)
+
 
 
 def test_ticket_accepts_explicit_security_required() -> None:

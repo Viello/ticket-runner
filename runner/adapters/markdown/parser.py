@@ -60,6 +60,7 @@ class TicketMarkdownParser:
             gotchas=sections["gotchas"],
             path=ticket_path,
             security_required=self._parse_security_required(metadata),
+            reasoning=self._parse_reasoning(metadata),
         )
 
     def _title_index(self, lines: list[str], path: Path) -> int:
@@ -104,6 +105,13 @@ class TicketMarkdownParser:
         if raw is None:
             return False
         return raw.strip().lower() == "required"
+
+    def _parse_reasoning(self, metadata: dict[str, str]) -> str:
+        raw = metadata.get("reasoning")
+        if raw is None:
+            return ""
+        return raw.strip()
+
 
     def _resolve_spec_path(self, metadata: dict[str, str], path: Path) -> str:
         explicit = metadata.get("spec", "").strip()

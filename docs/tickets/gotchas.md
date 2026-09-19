@@ -407,4 +407,40 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When standby resume cycles process newly detected tickets and drain again, re-triggering clean-slate prompts mid-watch re-introduces terminal blocking during active polling.
 - **Solution**: Track deferred clean-slate status and already cleaned spec slugs without prompting during standby re-drain; fire the interactive prompt exactly once upon final lifecycle exit.
 
+### Bounded State Reads with Fast-Path Stat Size Check
+- **Problem**: Reading unvalidated on-disk state documents into memory using standard `read_text()` or `json.load()` can cause memory exhaustion or hang the process when encountering corrupted or hostile multi-gigabyte files. Relying solely on `stat().st_size` can be inaccurate or bypassed on special filesystems or streaming descriptors.
+- **Solution**: Pair a pre-flight `stat().st_size > max_bytes` check with a bounded binary read (`handle.read(max_bytes + 1)`). If the returned chunk exceeds `max_bytes`, immediately raise `StateFormatError` before decoding UTF-8 or parsing JSON, capping memory usage deterministically.
+
+### State Adapter Caller-Owned Exact Document Writes
+- **Problem**: Attempting automatic read-modify-write merges inside low-level state persistence adapters tightly couples the storage layer to specific document schemas and can silently mask key deletion or clobber concurrent updates.
+- **Solution**: Keep the `StateStore` port protocol strictly as an exact-document writer (`write(document)` writes exactly the supplied mapping atomically without reading), requiring high-level application interactors to own schema evolution and explicit read-modify-write merge semantics.
+
+### Tolerant Configuration Loader with Doctor Model Guard
+- **Problem**: Requiring the new `model:` configuration block in `YamlConfigLoader` or `REQUIRED_SECTIONS` causes smoke tests loading untracked live local `config.yaml` files to fail before developers have updated their local workspace configuration.
+- **Solution**: Keep `model:` optional in `YamlConfigLoader` (defaulting absent or null blocks to `ModelConfig()`), append `model: ModelConfig = field(default_factory=ModelConfig)` as the final field of `RunnerConfig` to maintain positional compatibility, treat empty YAML `default_reasoning:` (which parses as `None`) as `""`, and let the Doctor's pre-flight check own the non-empty `model.models` validation guard with an actionable remediation block.
+
+### Subprocess Argument Positioning and Untrusted Variant Handling
+- **Problem**: Passing untrusted ticket frontmatter such as `Reasoning:` directly into subprocess CLI arguments risks token misalignment or injection if shell-quoted or split. Additionally, appending CLI flags in the wrong position can break existing downstream tests or CLI parsers expecting `--auto <prompt>` as the terminal arguments, or tests indexing fixed token positions (`cmd[4]`, `cmd[5]`, `cmd[7]`).
+- **Solution**: Insert `--variant <variant>` strictly after `--session <id>` and before `--auto <prompt>`, only when variant is non-empty after stripping whitespace. Pass the value as a single argv token without shell quoting or word-splitting. In test doubles (`FakeCommandRunner`), verify spawned subprocesses via `fake_runner.spawns` rather than `fake_runner.commands` (which only captures `run()` calls).
+
+### Model CLI Flag Validation and Subprocess Ordering
+- **Problem**: Passing an unknown or unvalidated `--model` CLI argument could spawn OpenCode with invalid model identifiers or exit with exit code 2 (confusing runtime validation errors with operator aborts), and placing `-m <model_id>` incorrectly in argv token lists could disrupt flag precedence or token indexing in test suites.
+- **Solution**: Restrict `--model` to the `start` subparser, validate the provided model ID against configured `model.models` in `run_start` after Doctor passes, print configured choices and exit with code 1 upon mismatch before container instantiation. In `build_opencode_run_command`, place `-m <model_id>` before `--variant` and before `--auto` as discrete argv tokens, omitting `-m` when `model_id` is empty or None.
+
+### Windows Console Raw Key Reading and Non-Interactive Stdin Fallback
+- **Problem**: Reading raw console keystrokes using `msvcrt.getwch()` on Windows raises exceptions or hangs in non-interactive pipelines, subshells, redirected test environments, or non-Windows hosts where `msvcrt` is unavailable.
+- **Solution**: Wrap raw key reading with `sys.stdin.isatty()` checks and lazy import error handling, raising `NonInteractiveError` with an actionable message directing the operator to specify `--model` explicitly whenever interactive console input cannot be obtained.
+
+### Untrusted State Model Re-Validation and Drift Fallback
+- **Problem**: Restoring previously persisted state such as `selected_model` from `.agent/state.json` without re-validating against active configuration risks passing invalid or deprecated model IDs into worker commands if the configuration file changed between sessions.
+- **Solution**: Always re-validate state-recorded model identifiers against configured `model.models`; if the recorded model is missing, emit a warning that the model is no longer configured and fall through to auto-selection or interactive prompting rather than crashing or propagating an unconfigured model string.
+
+### Injected Container Test Isolation for Startup Interactors
+- **Problem**: Running startup model resolution and state store persistence unconditionally in CLI entry points like `run_start` causes in-memory test doubles (`container_instance` or `orchestrator_instance`) to inadvertently touch disk state files (`.agent/state.json`) or block on console input.
+- **Solution**: Confine startup resolution and state persistence strictly to the locally built container path in `run_start`, allowing tests passing injected containers or orchestrators to skip model selection entirely, while exposing explicit `state_store`, `model_prompt`, and `key_reader` injection seams on `run_start`.
+
+
+
+
+
 

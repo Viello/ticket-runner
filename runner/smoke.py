@@ -1,0 +1,2 @@
+def get_smoke_status() -> dict:
+    return {"status": "ok", "message": "smoke test helper active"}

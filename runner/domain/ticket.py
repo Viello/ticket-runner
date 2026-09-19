@@ -53,6 +53,7 @@ class Ticket:
     gotchas: tuple[str, ...]
     path: Path
     security_required: bool = False
+    reasoning: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not TICKET_ID_PATTERN.match(self.id):
@@ -101,3 +102,9 @@ class Ticket:
             raise TicketFormatError(
                 f"Ticket security_required must be a bool, got: {self.security_required!r}"
             )
+
+        if not isinstance(self.reasoning, str):
+            raise TicketFormatError(
+                f"Ticket reasoning must be a str, got: {self.reasoning!r}"
+            )
+

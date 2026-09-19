@@ -232,6 +232,14 @@ project:
   branch: "agent/ticket-runner"
   base_branch: "main"
 
+model:
+  default_reasoning: ""      # passed as --variant; flag is omitted when empty
+  models:
+    - id: "deepseek/deepseek-chat"
+      label: "DeepSeek Chat"
+    - id: "qwen/qwen-plus"
+      label: "Qwen Plus"
+
 worker:
   execution_skill: ".agents/skills/implement/SKILL.md"
 

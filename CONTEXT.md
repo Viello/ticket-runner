@@ -80,5 +80,42 @@ _Avoid_: Summary, abstract, snippet
 A structured methodology handbook stored as a markdown file under `.agents/skills/<name>/SKILL.md` that guides Worker discipline across lifecycle phases (implementation, pre-signal review, security, and debugging) via direct file reads.
 _Avoid_: Plugin, slash command, agent tool
 
+**TUI Session**:
+An OpenCode session run in interactive TUI mode (without `--format json`) against the same session id as the active Worker Session, launched by the Runner after pausing at a signal boundary to allow direct user inspection or input. The Runner is blind to all activity during a TUI Session: tokens are untracked, Signals are not emitted, and the Gatekeeper does not run.
+_Avoid_: Live session, interactive session, direct session, manual session
 
+**Status Card**:
+The pinned message at the top of a Ticket's Discord thread, edited in-place at every phase transition, showing ticket ID, slug, spec, current phase, attempt count, token usage, and start/last-updated timestamps. A stale Last updated timestamp is the canonical indicator of a crashed bot or frozen Runner.
+_Avoid_: Pinned header, ticket dashboard, summary message
 
+**Live Digest**:
+A single plain-text Discord message posted at the start of each Session Run and edited in-place to show a rolling 500-character window of the LLM's current response content. Always posted regardless of Presence Mode. Marked `[done]` when the Session Run ends.
+_Avoid_: LLM stream, rolling excerpt, live feed, output log
+
+**DiscordGateway**:
+The raw Discord API seam (a protocol/interface) exposing primitive operations — `post_message`, `edit_message`, `pin_message`, `create_thread`, `edit_thread`, `archive_thread` — without embedding any routing or formatting logic. Implemented by the real discord.py adapter and by in-memory test doubles.
+_Avoid_: Discord client, Discord adapter, bot interface
+
+**DiscordLogger**:
+The logging logic port that sits above `DiscordGateway`. Owns severity routing (critical vs routine), embed construction, message chunking at 1,950 characters, Status Card edits, and Live Digest rate-limited edits. Accepts structured log events from the Runner and decides format, targeting, and dispatch.
+_Avoid_: Discord notifier, log sink, message sender
+
+**Model Selection**:
+The startup-time choice of which configured LLM (`provider/model` string) the Runner will use for the entire session. Presented as an interactive numbered prompt when multiple models are configured; auto-selected silently when exactly one model is configured; overridable via `--model <id>` CLI flag. The selected model is session-scoped — fixed until the Runner restarts — and stored in `.agent/state.json` for crash recovery.
+_Avoid_: Model switch, model picker, LLM choice
+
+**Reasoning Variant**:
+The per-ticket reasoning depth setting declared in a ticket's `Reasoning:` frontmatter field and passed to OpenCode as `--variant`. Controls the model's thinking effort (e.g. `low`, `medium`, `high`, `max` on Anthropic; provider-specific strings on others). Resolved in priority order: ticket `Reasoning:` field → `model.default_reasoning` in config → flag omitted (OpenCode default). Applied uniformly across all Session Runs under the ticket.
+_Avoid_: Thinking level, reasoning mode, inference depth
+
+**Crash Recovery**:
+The startup procedure that inspects `.agent/state.json` and `git status --porcelain` to safely resume an in-flight ticket, reconnect to an active Worker Session, or restore from a Checkpoint after an unexpected termination.
+_Avoid_: Reboot recovery, auto-resume, restart handler
+
+**State Store**:
+The persistence seam responsible for atomic, durable reads and writes of runner execution state to `.agent/state.json`.
+_Avoid_: State manager, DB, cache
+
+**Terminal Display**:
+The local terminal user interface built with Rich Live that renders the pinned status header, token gauge, scrolling telemetry ring buffer, and hotkey legends during execution.
+_Avoid_: Dashboard, console UI, terminal viewer

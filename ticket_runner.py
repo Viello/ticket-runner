@@ -11,11 +11,16 @@ import sys
 from typing import Any
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.filesystem.json_state_store import JsonStateStore
+from runner.adapters.ui.model_prompt import ModelPrompt
 from runner.application.doctor import Doctor, DoctorReport
+from runner.application.model_selection import ModelSelectionInteractor
 from runner.application.queue_orchestrator import QueueOrchestrator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
-from runner.domain.exceptions import UserAbortError
+from runner.domain.exceptions import NonInteractiveError, UserAbortError
+from runner.domain.runtime_paths import RuntimePaths
+from runner.ports.state_store import StateStore
 
 
 EXIT_CODE_CONTRACT = """Exit codes:
@@ -82,6 +87,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("config.yaml"),
         help="Path to configuration YAML file (default: config.yaml).",
+    )
+    start_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="OpenCode model identifier to use for session runs.",
     )
 
     # placeholders for future subcommands
@@ -152,6 +163,10 @@ async def run_start(
     stop_event: asyncio.Event | None = None,
     supervisor_instance: WorkerSupervisor | None = None,
     clock: Callable[[], float] | None = None,
+    model_id: str | None = None,
+    state_store: StateStore | None = None,
+    model_prompt: ModelPrompt | None = None,
+    key_reader: Callable[[], str] | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     doctor = doctor_instance or Doctor(config_path=config_path)
@@ -178,7 +193,38 @@ async def run_start(
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
     else:
-        container = build_container(config=config, clock=clock)
+        if model_id is not None:
+            valid_model_ids = [m.id for m in config.model.models]
+            if model_id not in valid_model_ids:
+                configured_ids_str = ", ".join(valid_model_ids) if valid_model_ids else "none"
+                print(
+                    f"\n[Runner] Error: Unknown model '{model_id}'. "
+                    f"Configured model IDs: {configured_ids_str}"
+                )
+                return 1
+
+        effective_state_store = state_store
+        if effective_state_store is None:
+            runtime_paths = RuntimePaths()
+            effective_state_store = JsonStateStore(path=runtime_paths.state_path)
+
+        prompt_adapter = model_prompt or ModelPrompt(read_key=key_reader)
+        interactor = ModelSelectionInteractor(
+            config=config,
+            state_store=effective_state_store,
+            prompt=prompt_adapter,
+        )
+
+        try:
+            model_id = interactor.resolve_and_persist(cli_model=model_id)
+        except NonInteractiveError as exc:
+            print(f"\n[Runner] Error: {exc}")
+            return 1
+        except Exception as exc:
+            print(f"\n[Runner] Error: State persistence failed: {exc}")
+            return 1
+
+        container = build_container(config=config, clock=clock, model_id=model_id)
         orchestrator = container.orchestrator
         if supervisor is None:
             supervisor = container.supervisor
@@ -290,7 +336,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
         elif args.command == "start":
-            return asyncio.run(run_start(config_path=config_path, local_only=local_only))
+            return asyncio.run(
+                run_start(
+                    config_path=config_path,
+                    local_only=local_only,
+                    model_id=getattr(args, "model", None),
+                )
+            )
         elif args.command in ("pause", "status"):
             print(f"Command '{args.command}' is not yet implemented (scheduled in upcoming specs).")
             return 0
