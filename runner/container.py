@@ -10,6 +10,7 @@ from typing import Any
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
@@ -22,6 +23,7 @@ from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import EscalationNotice, HandoffCoordinator
 from runner.application.prompt_builder import PromptBuilder
 from runner.application.queue_orchestrator import DEFAULT_TICKETS_DIR, QueueOrchestrator
+from runner.application.state_coordinator import StateCoordinator
 from runner.application.ticket_processor import TicketProcessor
 from runner.application.worker_supervisor import WorkerSupervisor
 from runner.domain.config import (
@@ -39,6 +41,7 @@ from runner.domain.runtime_paths import RuntimePaths
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.state_store import StateStore
 from runner.ports.ticket_repository import TicketRepository
 
 
@@ -74,6 +77,8 @@ class RunnerContainer:
     lock: QueueFileLock
     runtime_paths: RuntimePaths
     command_runner: CommandRunner
+    state_coordinator: StateCoordinator
+    state_store: StateStore
 
 
 def build_container(
@@ -96,6 +101,8 @@ def build_container(
     processor: TicketProcessor | None = None,
     orchestrator: QueueOrchestrator | None = None,
     clean_slate_archiver: CleanSlateArchiver | None = None,
+    state_store: StateStore | None = None,
+    state_coordinator: StateCoordinator | None = None,
     cwd: Path | None = None,
     clock: Callable[[], float] | None = None,
     printer: Callable[[str], None] | None = print,
@@ -152,6 +159,17 @@ def build_container(
         cwd=cwd,
     )
 
+    resolved_state_store = state_store or JsonStateStore(
+        path=resolved_runtime_paths.state_path
+    )
+
+    resolved_state_coordinator = state_coordinator or StateCoordinator(
+        state_store=resolved_state_store,
+        branch=resolved_config.project.branch,
+        selected_model=model_id,
+        clock=clock,
+    )
+
     resolved_prompt_builder = prompt_builder or PromptBuilder()
     resolved_spec_parser = spec_parser or SpecMarkdownParser()
 
@@ -165,7 +183,10 @@ def build_container(
         signal_repository=resolved_signal_repo,
         default_reasoning=resolved_config.model.default_reasoning,
         model_id=model_id,
+        state_coordinator=resolved_state_coordinator,
     )
+    if resolved_supervisor.state_coordinator is None:
+        resolved_supervisor.state_coordinator = resolved_state_coordinator
 
     resolved_coordinator = coordinator or HandoffCoordinator(
         supervisor=resolved_supervisor,
@@ -193,7 +214,10 @@ def build_container(
         gotchas_store=resolved_gotchas_store,
         worker_config=resolved_config.worker,
         printer=printer,
+        state_coordinator=resolved_state_coordinator,
     )
+    if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
+        resolved_processor.state_coordinator = resolved_state_coordinator
 
     resolved_orchestrator = orchestrator or QueueOrchestrator(
         ticket_store=resolved_ticket_store,
@@ -209,7 +233,10 @@ def build_container(
         cwd=cwd,
         clean_slate_archiver=clean_slate_archiver,
         clock=clock,
+        state_coordinator=resolved_state_coordinator,
     )
+    if hasattr(resolved_orchestrator, "_state_coordinator") and resolved_orchestrator.state_coordinator is None:
+        resolved_orchestrator._state_coordinator = resolved_state_coordinator
 
     return RunnerContainer(
         config=resolved_config,
@@ -226,4 +253,6 @@ def build_container(
         lock=resolved_lock,
         runtime_paths=resolved_runtime_paths,
         command_runner=resolved_command_runner,
+        state_coordinator=resolved_state_coordinator,
+        state_store=resolved_state_store,
     )

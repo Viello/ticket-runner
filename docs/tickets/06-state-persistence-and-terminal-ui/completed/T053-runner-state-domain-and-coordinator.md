@@ -1,5 +1,6 @@
 # T053 — RunnerState domain model, state transitions, and StateCoordinator
-Status: pending
+Status: completed
+Completed: 2026-09-19T08:03:00Z
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: None
 Reasoning: medium

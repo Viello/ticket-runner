@@ -16,6 +16,7 @@ from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, Gotchas
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.clean_slate import CleanSlateArchiver
 from runner.application.git_operations import GitOperations
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.exceptions import UserAbortError
 from runner.domain.ticket import Ticket
@@ -140,12 +141,14 @@ class QueueOrchestrator:
         cwd: Path | None = None,
         clean_slate_archiver: CleanSlateArchiver | None = None,
         clock: Callable[[], float] | None = None,
+        state_coordinator: StateCoordinator | None = None,
     ) -> None:
         self._cwd = cwd
         self._clock: Callable[[], float] = clock or time.monotonic
         self._lifecycle_outcomes: list[TicketOutcome] = []
         self._lifecycle_start_time: float | None = None
         self._summary_printed: bool = False
+        self._state_coordinator = state_coordinator
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
         elif self._cwd:
@@ -296,6 +299,16 @@ class QueueOrchestrator:
         return self._commit_scope
 
     @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """Coordinating service for durable runner state persistence."""
+        return self._state_coordinator
+
+    def transition_to_gatekeeper(self, attempts: int | None = None) -> None:
+        """Transition runner state to GATEKEEPER if coordinator is present."""
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_gatekeeper(verification_attempts=attempts)
+
+    @property
     def supervisor(self) -> Any:
         """Underlying WorkerSupervisor if available through processor."""
         if self._processor is not None and hasattr(self._processor, "supervisor"):
@@ -315,6 +328,8 @@ class QueueOrchestrator:
     def pause(self) -> None:
         """Pause queue progression and release the sentinel lock for external edits."""
         self._is_paused = True
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_pause_requested()
         self.release_lock()
 
     def resume(self) -> None:
@@ -364,8 +379,18 @@ class QueueOrchestrator:
 
         ticket = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
         if ticket is None:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
             self.release_lock()
             return None
+
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_working(ticket_id=ticket.id)
+            if (
+                hasattr(active_processor, "state_coordinator")
+                and getattr(active_processor, "state_coordinator", None) is None
+            ):
+                active_processor.state_coordinator = self._state_coordinator
 
         slug = None
         if ticket.spec_path:
@@ -433,6 +458,8 @@ class QueueOrchestrator:
         # If queue is now empty, release lock
         remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
         if remaining is None:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
             self.release_lock()
 
         return final_outcome
@@ -574,6 +601,8 @@ class QueueOrchestrator:
 
             # 3. Queue is exhausted
             printer("[Queue] Queue exhausted: no pending tickets.")
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
 
             # 4. Apply lifecycle policy
             if policy == "terminate":
@@ -637,6 +666,8 @@ class QueueOrchestrator:
                     remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
                     if remaining is None:
                         printer("[Queue] Queue exhausted: no pending tickets.")
+                        if self._state_coordinator is not None:
+                            self._state_coordinator.transition_to_idle()
                         if active_clean_slate == "always":
                             self.release_lock()
                             await self._handle_clean_slate(policy="always", printer=printer)

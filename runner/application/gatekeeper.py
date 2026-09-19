@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import SignalFormatError, UserAbortError
 from runner.domain.signal import ReadySignal
@@ -515,6 +516,7 @@ class VerificationLoop:
         initial_prompt: str | None = None,
         initial_session_id: str | None = None,
         notify: Callable[[str], None] | None = None,
+        state_coordinator: StateCoordinator | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -533,6 +535,16 @@ class VerificationLoop:
         self._last_diagnostics: str = ""
         self._notify = notify
         self._accumulated_resources: set[str] = set()
+        self._state_coordinator = state_coordinator
+
+    @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """State coordinator used to persist verification transitions."""
+        return self._state_coordinator
+
+    @state_coordinator.setter
+    def state_coordinator(self, value: StateCoordinator | None) -> None:
+        self._state_coordinator = value
 
     @property
     def accumulated_resources(self) -> frozenset[str]:
@@ -665,6 +677,11 @@ class VerificationLoop:
                 # Check soft warnings before proceeding to verification
                 self._check_ready_warnings()
 
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_gatekeeper(
+                        verification_attempts=self._attempts
+                    )
+
                 # Execute Gatekeeper independent verification commands
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
@@ -772,6 +789,8 @@ class VerificationLoop:
     async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
         """Handle attempt failure, evaluating budget exhaustion and intervention menu."""
         if self._attempts >= self._max_attempts:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_waiting_for_user()
             decision = self._intervention_gateway.request_intervention(
                 ticket=self._ticket,
                 diagnostics=diagnostics,
@@ -781,6 +800,8 @@ class VerificationLoop:
                 decision = await decision
 
             if decision.action == InterventionAction.ABORT:
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_circuit_breaker_tripped()
                 raise UserAbortError(
                     f"Execution aborted by operator for ticket '{self._ticket.id}'."
                 )
@@ -788,6 +809,12 @@ class VerificationLoop:
             if decision.action == InterventionAction.RETRY:
                 # Reset attempt counter to full fresh budget
                 self._attempts = 0
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_working(
+                        ticket_id=self._ticket.id,
+                        session_id=self._active_session_id,
+                        verification_attempts=0,
+                    )
                 self._pending_prompt = build_verification_failure_prompt(
                     ticket=self._ticket,
                     diagnostics=diagnostics,

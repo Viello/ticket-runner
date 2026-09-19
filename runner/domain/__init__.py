@@ -23,6 +23,7 @@ from runner.domain.exceptions import (
     QueueLockError,
     SignalFormatError,
     SpecFormatError,
+    StateFormatError,
     TicketFormatError,
     TicketRunnerError,
     UserAbortError,
@@ -33,6 +34,11 @@ from runner.domain.signal import (
     QuestionType,
     ReadySignal,
     SignalStatus,
+)
+from runner.domain.state import (
+    RunnerState,
+    StateStatus,
+    TokenState,
 )
 from runner.domain.telemetry import (
     BudgetAction,
@@ -64,14 +70,18 @@ __all__ = [
     "QuestionType",
     "ReadySignal",
     "RunnerConfig",
+    "RunnerState",
     "RuntimePaths",
     "SignalFormatError",
     "SignalStatus",
     "SpecFormatError",
+    "StateFormatError",
+    "StateStatus",
     "Ticket",
     "TicketFormatError",
     "TicketStatus",
     "TokenBudgetConfig",
+    "TokenState",
     "TokenUsage",
     "UserAbortError",
     "VerificationConfig",

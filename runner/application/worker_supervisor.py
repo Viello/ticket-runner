@@ -21,6 +21,7 @@ from runner.adapters.opencode.opencode_worker import (
     decode_event,
     extract_resource_access,
 )
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.telemetry import BudgetAction, BudgetMonitor
@@ -141,6 +142,7 @@ class WorkerSupervisor:
         signal_repository: SignalRepository | None = None,
         default_reasoning: str = "",
         model_id: str | None = None,
+        state_coordinator: StateCoordinator | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -159,11 +161,21 @@ class WorkerSupervisor:
         self._signal_repository = signal_repository
         self._default_reasoning = default_reasoning.strip() if default_reasoning else ""
         self._model_id = model_id.strip() if (model_id and model_id.strip()) else None
+        self._state_coordinator = state_coordinator
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """State coordinator used to persist worker state transitions."""
+        return self._state_coordinator
+
+    @state_coordinator.setter
+    def state_coordinator(self, value: StateCoordinator | None) -> None:
+        self._state_coordinator = value
 
     @property
     def model_id(self) -> str | None:
@@ -511,6 +523,8 @@ class WorkerSupervisor:
                 if active_session_id is None and event.session_id:
                     active_session_id = event.session_id
                     _init_logging(active_session_id)
+                    if self._state_coordinator is not None:
+                        self._state_coordinator.record_session_id(active_session_id)
 
                 if not event.is_known:
                     diagnostics.append(
@@ -525,6 +539,15 @@ class WorkerSupervisor:
                     action = self._budget_monitor.observe(event.token_usage)
                     if self._on_budget_action is not None:
                         self._on_budget_action(action, self._budget_monitor.latest_occupancy)
+
+                    if self._state_coordinator is not None:
+                        curr_state = self._state_coordinator.current_state
+                        prev_warning = curr_state.tokens.warning_sent if curr_state else False
+                        warning_sent = prev_warning or (action == BudgetAction.WARN)
+                        self._state_coordinator.record_tokens(
+                            self._budget_monitor.latest_occupancy,
+                            warning_sent=warning_sent,
+                        )
 
                     if action == BudgetAction.WARN:
                         notice = (

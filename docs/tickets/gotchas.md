@@ -439,6 +439,15 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Running startup model resolution and state store persistence unconditionally in CLI entry points like `run_start` causes in-memory test doubles (`container_instance` or `orchestrator_instance`) to inadvertently touch disk state files (`.agent/state.json`) or block on console input.
 - **Solution**: Confine startup resolution and state persistence strictly to the locally built container path in `run_start`, allowing tests passing injected containers or orchestrators to skip model selection entirely, while exposing explicit `state_store`, `model_prompt`, and `key_reader` injection seams on `run_start`.
 
+### Non-Clobbering State Persistence with Startup Model Selection
+- **Problem**: When `QueueOrchestrator` initializes `RunnerState`, writing the full state document directly to `state.json` without merging clobbers `selected_model` and unmanaged metadata keys written prior to startup by `ModelSelectionInteractor` or external tools.
+- **Solution**: Implement read-merge-write semantics in `StateCoordinator.save_state()`: read the existing document from the `StateStore`, retain existing `selected_model` if the incoming state has `None`, preserve all unmanaged keys, and write the merged dictionary atomically.
+
+### Strict Python Boolean Validation in Integer Domain Fields
+- **Problem**: In Python, `isinstance(True, int)` evaluates to `True`, which allows boolean values to silently pass naive integer typechecks (`isinstance(value, int)`) for token counts or verification attempt fields in domain models.
+- **Solution**: Explicitly check `isinstance(value, bool)` before `isinstance(value, int)` in domain entity validation (`TokenState` and `RunnerState`) to reject booleans and raise `StateFormatError` deterministically.
+
+
 
 
 

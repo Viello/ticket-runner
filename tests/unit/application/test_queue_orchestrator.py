@@ -9,14 +9,17 @@ import pytest
 
 from runner.adapters.markdown.file_lock import QueueFileLock
 from runner.adapters.markdown.gotchas_store import GotchasStore
+from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.git_operations import GitOperations
 from runner.application.queue_orchestrator import (
     QueueOrchestrator,
     TicketOutcome,
     TicketOutcomeStatus,
 )
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import LifecycleConfig
 from runner.domain.exceptions import UserAbortError
+from runner.domain.state import StateStatus
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_ticket_repository import FakeTicketRepository
@@ -1466,6 +1469,73 @@ def test_run_lifecycle_terminate_interactive_prompts_at_drain_with_lock_released
     assert exit_code == 0
     assert actions == ["clean_slate:02-test:interactive", "summary"]
     assert lock_state_at_prompt == [False]
+
+
+# --- StateCoordinator Integration Tests ---
+
+
+class _InMemoryStateStore:
+    def __init__(self) -> None:
+        self.doc: dict[str, Any] | None = None
+
+    def read(self) -> dict[str, Any] | None:
+        return dict(self.doc) if self.doc is not None else None
+
+    def write(self, document: Any) -> None:
+        self.doc = dict(document)
+
+
+def test_queue_orchestrator_state_transitions(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    store = _InMemoryStateStore()
+    coordinator = StateCoordinator(state_store=store, branch="agent/ticket-runner")  # type: ignore[arg-type]
+
+    t1 = _make_ticket("T001")
+    ticket_repo = FakeTicketRepository([t1])
+
+    statuses_during_processor: list[StateStatus | None] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        # Check status when beginning ticket: should be WORKING
+        statuses_during_processor.append(
+            coordinator.current_state.status if coordinator.current_state else None
+        )
+        # Transition to gatekeeper during verification
+        orchestrator.transition_to_gatekeeper(attempts=1)
+        statuses_during_processor.append(
+            coordinator.current_state.status if coordinator.current_state else None
+        )
+        return TicketOutcome.approved()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        state_coordinator=coordinator,
+        processor=fake_processor,
+    )
+
+    # 1. Run ticket: begins in WORKING, transitions to GATEKEEPER, drains to IDLE
+    outcome = asyncio.run(orchestrator.run_next())
+    assert outcome is not None
+    assert outcome.is_approved
+    assert statuses_during_processor == [StateStatus.WORKING, StateStatus.GATEKEEPER]
+
+    # Queue is now drained, so state must be IDLE
+    assert coordinator.current_state is not None
+    assert coordinator.current_state.status == StateStatus.IDLE
+    assert store.doc is not None
+    assert store.doc["status"] == "IDLE"
+
+    # 2. Pause transitions state to PAUSE_REQUESTED
+    orchestrator.pause()
+    assert coordinator.current_state.status == StateStatus.PAUSE_REQUESTED
+    assert store.doc["status"] == "PAUSE_REQUESTED"
+
 
 
 

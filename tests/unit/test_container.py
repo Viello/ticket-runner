@@ -59,3 +59,15 @@ def test_build_container_model_id_none_by_default(tmp_path: Path) -> None:
 
     assert container.supervisor.model_id is None
 
+
+def test_build_container_wires_state_coordinator(tmp_path: Path) -> None:
+    config = _make_config()
+    container = build_container(config=config, cwd=tmp_path, model_id="qwen/qwen-plus")
+
+    assert container.state_coordinator is not None
+    assert container.state_store is not None
+    assert container.orchestrator.state_coordinator is container.state_coordinator
+    assert container.supervisor.state_coordinator is container.state_coordinator
+    assert container.processor.state_coordinator is container.state_coordinator
+
+

@@ -38,6 +38,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor,
 )
+from runner.application.state_coordinator import StateCoordinator
 from runner.application.ticket_processor import GatekeeperTicketProcessor
 
 
@@ -62,6 +63,7 @@ __all__ = [
     "READY",
     "SingleCycleResult",
     "SingleCycleStatus",
+    "StateCoordinator",
     "TicketOutcome",
     "TicketOutcomeStatus",
     "TicketProcessor",
