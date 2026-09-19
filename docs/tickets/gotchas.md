@@ -455,10 +455,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Using standard ISO-8601 UTC timestamp strings (`YYYY-MM-DDTHH:MM:SSZ`) containing colons (`:`) in quarantine filenames (`state.json.corrupt.<timestamp>`) fails on Windows because NTFS prohibits colons in file paths.
 - **Solution**: Format quarantine timestamps without colons using `%Y%m%dT%H%M%SZ` (e.g. `state.json.corrupt.20260919T100500Z`), ensuring cross-platform safety on Windows, Linux, and macOS without renaming errors.
 
+### Non-Destructive YAML Configuration Updates
+- **Problem**: Serializing entire configuration objects back to YAML via naive dumpers strips human comments, reorders keys, and risks altering environment variable placeholders across existing sections.
+- **Solution**: Target in-place regex substitutions on the active configuration file to update or append the specific section (`ui.session_terminal`), validate the merged document against YAML parsers and domain schema, and execute atomic file replacement with temp files.
 
-
-
-
-
-
+### Terminal Host Candidate Probing and Non-Interactive Safe Fallback
+- **Problem**: Pre-flight checks prompting for user input hang headless CI pipelines, subshells, and non-interactive runs when candidate terminal hosts exist but stdin is not a TTY.
+- **Solution**: Check TTY availability via `sys.stdin.isatty()` before rendering interactive selection menus; in non-interactive mode, auto-select the highest-priority detected candidate host (`wt.exe` > `pwsh.exe` > `powershell.exe` > `cmd.exe`) silently and persist it without blocking.
 

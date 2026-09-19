@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
-from runner.domain.config import ModelConfig, ModelEntry, RunnerConfig
+from runner.domain.config import ModelConfig, ModelEntry, RunnerConfig, UIConfig
 from runner.domain.exceptions import ConfigError
 from runner.ports.config_loader import ConfigLoader
 
@@ -473,5 +473,105 @@ def test_load_model_default_reasoning_invalid(invalid_reasoning: object) -> None
     data["model"] = {"default_reasoning": invalid_reasoning}
     with pytest.raises(ConfigError, match="default_reasoning"):
         loader.load_from_dict(data)
+
+
+def test_load_config_without_ui_section_defaults() -> None:
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(VALID_CONFIG_YAML)
+    assert isinstance(config.ui, UIConfig)
+    assert config.ui.session_terminal == ""
+
+
+def test_load_config_with_valid_ui_section() -> None:
+    yaml_with_ui = VALID_CONFIG_YAML + """
+ui:
+  session_terminal: "wt.exe"
+"""
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_with_ui)
+    assert isinstance(config.ui, UIConfig)
+    assert config.ui.session_terminal == "wt.exe"
+
+
+def test_load_ui_section_null() -> None:
+    yaml_null_ui = VALID_CONFIG_YAML + "\nui: null\n"
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_null_ui)
+    assert config.ui == UIConfig(session_terminal="")
+
+
+def test_load_ui_section_not_dict() -> None:
+    yaml_invalid_ui = VALID_CONFIG_YAML + "\nui: 'not a mapping'\n"
+    loader = YamlConfigLoader()
+    with pytest.raises(ConfigError, match="Section 'ui' must be a mapping"):
+        loader.load_from_string(yaml_invalid_ui)
+
+
+@pytest.mark.parametrize("invalid_terminal", [123, True, ["wt.exe"]])
+def test_load_ui_session_terminal_invalid(invalid_terminal: object) -> None:
+    import yaml
+    loader = YamlConfigLoader()
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["ui"] = {"session_terminal": invalid_terminal}
+    with pytest.raises(ConfigError, match="session_terminal"):
+        loader.load_from_dict(data)
+
+
+def test_config_dump_and_round_trip() -> None:
+    loader = YamlConfigLoader()
+    original_yaml = VALID_CONFIG_YAML + """
+model:
+  default_reasoning: ""
+  models:
+    - id: "deepseek/deepseek-chat"
+      label: "DeepSeek Chat"
+ui:
+  session_terminal: "wt.exe"
+"""
+    config1 = loader.load_from_string(original_yaml)
+    dumped = loader.dump(config1)
+    config2 = loader.load_from_string(dumped)
+
+    assert config1.ui.session_terminal == "wt.exe"
+    assert config2.ui.session_terminal == "wt.exe"
+    assert config1 == config2
+
+
+def test_persist_session_terminal_appends_to_config_preserving_content(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    initial_content = "# Comment at top\n" + VALID_CONFIG_YAML + "\n# Comment at bottom\n"
+    config_file.write_text(initial_content, encoding="utf-8")
+
+    loader = YamlConfigLoader()
+    loader.persist_session_terminal(config_file, "pwsh.exe")
+
+    updated_text = config_file.read_text(encoding="utf-8")
+    assert "# Comment at top" in updated_text
+    assert "# Comment at bottom" in updated_text
+    assert "token_env: \"DISCORD_BOT_TOKEN\"" in updated_text
+    assert 'session_terminal: "pwsh.exe"' in updated_text
+
+    # Verify that the file loads cleanly as a valid RunnerConfig
+    loaded = loader.load(config_file)
+    assert loaded.ui.session_terminal == "pwsh.exe"
+
+
+def test_persist_session_terminal_updates_existing_ui_block(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    initial_content = (
+        VALID_CONFIG_YAML
+        + "\nui:\n  # Terminal host comment\n  session_terminal: \"old_term.exe\"\n"
+    )
+    config_file.write_text(initial_content, encoding="utf-8")
+
+    loader = YamlConfigLoader()
+    loader.persist_session_terminal(config_file, "wt.exe")
+
+    updated_text = config_file.read_text(encoding="utf-8")
+    assert "old_term.exe" not in updated_text
+    assert 'session_terminal: "wt.exe"' in updated_text
+
+    loaded = loader.load(config_file)
+    assert loaded.ui.session_terminal == "wt.exe"
 
 

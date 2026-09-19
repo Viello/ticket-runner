@@ -31,6 +31,7 @@ from runner.application.doctor import (
     CHECK_HOOK,
     CHECK_OPENCODE,
     CHECK_QUEUE,
+    CHECK_TERMINAL_HOST,
     Doctor,
 )
 from runner.application.git_operations import GitOperations
@@ -480,8 +481,10 @@ async def test_doctor_all_prerequisites_satisfied_succeeds(tmp_path: Path) -> No
 
     report = await doctor.run(local_only=False, halt_on_failure=True)
     assert report.passed is True
-    assert len(report.checks) == 10
+    assert len(report.checks) == 11
     assert all(c.passed for c in report.checks)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_TERMINAL_HOST in check_names
 
 
 @pytest.mark.anyio
@@ -508,3 +511,68 @@ async def test_doctor_is_strictly_read_only_and_non_destructive(tmp_path: Path) 
         assert "commit" not in cmd
         assert "reset" not in cmd
         assert "clean" not in cmd
+
+
+# ==============================================================================
+# SPEC 06 / T055: Terminal Host Detection and Configuration Persistence
+# ==============================================================================
+@pytest.mark.anyio
+async def test_spec_terminal_host_preflight_passes_when_configured(tmp_path: Path) -> None:
+    """Pre-flight check passes without prompting when ui.session_terminal is already configured."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        SAMPLE_VALID_CONFIG_YAML + '\nui:\n  session_terminal: "wt.exe"\n',
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(
+        config_path=config_path,
+        path_resolver=lambda name: r"C:\WindowsApps\wt.exe" if name == "wt.exe" else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "wt.exe" in result.message
+
+
+@pytest.mark.anyio
+async def test_spec_terminal_host_preflight_auto_selects_and_persists_when_unconfigured(tmp_path: Path) -> None:
+    """When ui.session_terminal is unconfigured, Doctor detects host, auto-selects, and writes to config.yaml."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(SAMPLE_VALID_CONFIG_YAML, encoding="utf-8")
+
+    doctor = Doctor(
+        config_path=config_path,
+        path_resolver=lambda name: rf"C:\tools\{name}" if name in ("pwsh.exe", "cmd.exe") else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert "pwsh.exe" in result.message
+
+    # Verify that config.yaml was persisted with the selected terminal host
+    loader = YamlConfigLoader()
+    reloaded_config = loader.load(config_path)
+    assert reloaded_config.ui.session_terminal == "pwsh.exe"
+
+
+@pytest.mark.anyio
+async def test_spec_terminal_host_fails_when_unsupported(tmp_path: Path) -> None:
+    """Doctor check fails with actionable message when no supported candidate terminal host exists."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(SAMPLE_VALID_CONFIG_YAML, encoding="utf-8")
+
+    doctor = Doctor(
+        config_path=config_path,
+        path_resolver=lambda name: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is False
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "No supported terminal host detected" in result.message
+    assert result.remediation is not None

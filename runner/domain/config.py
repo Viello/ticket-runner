@@ -212,6 +212,19 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class UIConfig:
+    """Terminal UI and session terminal configuration."""
+
+    session_terminal: str = ""
+
+    def __post_init__(self) -> None:
+        if self.session_terminal is None:
+            object.__setattr__(self, "session_terminal", "")
+        elif not isinstance(self.session_terminal, str):
+            raise ConfigError("UI session_terminal must be a string")
+
+
+@dataclass(frozen=True)
 class RunnerConfig:
     """Authoritative composite configuration for Ticket Runner."""
 
@@ -224,6 +237,7 @@ class RunnerConfig:
     lifecycle: LifecycleConfig
     git: GitConfig
     model: ModelConfig = field(default_factory=ModelConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
 
     @property
     def token_budget(self) -> TokenBudgetConfig:

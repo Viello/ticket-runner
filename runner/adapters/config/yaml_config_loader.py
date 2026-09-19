@@ -17,6 +17,7 @@ from runner.domain.config import (
     ProjectConfig,
     RunnerConfig,
     TokenBudgetConfig,
+    UIConfig,
     VerificationConfig,
     WorkerConfig,
 )
@@ -271,6 +272,26 @@ class YamlConfigLoader(ConfigLoader):
                 default_reasoning=default_reasoning,
             )
 
+        # 10. UI section (optional)
+        ui_dict = data.get("ui")
+        if ui_dict is None:
+            ui = UIConfig()
+        elif not isinstance(ui_dict, dict):
+            raise ConfigError(
+                f"Section 'ui' must be a mapping, got: {type(ui_dict).__name__}"
+            )
+        else:
+            raw_session_terminal = ui_dict.get("session_terminal", "")
+            if raw_session_terminal is None:
+                session_terminal = ""
+            elif not isinstance(raw_session_terminal, str):
+                raise ConfigError(
+                    f"Field 'session_terminal' in section 'ui' must be a string, got: {type(raw_session_terminal).__name__}"
+                )
+            else:
+                session_terminal = raw_session_terminal
+            ui = UIConfig(session_terminal=session_terminal)
+
         return RunnerConfig(
             project=project,
             worker=worker,
@@ -281,5 +302,120 @@ class YamlConfigLoader(ConfigLoader):
             lifecycle=lifecycle,
             git=git,
             model=model,
+            ui=ui,
         )
+
+    def to_dict(self, config: RunnerConfig) -> dict[str, Any]:
+        """Convert a RunnerConfig domain object into a serializable dictionary."""
+        data: dict[str, Any] = {
+            "project": {
+                "name": config.project.name,
+                "branch": config.project.branch,
+                "base_branch": config.project.base_branch,
+            },
+            "worker": {
+                "execution_skill": config.worker.execution_skill,
+            },
+            "verification": {
+                "test_cmd": config.verification.test_cmd,
+                "build_cmd": config.verification.build_cmd,
+                "max_attempts": config.verification.max_attempts,
+                "timeout_seconds": config.verification.timeout_seconds,
+            },
+            "tokens": {
+                "warn": config.tokens.warn,
+                "handoff": config.tokens.handoff,
+                "ceiling": config.tokens.ceiling,
+            },
+            "presence": {
+                "default_mode": config.presence.default_mode,
+                "idle_escalation_minutes": config.presence.idle_escalation_minutes,
+            },
+            "discord": {
+                "enabled": config.discord.enabled,
+                "token_env": config.discord.token_env,
+                "channel_id": config.discord.channel_id,
+            },
+            "lifecycle": {
+                "queue_completion": config.lifecycle.queue_completion,
+                "clean_slate": config.lifecycle.clean_slate,
+                "poll_interval": config.lifecycle.poll_interval,
+            },
+            "git": {
+                "auto_push": config.git.auto_push,
+                "commit_prefix": config.git.commit_prefix,
+                "enforce_pre_push_hook": config.git.enforce_pre_push_hook,
+            },
+        }
+        if config.model.models or config.model.default_reasoning:
+            data["model"] = {
+                "default_reasoning": config.model.default_reasoning,
+                "models": [{"id": m.id, "label": m.label} for m in config.model.models],
+            }
+        if config.ui.session_terminal:
+            data["ui"] = {
+                "session_terminal": config.ui.session_terminal,
+            }
+        return data
+
+    def dump(self, config: RunnerConfig) -> str:
+        """Serialize a RunnerConfig object to a YAML string."""
+        return yaml.safe_dump(self.to_dict(config), sort_keys=False)
+
+    def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
+        """Persist session_terminal setting to YAML file preserving comments and structure.
+
+        Args:
+            path: Path to configuration YAML file.
+            session_terminal: Name or path of selected terminal executable.
+
+        Raises:
+            ConfigError: If target file cannot be read, updated, or written.
+        """
+        import os
+
+        file_path = Path(path)
+        content = ""
+        if file_path.is_file():
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ConfigError(f"Failed to read configuration file '{file_path}': {exc}") from exc
+
+        if not content.strip():
+            new_content = f'ui:\n  session_terminal: "{session_terminal}"\n'
+        else:
+            ui_pattern = re.compile(r"^(ui\s*:)(.*?)(?=\n[a-zA-Z0-9_-]+\s*:|\Z)", re.MULTILINE | re.DOTALL)
+            match = ui_pattern.search(content)
+            if match:
+                ui_body = match.group(2)
+                terminal_pattern = re.compile(r"^(\s*session_terminal\s*:)(.*)$", re.MULTILINE)
+                if terminal_pattern.search(ui_body):
+                    new_ui_body = terminal_pattern.sub(f'  session_terminal: "{session_terminal}"', ui_body)
+                else:
+                    new_ui_body = f'\n  session_terminal: "{session_terminal}"' + ui_body
+                new_content = content[:match.start(2)] + new_ui_body + content[match.end():]
+            else:
+                prefix = "\n" if not content.endswith("\n") else ""
+                new_content = content + f'{prefix}\nui:\n  session_terminal: "{session_terminal}"\n'
+
+        try:
+            data = yaml.safe_load(new_content)
+            if not isinstance(data, dict) or data.get("ui", {}).get("session_terminal") != session_terminal:
+                raise ConfigError("Verification of updated YAML structure failed")
+        except Exception as exc:
+            raise ConfigError(f"Failed to produce valid YAML when updating '{file_path}': {exc}") from exc
+
+        temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_text(new_content, encoding="utf-8")
+            os.replace(temp_path, file_path)
+        except OSError as exc:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            raise ConfigError(f"Failed to write configuration file '{file_path}': {exc}") from exc
 

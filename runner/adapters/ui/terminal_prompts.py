@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+import sys
 
 from runner.domain.exceptions import NonInteractiveError
 from runner.domain.signal import QuestionSignal, QuestionType
@@ -120,3 +121,92 @@ class TerminalInterventionGateway:
             if action is None:
                 continue
             return InterventionDecision(action=action, hint=hint)
+
+
+def _default_read_terminal_key() -> str:
+    """Read a single raw key from console; returns empty string if unavailable."""
+    if not hasattr(sys.stdin, "isatty") or not sys.stdin.isatty():
+        return ""
+    try:
+        import msvcrt
+
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            msvcrt.getwch()  # Consume multi-byte prefix
+            return ""
+        return ch
+    except (ImportError, AttributeError, OSError, ValueError):
+        return ""
+
+
+class TerminalHostPrompt:
+    """Renders plain-text terminal host menu and reads keystrokes to select a terminal host."""
+
+    def __init__(
+        self,
+        read_key: Callable[[], str] | None = None,
+        output_fn: Callable[[str], None] | None = None,
+        is_interactive: Callable[[], bool] | None = None,
+    ) -> None:
+        self._read_key = read_key if read_key is not None else _default_read_terminal_key
+        self._output_fn = output_fn if output_fn is not None else print
+        self._is_interactive = (
+            is_interactive
+            if is_interactive is not None
+            else lambda: bool(hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+        )
+
+    def is_interactive(self) -> bool:
+        """Check whether current stdin session is interactive (TTY)."""
+        return self._is_interactive()
+
+    def render_menu(self, hosts: Sequence[str]) -> str:
+        """Render plain-text menu lines for candidate terminal hosts."""
+        lines = ["Select terminal host for interactive sessions:"]
+        for index, host in enumerate(hosts, start=1):
+            lines.append(f"  [{index}] {host}")
+        lines.append("> _")
+        return "\n".join(lines)
+
+    def select_host(self, hosts: Sequence[str]) -> str | None:
+        """Present menu and read keystrokes until a valid host is confirmed.
+
+        - 0 hosts: returns None silently.
+        - 1 host: auto-selects silently without prompting.
+        - >1 hosts non-interactive: auto-selects the first (highest-priority) host without prompting.
+        - >1 hosts interactive: prints menu, reads keys until digit selects and Enter confirms.
+        """
+        if not hosts:
+            return None
+        if len(hosts) == 1:
+            return hosts[0]
+
+        if not self.is_interactive():
+            return hosts[0]
+
+        menu = self.render_menu(hosts)
+        self._output_fn(menu)
+
+        selected_host: str | None = None
+        while True:
+            try:
+                key = self._read_key()
+            except (OSError, EOFError):
+                return hosts[0]
+
+            if not key:
+                return hosts[0]
+
+            if key in ("\r", "\n"):
+                if selected_host is not None:
+                    return selected_host
+                continue
+
+            if key.isdigit():
+                idx = int(key)
+                if 1 <= idx <= len(hosts):
+                    selected_host = hosts[idx - 1]
+                    continue
+
+            selected_host = None
+            continue

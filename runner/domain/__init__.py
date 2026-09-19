@@ -10,6 +10,7 @@ from runner.domain.config import (
     ProjectConfig,
     RunnerConfig,
     TokenBudgetConfig,
+    UIConfig,
     VerificationConfig,
     WorkerConfig,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "TokenBudgetConfig",
     "TokenState",
     "TokenUsage",
+    "UIConfig",
     "UserAbortError",
     "VerificationConfig",
     "WorkerConfig",
