@@ -1,5 +1,6 @@
 # T001 — Smoke test helper and passing unit test
-Status: pending
+Status: completed
+Completed: 2026-09-19T06:50:33Z
 Spec: docs/specs/00-smoke-test.md
 Blocked by: None
 Security: None
