@@ -444,7 +444,10 @@ async def test_supervisor_signal_boundary_triggers_queued_tui_and_resumes() -> N
     cmd_runner.default_spawn_handle = worker_handle2
 
     # Give loop time to reach signal boundary and launch TUI
-    await asyncio.sleep(0.12)
+    for _ in range(100):
+        if tui_coordinator.modal_state == ModalState.TUI_OPEN:
+            break
+        await asyncio.sleep(0.01)
     assert tui_coordinator.modal_state == ModalState.TUI_OPEN
     assert state_coord.get_or_create_state().tui_open is True
 

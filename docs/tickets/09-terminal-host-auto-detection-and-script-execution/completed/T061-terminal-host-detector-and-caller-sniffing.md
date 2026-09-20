@@ -1,5 +1,6 @@
 # T061 — Terminal host detector and caller environment sniffing
-Status: pending
+Status: completed
+Completed: 2026-09-20T10:03:00Z
 Blocked by: T060
 Security: required
 Reasoning: low

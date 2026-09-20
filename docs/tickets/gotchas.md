@@ -503,3 +503,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In asynchronous event loop unit tests, using zero-delay mock process handles that finish instantaneously before scheduled keypress handlers run causes active-session state checks (e.g. `supervisor.is_running`) to evaluate to `False` prematurely, triggering unexpected synchronous code paths that await completion events indefinitely.
 - **Solution**: Inject a small delay (`delay=0.05`) into mock process streams or coordinate step-by-step with `asyncio.Event` flags to ensure test coroutines execute in their intended realistic sequence.
 
+### Win32 QueryFullProcessImageNameW vs System Toolhelp Snapshots
+- **Problem**: Calling `CreateToolhelp32Snapshot` to inspect a parent process image name captures an expensive snapshot of every active system process on Windows, introducing unnecessary overhead and failing in restricted permission contexts.
+- **Solution**: Query the parent PID directly using standard library `ctypes` calling `kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ppid)` and `kernel32.QueryFullProcessImageNameW`, using Toolhelp snapshots only as a secondary fallback.
+
+### Path Verification of Detected Terminal Candidates
+- **Problem**: Sniffing environment cues (such as `WT_SESSION` or `TERM_PROGRAM=vscode`) or caller parent shell names can select terminal host binaries (e.g. `wt.exe` or `pwsh.exe`) that are not installed on PATH, causing downstream spawn calls to fail with `0x80070002` (`FileNotFoundError`).
+- **Solution**: Always verify auto-detected candidates against `path_resolver` before selection, falling through sequentially to the next priority candidate (`wt.exe` -> `pwsh.exe` -> `powershell.exe` -> `cmd.exe`) until a binary existing on PATH is confirmed.
+
