@@ -1,5 +1,6 @@
 # T062 — Config schema auto support and Doctor pre-flight verification
-Status: pending
+Status: completed
+Completed: 2026-09-20T10:24:00Z
 Blocked by: T061
 Reasoning: low
 

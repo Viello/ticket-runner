@@ -9,12 +9,13 @@ import os
 from pathlib import Path
 import re
 import shutil
-from typing import Mapping
+from typing import Any, Mapping
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.adapters.ui.terminal_detector import TerminalHostDetector
 from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
 from runner.application.gatekeeper import CMD_BUILTINS, leading_command_token
 from runner.application.git_operations import GitOperations
@@ -61,7 +62,7 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class DoctorReport:
-    """Consolidated pre-flight verification report."""
+    """Aggregated pre-flight verification outcomes."""
 
     passed: bool
     checks: list[CheckResult]
@@ -98,6 +99,8 @@ class Doctor:
         agents_md_path: Path | str | None = None,
         execution_skill_path: Path | str | None = None,
         terminal_prompt: TerminalHostPrompt | None = None,
+        terminal_detector: Any | None = None,
+        ppid_resolver: Callable[[], str | None] | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -148,6 +151,8 @@ class Doctor:
         self._loaded_config: RunnerConfig | None = None
         self._path_resolver = path_resolver or shutil.which
         self._terminal_prompt = terminal_prompt or TerminalHostPrompt()
+        self._terminal_detector = terminal_detector or TerminalHostDetector
+        self._ppid_resolver = ppid_resolver
 
     @property
     def loaded_config(self) -> RunnerConfig | None:
@@ -342,6 +347,49 @@ class Doctor:
             )
 
         configured_host = self._loaded_config.ui.session_terminal.strip()
+        if configured_host.lower() == "auto":
+            detector = self._terminal_detector
+            if hasattr(detector, "detect"):
+                resolved = detector.detect(
+                    env=self._env,
+                    path_resolver=self._path_resolver,
+                    ppid_resolver=self._ppid_resolver,
+                )
+            elif callable(detector):
+                try:
+                    resolved = detector(
+                        env=self._env,
+                        path_resolver=self._path_resolver,
+                        ppid_resolver=self._ppid_resolver,
+                    )
+                except TypeError:
+                    resolved = detector()
+            else:
+                resolved = None
+
+            if resolved is not None and self._path_resolver(resolved) is not None:
+                new_ui = dataclasses.replace(self._loaded_config.ui, session_terminal=resolved)
+                self._loaded_config = dataclasses.replace(self._loaded_config, ui=new_ui)
+                return CheckResult(
+                    name=CHECK_TERMINAL_HOST,
+                    passed=True,
+                    message=f"Session terminal host 'auto' resolved to '{resolved}' on PATH.",
+                    remediation=None,
+                )
+
+            return CheckResult(
+                name=CHECK_TERMINAL_HOST,
+                passed=False,
+                message=(
+                    "No supported terminal host detected on PATH "
+                    f"(checked: {', '.join(CANDIDATE_TERMINAL_HOSTS)})."
+                ),
+                remediation=(
+                    "Install Windows Terminal (wt.exe), PowerShell (pwsh.exe / powershell.exe), "
+                    "or ensure cmd.exe is available on PATH."
+                ),
+            )
+
         if configured_host:
             if self._path_resolver(configured_host) is not None:
                 return CheckResult(

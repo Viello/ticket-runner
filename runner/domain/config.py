@@ -213,7 +213,13 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class UIConfig:
-    """Terminal UI and session terminal configuration."""
+    """Terminal UI and session terminal configuration.
+
+    Supported values for ``session_terminal`` include:
+    - ``"auto"``: automatically sniffs the active caller terminal environment.
+    - Explicit host binary: e.g. ``"wt.exe"``, ``"pwsh.exe"``, ``"powershell.exe"``, ``"cmd.exe"``.
+    - Empty string ``""``: unconfigured (fallback probing in Doctor pre-flight).
+    """
 
     session_terminal: str = ""
 

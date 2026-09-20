@@ -1017,3 +1017,81 @@ async def test_check_terminal_host_non_interactive_fallback_highest_priority() -
     assert doctor.loaded_config.ui.session_terminal == "pwsh.exe"
 
 
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_passes_and_reports_resolved_binary() -> None:
+    """Doctor passes when session_terminal is 'auto' and reports the resolved binary on PATH."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: r"C:\WindowsApps\wt.exe" if name == "wt.exe" else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert result.message == "Session terminal host 'auto' resolved to 'wt.exe' on PATH."
+    assert result.remediation is None
+    # Verify config.yaml was NOT mutated/persisted
+    assert config_loader.persisted_terminals == []
+    # Verify loaded config has the resolved host
+    assert doctor.loaded_config.ui.session_terminal == "wt.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_fails_when_no_supported_hosts() -> None:
+    """Doctor fails with actionable remediation when session_terminal is 'auto' and no host resolves."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is False
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "No supported terminal host detected" in result.message
+    assert result.remediation is not None
+    assert "wt.exe" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_sniffs_environment() -> None:
+    """Doctor auto resolution sniffs environment variables (e.g. WT_SESSION)."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        env={"WT_SESSION": "uuid-1234"},
+        path_resolver=lambda name: r"C:\WindowsApps\wt.exe" if name == "wt.exe" else (r"C:\Windows\System32\cmd.exe" if name == "cmd.exe" else None),
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.message == "Session terminal host 'auto' resolved to 'wt.exe' on PATH."
+    assert doctor.loaded_config.ui.session_terminal == "wt.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_explicit_overrides_auto_detection() -> None:
+    """Explicit host in config overrides auto-detection and verifies that specific binary."""
+    config = _make_config(ui=UIConfig(session_terminal="powershell.exe"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        env={"WT_SESSION": "uuid-1234"},  # Would otherwise pick wt.exe
+        path_resolver=lambda name: rf"C:\tools\{name}" if name in ("wt.exe", "powershell.exe") else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.message == "Session terminal host 'powershell.exe' verified on PATH."
+    assert config_loader.persisted_terminals == []
+    assert doctor.loaded_config.ui.session_terminal == "powershell.exe"
+
+

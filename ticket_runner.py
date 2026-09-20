@@ -135,11 +135,12 @@ async def run_doctor(
     config_path: Path,
     local_only: bool,
     doctor_instance: Doctor | None = None,
+    terminal_detector: Any | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks and display formatted results."""
     pass_mark, fail_mark = _configure_console_encoding()
     print("[Doctor] Verifying environment...")
-    doctor = doctor_instance or Doctor(config_path=config_path)
+    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
     report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True)
 
     for check in report.checks:
@@ -179,14 +180,16 @@ async def run_start(
     keyboard_key_reader: Callable[[], str | None] | None = None,
     presence_coordinator: PresenceCoordinator | None = None,
     tui_coordinator: TuiCoordinator | None = None,
+    terminal_detector: Any | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
     _configure_console_encoding()
-    doctor = doctor_instance or Doctor(config_path=config_path)
+    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
     doctor_code = await run_doctor(
         config_path=config_path,
         local_only=local_only,
         doctor_instance=doctor,
+        terminal_detector=terminal_detector,
     )
     if doctor_code != 0:
         return doctor_code
@@ -264,6 +267,7 @@ async def run_start(
             model_id=model_id,
             state_store=effective_state_store,
             console=console,
+            terminal_detector=terminal_detector,
         )
         orchestrator = getattr(container, "orchestrator", None)
         if supervisor is None:

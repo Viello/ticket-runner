@@ -76,3 +76,8 @@ git:
   commit_prefix: "feat"
   # Enforce pre-push hook verification during Doctor pre-flight checks
   enforce_pre_push_hook: true
+
+ui:
+  # Session terminal host: "auto" (default, sniffs active caller host),
+  # or explicit host: "wt.exe", "pwsh.exe", "powershell.exe", "cmd.exe"
+  session_terminal: "auto"

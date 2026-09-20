@@ -575,3 +575,48 @@ def test_persist_session_terminal_updates_existing_ui_block(tmp_path: Path) -> N
     assert loaded.ui.session_terminal == "wt.exe"
 
 
+def test_load_config_with_auto_session_terminal() -> None:
+    yaml_with_auto = VALID_CONFIG_YAML + """
+ui:
+  session_terminal: "auto"
+"""
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_with_auto)
+    assert isinstance(config.ui, UIConfig)
+    assert config.ui.session_terminal == "auto"
+
+
+def test_config_dump_and_round_trip_with_auto() -> None:
+    loader = YamlConfigLoader()
+    yaml_with_auto = VALID_CONFIG_YAML + """
+ui:
+  session_terminal: "auto"
+"""
+    config1 = loader.load_from_string(yaml_with_auto)
+    dumped = loader.dump(config1)
+    config2 = loader.load_from_string(dumped)
+
+    assert config1.ui.session_terminal == "auto"
+    assert config2.ui.session_terminal == "auto"
+    assert config1 == config2
+
+
+def test_persist_session_terminal_updates_auto_to_concrete_host(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    initial_content = (
+        VALID_CONFIG_YAML
+        + "\nui:\n  # Auto detection comment\n  session_terminal: \"auto\"\n"
+    )
+    config_file.write_text(initial_content, encoding="utf-8")
+
+    loader = YamlConfigLoader()
+    loader.persist_session_terminal(config_file, "pwsh.exe")
+
+    updated_text = config_file.read_text(encoding="utf-8")
+    assert '"auto"' not in updated_text
+    assert 'session_terminal: "pwsh.exe"' in updated_text
+
+    loaded = loader.load(config_file)
+    assert loaded.ui.session_terminal == "pwsh.exe"
+
+

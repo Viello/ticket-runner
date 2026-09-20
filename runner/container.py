@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import time
 from typing import Any
 
@@ -17,6 +18,7 @@ from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, Gotchas
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.ui.terminal import RichTerminalDisplay
+from runner.adapters.ui.terminal_detector import TerminalHostDetector
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
 from runner.adapters.ui.tui_launcher import TuiLauncher
 from runner.application.clean_slate import CleanSlateArchiver
@@ -131,6 +133,7 @@ def build_container(
     tui_launcher: TuiLauncher | None = None,
     tui_coordinator: TuiCoordinator | None = None,
     console: Any | None = None,
+    terminal_detector: Any | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -291,7 +294,21 @@ def build_container(
         command_runner=resolved_command_runner,
     )
 
-    resolved_terminal_host = getattr(getattr(resolved_config, "ui", None), "session_terminal", "") or "wt.exe"
+    raw_terminal_host = getattr(getattr(resolved_config, "ui", None), "session_terminal", "")
+    if not raw_terminal_host or raw_terminal_host.lower() == "auto":
+        detector_fn = terminal_detector or TerminalHostDetector
+        if hasattr(detector_fn, "detect"):
+            detected_host = detector_fn.detect()
+        elif callable(detector_fn):
+            try:
+                detected_host = detector_fn(path_resolver=shutil.which)
+            except TypeError:
+                detected_host = detector_fn()
+        else:
+            detected_host = None
+        resolved_terminal_host = detected_host or "wt.exe"
+    else:
+        resolved_terminal_host = raw_terminal_host
 
     resolved_tui_coordinator = tui_coordinator or TuiCoordinator(
         terminal_display=resolved_terminal_display,

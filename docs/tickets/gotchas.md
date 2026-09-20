@@ -511,3 +511,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Sniffing environment cues (such as `WT_SESSION` or `TERM_PROGRAM=vscode`) or caller parent shell names can select terminal host binaries (e.g. `wt.exe` or `pwsh.exe`) that are not installed on PATH, causing downstream spawn calls to fail with `0x80070002` (`FileNotFoundError`).
 - **Solution**: Always verify auto-detected candidates against `path_resolver` before selection, falling through sequentially to the next priority candidate (`wt.exe` -> `pwsh.exe` -> `powershell.exe` -> `cmd.exe`) until a binary existing on PATH is confirmed.
 
+### Python Class Callable Inspection for Injected Detectors
+- **Problem**: When checking `if callable(detector):` to support injected functions vs class objects (`TerminalHostDetector`), Python class types evaluate to `True` for `callable()`. Attempting to call the class directly invokes `__init__` rather than executing class or static detection methods (e.g. `detector.detect(...)`), causing argument mismatch `TypeError`s or returning unresolvable class instances.
+- **Solution**: Check for `hasattr(detector, "detect")` before falling back to `callable()`, ensuring class-based adapters invoke their designated detection method with full dependency injection arguments.
+
+### Pre-Flight Dynamic Configuration Resolution Before Component Instantiation
+- **Problem**: Passing dynamic or sentinel configuration strings like `"auto"` directly into downstream components (such as `TuiCoordinator` and `build_tui_command`) causes runtime validation failures because command security builders reject non-concrete binary names against allowlists.
+- **Solution**: Resolve dynamic configuration strings (such as `ui.session_terminal: "auto"`) into concrete, PATH-verified binary names early during container composition (`build_container`) and Doctor pre-flight checks, ensuring downstream consumers receive strictly valid binary targets.
+
