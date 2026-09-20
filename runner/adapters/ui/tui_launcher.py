@@ -93,7 +93,7 @@ def build_tui_command(host: str, session_id: str) -> list[str]:
     basename = Path(valid_host).name.lower()
 
     if basename == "wt.exe":
-        return [valid_host, "opencode", "--session", valid_session]
+        return [valid_host, "cmd.exe", "/c", "opencode", "--session", valid_session]
     elif basename in ("pwsh.exe", "powershell.exe"):
         return [valid_host, "-NoExit", "-Command", "opencode", "--session", valid_session]
     elif basename == "cmd.exe":

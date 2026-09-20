@@ -1,5 +1,6 @@
 # T060 — Windows Terminal script wrapper defense and universal resume hotkey
-Status: pending
+Status: completed
+Completed: 2026-09-20T08:49:59Z
 Security: required
 Reasoning: low
 

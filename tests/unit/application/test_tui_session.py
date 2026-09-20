@@ -60,9 +60,9 @@ def _make_state_coordinator(
 def test_build_tui_command_supported_hosts() -> None:
     session_id = "ses_test999"
 
-    # wt.exe: wt.exe opencode --session <id>
+    # wt.exe: wt.exe cmd.exe /c opencode --session <id>
     cmd_wt = build_tui_command("wt.exe", session_id)
-    assert cmd_wt == ["wt.exe", "opencode", "--session", session_id]
+    assert cmd_wt == ["wt.exe", "cmd.exe", "/c", "opencode", "--session", session_id]
 
     # pwsh.exe: pwsh.exe -NoExit -Command opencode --session <id>
     cmd_pwsh = build_tui_command("pwsh.exe", session_id)
@@ -83,7 +83,7 @@ def test_build_tui_command_case_insensitivity_and_full_paths() -> None:
     assert cmd == [r"C:\Windows\System32\cmd.exe", "/k", "opencode", "--session", session_id]
 
     cmd_upper = build_tui_command("WT.EXE", session_id)
-    assert cmd_upper == ["WT.EXE", "opencode", "--session", session_id]
+    assert cmd_upper == ["WT.EXE", "cmd.exe", "/c", "opencode", "--session", session_id]
 
 
 def test_is_detaching_terminal() -> None:
@@ -287,7 +287,7 @@ async def test_tui_launch_persists_state_and_resumes_wt_via_r_key() -> None:
 
     # Verify process was spawned with correct wt.exe command
     assert len(cmd_runner.spawns) == 1
-    assert cmd_runner.spawns[0] == ["wt.exe", "opencode", "--session", "ses_tui_wt"]
+    assert cmd_runner.spawns[0] == ["wt.exe", "cmd.exe", "/c", "opencode", "--session", "ses_tui_wt"]
 
     # Press [r] to resume
     assert coordinator.handle_key_r() is True

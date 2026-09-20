@@ -440,7 +440,7 @@ def test_us14_mid_run_queues_intent_until_signal_boundary() -> None:
         await asyncio.sleep(0.01)
         assert coordinator.is_tui_open is True
         assert len(runner.spawns) == 1
-        assert runner.spawns[0] == ["wt.exe", "opencode", "--session", "ses_boundary_123"]
+        assert runner.spawns[0] == ["wt.exe", "cmd.exe", "/c", "opencode", "--session", "ses_boundary_123"]
 
         # Clean up by resuming
         coordinator.handle_key_r()
