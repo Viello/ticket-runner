@@ -300,7 +300,7 @@ async def test_gatekeeper_executor_emits_to_ui_event_sink() -> None:
 
 
 @pytest.mark.anyio
-async def test_queue_orchestrator_emits_to_ui_event_sink() -> None:
+async def test_queue_orchestrator_emits_to_ui_event_sink(tmp_path: Path) -> None:
     from pathlib import Path
     from tests.fakes.fake_command_runner import FakeCommandRunner
     from tests.fakes.fake_ticket_repository import FakeTicketRepository
@@ -341,6 +341,7 @@ async def test_queue_orchestrator_emits_to_ui_event_sink() -> None:
         processor=fake_processor,
         git_operations=git_ops,
         ui_event_sink=fake_display,
+        lock_path=tmp_path / ".queue.lock",
     )
 
     outcome = await orchestrator.run_next()

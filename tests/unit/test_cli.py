@@ -1067,3 +1067,45 @@ def test_cli_run_start_corrupt_state_warns_and_persists_cleanly(
     assert store.write_calls[-1] == {"selected_model": "single/model"}
 
 
+def test_run_start_starts_and_stops_terminal_display(tmp_path: Path) -> None:
+    """Verify that run_start starts and stops terminal_display around run_lifecycle."""
+    fake_doc = FakeDoctorPassing()
+    started = False
+    stopped = False
+
+    class FakeTerminalDisplay:
+        def start(self) -> None:
+            nonlocal started
+            started = True
+
+        def stop(self) -> None:
+            nonlocal stopped
+            stopped = True
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            assert started is True
+            assert stopped is False
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        terminal_display: Any = FakeTerminalDisplay()
+
+    container = ContainerDouble()
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            container_instance=container,
+        )
+    )
+
+    assert code == 0
+    assert started is True
+    assert stopped is True
+
+
+
+

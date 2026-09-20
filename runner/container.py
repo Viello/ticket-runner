@@ -16,6 +16,7 @@ from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.adapters.ui.terminal import RichTerminalDisplay
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
 from runner.adapters.ui.tui_launcher import TuiLauncher
 from runner.application.clean_slate import CleanSlateArchiver
@@ -129,6 +130,7 @@ def build_container(
     presence_coordinator: PresenceCoordinator | None = None,
     tui_launcher: TuiLauncher | None = None,
     tui_coordinator: TuiCoordinator | None = None,
+    console: Any | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -171,7 +173,8 @@ def build_container(
         cwd=cwd,
     )
 
-    resolved_event_sink = ui_event_sink or terminal_display
+    resolved_terminal_display = terminal_display or RichTerminalDisplay(console=console)
+    resolved_event_sink = ui_event_sink or resolved_terminal_display
 
     resolved_executor = executor or GatekeeperCommandExecutor(
         command_runner=resolved_command_runner,
@@ -190,6 +193,7 @@ def build_container(
         branch=resolved_config.project.branch,
         selected_model=model_id,
         clock=clock,
+        terminal_display=resolved_terminal_display,
     )
 
     resolved_prompt_builder = prompt_builder or PromptBuilder()
@@ -279,7 +283,7 @@ def build_container(
 
     resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
         state_coordinator=resolved_state_coordinator,
-        terminal_display=terminal_display,
+        terminal_display=resolved_terminal_display,
         ui_event_sink=resolved_event_sink,
     )
 
@@ -290,7 +294,7 @@ def build_container(
     resolved_terminal_host = getattr(getattr(resolved_config, "ui", None), "session_terminal", "") or "wt.exe"
 
     resolved_tui_coordinator = tui_coordinator or TuiCoordinator(
-        terminal_display=terminal_display,
+        terminal_display=resolved_terminal_display,
         launcher=resolved_tui_launcher,
         state_coordinator=resolved_state_coordinator,
         terminal_host=resolved_terminal_host,
@@ -320,7 +324,7 @@ def build_container(
         state_coordinator=resolved_state_coordinator,
         state_store=resolved_state_store,
         crash_recovery=resolved_crash_recovery,
-        terminal_display=terminal_display,
+        terminal_display=resolved_terminal_display,
         ui_event_sink=resolved_event_sink,
         presence_coordinator=resolved_presence_coordinator,
         tui_launcher=resolved_tui_launcher,

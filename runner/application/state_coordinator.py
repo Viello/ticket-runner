@@ -9,6 +9,7 @@ from typing import Any
 
 from runner.domain.state import RunnerState, StateStatus, TokenState
 from runner.ports.state_store import StateStore
+from runner.ports.terminal_display import TerminalDisplay
 
 
 class StateCoordinator:
@@ -22,6 +23,7 @@ class StateCoordinator:
         selected_model: str | None = None,
         presence_mode: str = "nearby",
         clock: Callable[[], float] | None = None,
+        terminal_display: TerminalDisplay | None = None,
     ) -> None:
         self._state_store = state_store
         self._current_state: RunnerState | None = initial_state
@@ -29,6 +31,7 @@ class StateCoordinator:
         self._selected_model = selected_model
         self._presence_mode = presence_mode
         self._clock = clock
+        self._terminal_display = terminal_display
 
     @property
     def current_state(self) -> RunnerState | None:
@@ -85,6 +88,11 @@ class StateCoordinator:
 
         self._state_store.write(merged)
         self._current_state = state
+        if self._terminal_display is not None:
+            try:
+                self._terminal_display.update_state(state, 0)
+            except Exception:
+                pass
 
     def get_or_create_state(self) -> RunnerState:
         """Return current state, loading from disk or initializing a default idle state."""

@@ -263,6 +263,7 @@ async def run_start(
             clock=clock,
             model_id=model_id,
             state_store=effective_state_store,
+            console=console,
         )
         orchestrator = getattr(container, "orchestrator", None)
         if supervisor is None:
@@ -342,6 +343,14 @@ async def run_start(
     )
     poller.start()
 
+    active_display = (
+        terminal_display
+        or getattr(container_instance, "terminal_display", None)
+        or getattr(orchestrator_instance, "terminal_display", None)
+    )
+    if active_display is not None and hasattr(active_display, "start"):
+        active_display.start()
+
     draining = False
     try:
         exit_code = await orchestrator.run_lifecycle(
@@ -372,6 +381,8 @@ async def run_start(
                     await active_supervisor._terminate_ladder(handle)
             except Exception:
                 pass
+        if active_display is not None and hasattr(active_display, "stop"):
+            active_display.stop()
         if hasattr(orchestrator, "print_completion_summary"):
             try:
                 await orchestrator.print_completion_summary()
@@ -392,6 +403,8 @@ async def run_start(
         return 1
     finally:
         await poller.stop()
+        if active_display is not None and hasattr(active_display, "stop"):
+            active_display.stop()
         if old_sigint is not None:
             try:
                 signal.signal(signal.SIGINT, old_sigint)
