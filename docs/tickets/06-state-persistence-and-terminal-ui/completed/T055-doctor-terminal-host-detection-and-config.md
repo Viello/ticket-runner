@@ -1,5 +1,6 @@
 # T055 — Doctor terminal host detection, interactive prompt, and configuration persistence
-Status: pending
+Status: completed
+Completed: 2026-09-19T10:28:00Z
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: None
 Reasoning: medium

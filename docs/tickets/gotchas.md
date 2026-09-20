@@ -439,8 +439,83 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Running startup model resolution and state store persistence unconditionally in CLI entry points like `run_start` causes in-memory test doubles (`container_instance` or `orchestrator_instance`) to inadvertently touch disk state files (`.agent/state.json`) or block on console input.
 - **Solution**: Confine startup resolution and state persistence strictly to the locally built container path in `run_start`, allowing tests passing injected containers or orchestrators to skip model selection entirely, while exposing explicit `state_store`, `model_prompt`, and `key_reader` injection seams on `run_start`.
 
+### Non-Clobbering State Persistence with Startup Model Selection
+- **Problem**: When `QueueOrchestrator` initializes `RunnerState`, writing the full state document directly to `state.json` without merging clobbers `selected_model` and unmanaged metadata keys written prior to startup by `ModelSelectionInteractor` or external tools.
+- **Solution**: Implement read-merge-write semantics in `StateCoordinator.save_state()`: read the existing document from the `StateStore`, retain existing `selected_model` if the incoming state has `None`, preserve all unmanaged keys, and write the merged dictionary atomically.
 
+### Strict Python Boolean Validation in Integer Domain Fields
+- **Problem**: In Python, `isinstance(True, int)` evaluates to `True`, which allows boolean values to silently pass naive integer typechecks (`isinstance(value, int)`) for token counts or verification attempt fields in domain models.
+- **Solution**: Explicitly check `isinstance(value, bool)` before `isinstance(value, int)` in domain entity validation (`TokenState` and `RunnerState`) to reject booleans and raise `StateFormatError` deterministically.
 
+### Working Tree Preservation and Runtime Filtering During Crash Recovery
+- **Problem**: Running `git reset --hard` or `git clean` during crash recovery destroys uncommitted worker edits, while naively parsing `git status --porcelain` includes runtime state (`.agent/`) and untracked build artifacts (`__pycache__`, `.pyc`, `.coverage`, `dist/`), polluting reconnection prompts and confusing the model.
+- **Solution**: Never reset or clean the working tree during crash recovery; parse porcelain output with path normalization and filter out `.agent/` prefix alongside common build artifact directories and extensions before listing uncommitted files in the reconnection prompt.
 
+### Cross-Platform Filename Safety for Corrupt State Quarantine
+- **Problem**: Using standard ISO-8601 UTC timestamp strings (`YYYY-MM-DDTHH:MM:SSZ`) containing colons (`:`) in quarantine filenames (`state.json.corrupt.<timestamp>`) fails on Windows because NTFS prohibits colons in file paths.
+- **Solution**: Format quarantine timestamps without colons using `%Y%m%dT%H%M%SZ` (e.g. `state.json.corrupt.20260919T100500Z`), ensuring cross-platform safety on Windows, Linux, and macOS without renaming errors.
 
+### Non-Destructive YAML Configuration Updates
+- **Problem**: Serializing entire configuration objects back to YAML via naive dumpers strips human comments, reorders keys, and risks altering environment variable placeholders across existing sections.
+- **Solution**: Target in-place regex substitutions on the active configuration file to update or append the specific section (`ui.session_terminal`), validate the merged document against YAML parsers and domain schema, and execute atomic file replacement with temp files.
+
+### Terminal Host Candidate Probing and Non-Interactive Safe Fallback
+- **Problem**: Pre-flight checks prompting for user input hang headless CI pipelines, subshells, and non-interactive runs when candidate terminal hosts exist but stdin is not a TTY.
+- **Solution**: Check TTY availability via `sys.stdin.isatty()` before rendering interactive selection menus; in non-interactive mode, auto-select the highest-priority detected candidate host (`wt.exe` > `pwsh.exe` > `powershell.exe` > `cmd.exe`) silently and persist it without blocking.
+
+### Windows Console Unicode Output Encoding for Celebration Box Drawing and Emoji
+- **Problem**: Rendering celebration boxes using Unicode box-drawing characters (`╔`, `═`, `║`, `╚`, `╝`) and emoji (`🎉`) on standard Windows terminals using legacy single-byte encodings (e.g. `cp1252`) raises `UnicodeEncodeError: 'charmap' codec can't encode characters`.
+- **Solution**: Reconfigure `sys.stdout` and `sys.stderr` to UTF-8 using `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` early in CLI command execution (`run_start`) before rich terminal banners or box characters are printed.
+
+### Disjoint Token Accumulation Between Ticket Outcomes and Lifecycle Accumulator
+- **Problem**: When tracking session token usage across the queue lifecycle, adding `outcome.tokens_consumed` to a running accumulator inside `run_next` while also computing total tokens by summing `_lifecycle_outcomes` causes token counts to be double-counted.
+- **Solution**: Maintain `_lifecycle_outcomes` as the authoritative record for completed ticket tokens, and reserve the manual `record_tokens` accumulator strictly for tokens logged outside individual ticket outcomes or across resumed cycles without double-adding.
+
+### Fixed Top Panel Height in Rich Live Layout
+- **Problem**: In dynamic terminal dashboards updating live with varying telemetry length, variable header panel height causes vertical jitter and visual jumping of dashboard rows.
+- **Solution**: Constrain the top header panel to an explicit fixed height (8 lines: 6 rows + 2 panel borders) by setting `Panel(..., height=8)` and `Layout(size=8)` so that live updates refresh seamlessly without layout shifts.
+
+### Clamping and Zero-Division Protection in Token Progress Calculation
+- **Problem**: Computing token percentages via `current / ceiling * 100` can divide by zero if ceiling is zero, exceed 100% when sessions consume tokens past the 150,000 ceiling, or format negative percentages when `tokens.current` is unset or negative.
+- **Solution**: Enforce `max(0, current)` and clamp the calculated percentage with `min(100, max(0, round(current / ceiling * 100)))` alongside a zero check on `ceiling`, ensuring stable 10-character progress bar formatting across all token count bounds.
+
+### Non-Blocking Windows Console Key Reading and Two-Byte Prefix Handling
+- **Problem**: Reading console keystrokes via `msvcrt.kbhit()` and `msvcrt.getch()` on Windows returns two-byte sequences for arrow keys, function keys, and navigation keys (starting with byte `\x00` or `\xe0`). Failing to consume the second byte leaves stray characters in the input buffer, triggering phantom hotkey actions on subsequent polling loop iterations.
+- **Solution**: Inspect the initial byte returned by `msvcrt.getch()`; if it matches `\x00` or `\xe0`, check `msvcrt.kbhit()` and discard the second byte immediately, normalizing all valid single-byte ASCII characters to lowercase for case-insensitive hotkey routing.
+
+### Test Isolation for Durable State and Crash Recovery Cascades
+- **Problem**: CLI unit tests executing entry points like `ticket_runner.main(["start", ...])` without isolating `RuntimePaths` mutate the live workspace `.agent/state.json`. If a test exercises an operator abort while a ticket is `WORKING`, it leaves dirty state on disk. Subsequent tests invoking `run_start` trigger `CrashRecoveryCoordinator.recover()`, which treats the dirty state as an in-flight crash and attempts to reconnect via live subprocess execution (`opencode run ...`), hanging the test suite indefinitely.
+- **Solution**: Always isolate `RuntimePaths` to a per-test temporary directory (`tmp_path / ".agent"`) in CLI test fixtures, ensuring unit tests never read or contaminate workspace runtime state.
+
+### Grandchild Pipe Inheritance and Job Object Reaping Order
+- **Problem**: On Windows, child processes spawning background or detached grandchildren inherit standard I/O pipes unless explicitly spawned with `DEVNULL` streams. If an async process wrapper awaits stderr/stdout stream draining before closing the Windows Job Object (`KILL_ON_JOB_CLOSE`), the open pipe handles held by the grandchild prevent EOF, causing `handle.wait()` to hang until the grandchild exits.
+- **Solution**: In process wrappers, close the Job Object immediately upon parent process exit (`_proc.wait()`) so the OS kernel reaps all detached descendants before awaiting stream draining tasks with a bounded timeout, and pass `DEVNULL` streams when spawning detached test grandchildren.
+
+### Rich Markup Literal `[r]` Reverse Tag Escaping
+- **Problem**: In Rich console markup, `[r]` is built-in shorthand for the `reverse` style tag. Rendering literal text like `Text.from_markup("[r] Resume")` causes Rich to interpret `[r]` as a formatting tag and swallow it, rendering `"Resume"` with inverted colors instead of the literal bracketed hotkey shortcut.
+- **Solution**: Always escape literal bracketed keyboard shortcuts in Rich markup strings with a leading backslash (e.g. `Text.from_markup("\\[r] Resume")`), or construct plain text renderables without markup interpretation.
+
+### Rich Layout Child Pane Existence Check
+- **Problem**: Checking whether a named layout pane exists in `rich.layout.Layout` using `"header" in layout` invokes `__contains__` which falls back to integer indexing `layout[0]`, raising `KeyError: 'No layout with name 0'`.
+- **Solution**: Check layout pane existence using `layout.get("header") is not None` rather than the `in` operator.
+
+### Async Mock Process Stream Delay in Event Loop Tests
+- **Problem**: In asynchronous event loop unit tests, using zero-delay mock process handles that finish instantaneously before scheduled keypress handlers run causes active-session state checks (e.g. `supervisor.is_running`) to evaluate to `False` prematurely, triggering unexpected synchronous code paths that await completion events indefinitely.
+- **Solution**: Inject a small delay (`delay=0.05`) into mock process streams or coordinate step-by-step with `asyncio.Event` flags to ensure test coroutines execute in their intended realistic sequence.
+
+### Win32 QueryFullProcessImageNameW vs System Toolhelp Snapshots
+- **Problem**: Calling `CreateToolhelp32Snapshot` to inspect a parent process image name captures an expensive snapshot of every active system process on Windows, introducing unnecessary overhead and failing in restricted permission contexts.
+- **Solution**: Query the parent PID directly using standard library `ctypes` calling `kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ppid)` and `kernel32.QueryFullProcessImageNameW`, using Toolhelp snapshots only as a secondary fallback.
+
+### Path Verification of Detected Terminal Candidates
+- **Problem**: Sniffing environment cues (such as `WT_SESSION` or `TERM_PROGRAM=vscode`) or caller parent shell names can select terminal host binaries (e.g. `wt.exe` or `pwsh.exe`) that are not installed on PATH, causing downstream spawn calls to fail with `0x80070002` (`FileNotFoundError`).
+- **Solution**: Always verify auto-detected candidates against `path_resolver` before selection, falling through sequentially to the next priority candidate (`wt.exe` -> `pwsh.exe` -> `powershell.exe` -> `cmd.exe`) until a binary existing on PATH is confirmed.
+
+### Python Class Callable Inspection for Injected Detectors
+- **Problem**: When checking `if callable(detector):` to support injected functions vs class objects (`TerminalHostDetector`), Python class types evaluate to `True` for `callable()`. Attempting to call the class directly invokes `__init__` rather than executing class or static detection methods (e.g. `detector.detect(...)`), causing argument mismatch `TypeError`s or returning unresolvable class instances.
+- **Solution**: Check for `hasattr(detector, "detect")` before falling back to `callable()`, ensuring class-based adapters invoke their designated detection method with full dependency injection arguments.
+
+### Pre-Flight Dynamic Configuration Resolution Before Component Instantiation
+- **Problem**: Passing dynamic or sentinel configuration strings like `"auto"` directly into downstream components (such as `TuiCoordinator` and `build_tui_command`) causes runtime validation failures because command security builders reject non-concrete binary names against allowlists.
+- **Solution**: Resolve dynamic configuration strings (such as `ui.session_terminal: "auto"`) into concrete, PATH-verified binary names early during container composition (`build_container`) and Doctor pre-flight checks, ensuring downstream consumers receive strictly valid binary targets.
 

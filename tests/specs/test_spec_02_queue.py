@@ -404,13 +404,27 @@ def test_spec_02_us_11_lifecycle_terminate_on_queue_completion(
         processor=fake_processor,
     )
 
+    sleeps: list[float] = []
+
+    async def fake_sleep(d: float) -> None:
+        sleeps.append(d)
+
     exit_code = asyncio.run(
-        orchestrator.run_lifecycle(lifecycle="terminate", printer=printed_lines.append)
+        orchestrator.run_lifecycle(
+            lifecycle="terminate",
+            printer=printed_lines.append,
+            sleep_fn=fake_sleep,
+        )
     )
 
     assert exit_code == 0
+    assert 2.0 in sleeps
     assert any("Queue exhausted" in p for p in printed_lines)
     assert any("terminate" in p.lower() for p in printed_lines)
+    assert any("╔══════════════════════════════════════════════════╗" in p for p in printed_lines)
+    assert any("🎉  Queue complete! All tickets committed." in p for p in printed_lines)
+    assert any("1 tickets  ·  0 failed" in p for p in printed_lines)
+    assert any("╚══════════════════════════════════════════════════╝" in p for p in printed_lines)
     assert queue_lock.is_locked is False
 
     # Completed ticket was relocated

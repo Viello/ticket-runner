@@ -15,12 +15,15 @@ from runner.application.doctor import (
     CHECK_OPENCODE,
     CHECK_QUEUE,
     CHECK_SKILLS,
+    CHECK_TERMINAL_HOST,
     CHECK_VERIFICATION_COMMANDS,
+    CANDIDATE_TERMINAL_HOSTS,
     CheckResult,
     Doctor,
     DoctorReport,
 )
-from runner.domain.config import RunnerConfig
+from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
+from runner.domain.config import RunnerConfig, UIConfig
 from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError
 from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
@@ -58,11 +61,20 @@ class FakeConfigLoader:
     def __init__(self, config=None, error: Exception | None = None) -> None:
         self.config = config
         self.error = error
+        self.persisted_terminals: list[tuple[Path | str, str]] = []
 
     def load(self, path: Path | str):
         if self.error:
             raise self.error
         return self.config
+
+    def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
+        self.persisted_terminals.append((path, session_terminal))
+        if self.config is not None:
+            import dataclasses
+
+            new_ui = dataclasses.replace(self.config.ui, session_terminal=session_terminal)
+            self.config = dataclasses.replace(self.config, ui=new_ui)
 
 
 class FakeHookInstaller:
@@ -80,6 +92,7 @@ def _make_config(
     build_cmd: str = "",
     execution_skill: str = ".agents/skills/implement/SKILL.md",
     model: ModelConfig | None = None,
+    ui: UIConfig | None = None,
 ) -> RunnerConfig:
     """Construct a minimal valid RunnerConfig with scripted verification commands."""
     from runner.domain.config import (
@@ -91,6 +104,7 @@ def _make_config(
         PresenceConfig,
         ProjectConfig,
         TokenBudgetConfig,
+        UIConfig,
         VerificationConfig,
         WorkerConfig,
     )
@@ -100,6 +114,9 @@ def _make_config(
             models=(ModelEntry(id="deepseek/deepseek-chat", label="DeepSeek Chat"),),
             default_reasoning="",
         )
+
+    if ui is None:
+        ui = UIConfig(session_terminal="powershell.exe")
 
     return RunnerConfig(
         project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
@@ -111,6 +128,7 @@ def _make_config(
         lifecycle=LifecycleConfig(),
         git=GitConfig(),
         model=model,
+        ui=ui,
     )
 
 
@@ -539,8 +557,8 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
     report = await doctor.run(local_only=False, halt_on_failure=False)
 
     assert report.passed is False
-    # All 10 checks executed
-    assert len(report.checks) == 10
+    # All 11 checks executed
+    assert len(report.checks) == 11
 
 
 
@@ -809,5 +827,271 @@ async def test_doctor_run_order_includes_model_after_config(tmp_path: Path) -> N
     config_idx = check_names.index(CHECK_CONFIG)
     model_idx = check_names.index(CHECK_MODEL)
     assert model_idx == config_idx + 1
+
+
+@pytest.mark.anyio
+async def test_doctor_run_order_includes_terminal_host_after_model(tmp_path: Path) -> None:
+    """Verify Doctor.run() includes CHECK_TERMINAL_HOST immediately after CHECK_MODEL."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    config = _make_config()
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,
+    )
+
+    report = await doctor.run(local_only=True, halt_on_failure=False)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_TERMINAL_HOST in check_names
+    model_idx = check_names.index(CHECK_MODEL)
+    terminal_idx = check_names.index(CHECK_TERMINAL_HOST)
+    assert terminal_idx == model_idx + 1
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_skipped_without_config() -> None:
+    """Doctor skips terminal host check when configuration is not loaded."""
+    doctor = Doctor()
+    result = await doctor.check_terminal_host()
+
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "skipped" in result.message.lower()
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_passes_when_configured_binary_found() -> None:
+    """Doctor passes when ui.session_terminal is set and discoverable on PATH."""
+    config = _make_config(ui=UIConfig(session_terminal="wt.exe"))
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda name: r"C:\Users\AppData\Local\Microsoft\WindowsApps\wt.exe" if name == "wt.exe" else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "wt.exe" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_fails_when_configured_binary_missing() -> None:
+    """Doctor fails with actionable remediation when configured binary is not on PATH."""
+    config = _make_config(ui=UIConfig(session_terminal="custom_term.exe"))
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda name: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is False
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "custom_term.exe" in result.message
+    assert result.remediation is not None
+    assert "custom_term.exe" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_fails_when_no_supported_hosts_detected() -> None:
+    """Doctor fails when ui.session_terminal is empty and no candidate host exists."""
+    config = _make_config(ui=UIConfig(session_terminal=""))
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda name: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is False
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "No supported terminal host detected" in result.message
+    assert result.remediation is not None
+    assert "wt.exe" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_selects_single_detected_host() -> None:
+    """Doctor auto-selects without prompting when exactly one host is detected."""
+    config = _make_config(ui=UIConfig(session_terminal=""))
+    config_loader = FakeConfigLoader(config=config)
+    output_lines: list[str] = []
+
+    prompt = TerminalHostPrompt(output_fn=output_lines.append, is_interactive=lambda: True)
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: r"C:\Windows\System32\cmd.exe" if name == "cmd.exe" else None,
+        terminal_prompt=prompt,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "cmd.exe" in result.message
+    assert output_lines == []  # No prompt shown for single detected host
+    assert config_loader.persisted_terminals == [(doctor._config_path, "cmd.exe")]
+    assert doctor.loaded_config.ui.session_terminal == "cmd.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_interactive_menu_selection() -> None:
+    """Doctor presents interactive numbered menu when multiple hosts detected in interactive mode."""
+    config = _make_config(ui=UIConfig(session_terminal=""))
+    config_loader = FakeConfigLoader(config=config)
+    output_lines: list[str] = []
+
+    # Available hosts: wt.exe, powershell.exe, cmd.exe
+    # User selects option 2 ("powershell.exe") and confirms with Enter
+    keys = ["2", "\r"]
+    key_iter = iter(keys)
+
+    prompt = TerminalHostPrompt(
+        read_key=lambda: next(key_iter),
+        output_fn=output_lines.append,
+        is_interactive=lambda: True,
+    )
+
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: rf"C:\tools\{name}" if name in ("wt.exe", "powershell.exe", "cmd.exe") else None,
+        terminal_prompt=prompt,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert "powershell.exe" in result.message
+    assert len(output_lines) == 1
+    assert "Select terminal host for interactive sessions:" in output_lines[0]
+    assert config_loader.persisted_terminals == [(doctor._config_path, "powershell.exe")]
+    assert doctor.loaded_config.ui.session_terminal == "powershell.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_non_interactive_fallback_highest_priority() -> None:
+    """Doctor auto-selects highest-priority detected host in non-interactive environment."""
+    config = _make_config(ui=UIConfig(session_terminal=""))
+    config_loader = FakeConfigLoader(config=config)
+    output_lines: list[str] = []
+
+    # Available hosts: pwsh.exe, cmd.exe (highest priority is pwsh.exe)
+    prompt = TerminalHostPrompt(
+        output_fn=output_lines.append,
+        is_interactive=lambda: False,
+    )
+
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: rf"C:\tools\{name}" if name in ("pwsh.exe", "cmd.exe") else None,
+        terminal_prompt=prompt,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert "pwsh.exe" in result.message
+    assert output_lines == []  # Silently auto-selected
+    assert config_loader.persisted_terminals == [(doctor._config_path, "pwsh.exe")]
+    assert doctor.loaded_config.ui.session_terminal == "pwsh.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_passes_and_reports_resolved_binary() -> None:
+    """Doctor passes when session_terminal is 'auto' and reports the resolved binary on PATH."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: r"C:\WindowsApps\wt.exe" if name == "wt.exe" else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.name == CHECK_TERMINAL_HOST
+    assert result.message == "Session terminal host 'auto' resolved to 'wt.exe' on PATH."
+    assert result.remediation is None
+    # Verify config.yaml was NOT mutated/persisted
+    assert config_loader.persisted_terminals == []
+    # Verify loaded config has the resolved host
+    assert doctor.loaded_config.ui.session_terminal == "wt.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_fails_when_no_supported_hosts() -> None:
+    """Doctor fails with actionable remediation when session_terminal is 'auto' and no host resolves."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        path_resolver=lambda name: None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is False
+    assert result.name == CHECK_TERMINAL_HOST
+    assert "No supported terminal host detected" in result.message
+    assert result.remediation is not None
+    assert "wt.exe" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_auto_sniffs_environment() -> None:
+    """Doctor auto resolution sniffs environment variables (e.g. WT_SESSION)."""
+    config = _make_config(ui=UIConfig(session_terminal="auto"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        env={"WT_SESSION": "uuid-1234"},
+        path_resolver=lambda name: r"C:\WindowsApps\wt.exe" if name == "wt.exe" else (r"C:\Windows\System32\cmd.exe" if name == "cmd.exe" else None),
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.message == "Session terminal host 'auto' resolved to 'wt.exe' on PATH."
+    assert doctor.loaded_config.ui.session_terminal == "wt.exe"
+
+
+@pytest.mark.anyio
+async def test_check_terminal_host_explicit_overrides_auto_detection() -> None:
+    """Explicit host in config overrides auto-detection and verifies that specific binary."""
+    config = _make_config(ui=UIConfig(session_terminal="powershell.exe"))
+    config_loader = FakeConfigLoader(config=config)
+    doctor = Doctor(
+        config_loader=config_loader,
+        env={"WT_SESSION": "uuid-1234"},  # Would otherwise pick wt.exe
+        path_resolver=lambda name: rf"C:\tools\{name}" if name in ("wt.exe", "powershell.exe") else None,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_terminal_host()
+    assert result.passed is True
+    assert result.message == "Session terminal host 'powershell.exe' verified on PATH."
+    assert config_loader.persisted_terminals == []
+    assert doctor.loaded_config.ui.session_terminal == "powershell.exe"
 
 

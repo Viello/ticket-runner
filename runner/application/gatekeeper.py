@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import SignalFormatError, UserAbortError
 from runner.domain.signal import ReadySignal
@@ -29,6 +30,7 @@ from runner.ports.intervention import (
     InterventionGateway,
 )
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.terminal_display import UiEventSink
 
 logger = logging.getLogger(__name__)
 
@@ -226,11 +228,22 @@ class GatekeeperCommandExecutor:
         cwd: Path | None = None,
         platform: str | None = None,
         path_resolver: Callable[[str], str | None] | None = None,
+        ui_event_sink: UiEventSink | None = None,
     ) -> None:
         self._command_runner = command_runner or SubprocessRunner()
         self._cwd = cwd
         self._platform = platform if platform is not None else sys.platform
         self._path_resolver = path_resolver or shutil.which
+        self._ui_event_sink = ui_event_sink
+
+    @property
+    def ui_event_sink(self) -> UiEventSink | None:
+        """Configured UiEventSink for verification telemetry."""
+        return self._ui_event_sink
+
+    @ui_event_sink.setter
+    def ui_event_sink(self, value: UiEventSink | None) -> None:
+        self._ui_event_sink = value
 
     async def verify(self, config: VerificationConfig) -> VerificationReport:
         """Execute the configured verification commands sequentially.
@@ -288,6 +301,12 @@ class GatekeeperCommandExecutor:
                     tail="",
                     not_found=token,
                 )
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("gate", f"Gatekeeper: running {command} ...")
+            except Exception:
+                pass
+
         argv = build_shell_argv(command, self._platform)
         handle = await self._command_runner.spawn(argv, cwd=self._cwd)
 
@@ -330,13 +349,22 @@ class GatekeeperCommandExecutor:
         tail_source = list(stdout_lines)
         tail_source.extend(handle.stderr.splitlines()[-TAIL_LINE_LIMIT:])
 
-        return CommandOutcome(
+        outcome = CommandOutcome(
             label=label,
             command=command,
             exit_code=exit_code,
             timed_out=timed_out,
             tail="\n".join(tail_source[-TAIL_LINE_LIMIT:]),
         )
+
+        if self._ui_event_sink is not None:
+            try:
+                status_text = "passed" if outcome.passed else "failed"
+                self._ui_event_sink.emit("gate", f"Gatekeeper: {command} {status_text}")
+            except Exception:
+                pass
+
+        return outcome
 
 
 MAX_DIAGNOSTIC_LINES: int = 100
@@ -515,6 +543,8 @@ class VerificationLoop:
         initial_prompt: str | None = None,
         initial_session_id: str | None = None,
         notify: Callable[[str], None] | None = None,
+        state_coordinator: StateCoordinator | None = None,
+        ui_event_sink: UiEventSink | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -533,6 +563,30 @@ class VerificationLoop:
         self._last_diagnostics: str = ""
         self._notify = notify
         self._accumulated_resources: set[str] = set()
+        self._state_coordinator = state_coordinator
+        self._ui_event_sink = ui_event_sink
+        if ui_event_sink is not None and getattr(self._executor, "ui_event_sink", None) is None:
+            self._executor.ui_event_sink = ui_event_sink
+
+    @property
+    def ui_event_sink(self) -> UiEventSink | None:
+        """UiEventSink telemetry sink."""
+        return self._ui_event_sink
+
+    @ui_event_sink.setter
+    def ui_event_sink(self, value: UiEventSink | None) -> None:
+        self._ui_event_sink = value
+        if hasattr(self._executor, "ui_event_sink"):
+            self._executor.ui_event_sink = value
+
+    @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """State coordinator used to persist verification transitions."""
+        return self._state_coordinator
+
+    @state_coordinator.setter
+    def state_coordinator(self, value: StateCoordinator | None) -> None:
+        self._state_coordinator = value
 
     @property
     def accumulated_resources(self) -> frozenset[str]:
@@ -665,6 +719,11 @@ class VerificationLoop:
                 # Check soft warnings before proceeding to verification
                 self._check_ready_warnings()
 
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_gatekeeper(
+                        verification_attempts=self._attempts
+                    )
+
                 # Execute Gatekeeper independent verification commands
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
@@ -772,6 +831,8 @@ class VerificationLoop:
     async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
         """Handle attempt failure, evaluating budget exhaustion and intervention menu."""
         if self._attempts >= self._max_attempts:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_waiting_for_user()
             decision = self._intervention_gateway.request_intervention(
                 ticket=self._ticket,
                 diagnostics=diagnostics,
@@ -781,6 +842,8 @@ class VerificationLoop:
                 decision = await decision
 
             if decision.action == InterventionAction.ABORT:
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_circuit_breaker_tripped()
                 raise UserAbortError(
                     f"Execution aborted by operator for ticket '{self._ticket.id}'."
                 )
@@ -788,6 +851,12 @@ class VerificationLoop:
             if decision.action == InterventionAction.RETRY:
                 # Reset attempt counter to full fresh budget
                 self._attempts = 0
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_working(
+                        ticket_id=self._ticket.id,
+                        session_id=self._active_session_id,
+                        verification_attempts=0,
+                    )
                 self._pending_prompt = build_verification_failure_prompt(
                     ticket=self._ticket,
                     diagnostics=diagnostics,

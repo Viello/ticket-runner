@@ -16,9 +16,12 @@ from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, Gotchas
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.application.clean_slate import CleanSlateArchiver
 from runner.application.git_operations import GitOperations
+from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import LifecycleConfig, RunnerConfig
 from runner.domain.exceptions import UserAbortError
+from runner.domain.state import StateStatus
 from runner.domain.ticket import Ticket
+from runner.ports.terminal_display import UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
@@ -47,6 +50,7 @@ class TicketOutcome:
     commit_prefix: str | None = None
     details: str | Mapping[str, Any] | None = None
     commit_sha: str | None = None
+    tokens_consumed: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.status, str) and not isinstance(self.status, TicketOutcomeStatus):
@@ -79,6 +83,7 @@ class TicketOutcome:
         scope: str | None = None,
         commit_prefix: str | None = None,
         commit_sha: str | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct an approved ticket outcome."""
         return cls(
@@ -88,29 +93,55 @@ class TicketOutcome:
             scope=scope,
             commit_prefix=commit_prefix,
             commit_sha=commit_sha,
+            tokens_consumed=tokens_consumed,
         )
 
     @classmethod
     def skipped(
         cls,
         details: str | Mapping[str, Any] | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct a skipped ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.SKIPPED,
             details=details,
+            tokens_consumed=tokens_consumed,
         )
 
     @classmethod
     def aborted(
         cls,
         details: str | Mapping[str, Any] | None = None,
+        tokens_consumed: int = 0,
     ) -> TicketOutcome:
         """Construct an aborted ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.ABORTED,
             details=details,
+            tokens_consumed=tokens_consumed,
         )
+
+
+def format_celebration_banner(tickets_committed: int, total_tokens: int) -> str:
+    """Format the verbatim Spec 06 double-bordered celebration banner.
+
+    Args:
+        tickets_committed: Count of tickets committed in the lifecycle run ({n}).
+        total_tokens: Total tokens accumulated across sessions, rounded to nearest thousand ({k}).
+
+    Returns:
+        Exact 4-line boxed banner formatted in double-line border characters.
+    """
+    k = (total_tokens + 500) // 1000 if total_tokens >= 0 else 0
+    middle = f"  {tickets_committed} tickets  ·  0 failed  ·  ~{k}k tokens"
+    pad = " " * max(0, 50 - len(middle))
+    return (
+        "╔══════════════════════════════════════════════════╗\n"
+        "║  🎉  Queue complete! All tickets committed.      ║\n"
+        f"║{middle}{pad}║\n"
+        "╚══════════════════════════════════════════════════╝"
+    )
 
 
 @runtime_checkable
@@ -140,12 +171,16 @@ class QueueOrchestrator:
         cwd: Path | None = None,
         clean_slate_archiver: CleanSlateArchiver | None = None,
         clock: Callable[[], float] | None = None,
+        state_coordinator: StateCoordinator | None = None,
+        ui_event_sink: UiEventSink | None = None,
     ) -> None:
         self._cwd = cwd
         self._clock: Callable[[], float] = clock or time.monotonic
         self._lifecycle_outcomes: list[TicketOutcome] = []
         self._lifecycle_start_time: float | None = None
         self._summary_printed: bool = False
+        self._state_coordinator = state_coordinator
+        self._ui_event_sink = ui_event_sink
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
         elif self._cwd:
@@ -192,6 +227,7 @@ class QueueOrchestrator:
         self._cleaned_spec_slugs: set[str] = set()
         self._deferred_clean_slate: bool = False
         self._last_outcome: TicketOutcome | None = None
+        self._accumulated_tokens: int = 0
 
     @property
     def has_deferred_clean_slate(self) -> bool:
@@ -207,6 +243,71 @@ class QueueOrchestrator:
     def last_outcome(self) -> TicketOutcome | None:
         """Outcome of the most recently processed ticket."""
         return self._last_outcome
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens consumed across all sessions in this lifecycle run."""
+        outcomes_tokens = sum(o.tokens_consumed for o in self._lifecycle_outcomes)
+        total = self._accumulated_tokens + outcomes_tokens
+        if total > 0:
+            return total
+        if self.supervisor is not None and hasattr(self.supervisor, "cumulative_tokens"):
+            return int(getattr(self.supervisor, "cumulative_tokens", 0))
+        if self._state_coordinator is not None:
+            state = self._state_coordinator.current_state
+            if state and state.tokens.current > 0:
+                return state.tokens.current
+        return 0
+
+    def record_tokens(self, count: int) -> None:
+        """Accumulate token consumption into this lifecycle run."""
+        self._accumulated_tokens += max(0, count)
+
+    def format_celebration_banner(
+        self,
+        tickets_committed: int | None = None,
+        total_tokens: int | None = None,
+    ) -> str:
+        """Render the verbatim completion banner with current or provided metrics."""
+        committed = (
+            tickets_committed
+            if tickets_committed is not None
+            else sum(1 for o in self._lifecycle_outcomes if o.is_approved)
+        )
+        tokens = total_tokens if total_tokens is not None else self.total_tokens
+        return format_celebration_banner(tickets_committed=committed, total_tokens=tokens)
+
+    async def print_celebration_banner(
+        self,
+        printer: Callable[[str], None] = print,
+        console: Any | None = None,
+        sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+        delay: float = 2.0,
+        tickets_committed: int | None = None,
+        total_tokens: int | None = None,
+    ) -> None:
+        """Render celebration banner in bold green and pause before clean exit."""
+        banner = self.format_celebration_banner(
+            tickets_committed=tickets_committed,
+            total_tokens=total_tokens,
+        )
+        if console is not None:
+            console.print(banner, style="bold green")
+            if printer is not print:
+                for line in banner.splitlines():
+                    printer(line)
+        else:
+            if printer is print:
+                from rich.console import Console
+
+                Console().print(banner, style="bold green")
+            else:
+                for line in banner.splitlines():
+                    printer(line)
+
+        active_sleep = sleep_fn or asyncio.sleep
+        if delay > 0:
+            await active_sleep(delay)
 
     @property
     def is_paused(self) -> bool:
@@ -296,6 +397,16 @@ class QueueOrchestrator:
         return self._commit_scope
 
     @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """Coordinating service for durable runner state persistence."""
+        return self._state_coordinator
+
+    def transition_to_gatekeeper(self, attempts: int | None = None) -> None:
+        """Transition runner state to GATEKEEPER if coordinator is present."""
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_gatekeeper(verification_attempts=attempts)
+
+    @property
     def supervisor(self) -> Any:
         """Underlying WorkerSupervisor if available through processor."""
         if self._processor is not None and hasattr(self._processor, "supervisor"):
@@ -312,14 +423,49 @@ class QueueOrchestrator:
         if self._lock.is_locked:
             self._lock.release()
 
+    @property
+    def ui_event_sink(self) -> UiEventSink | None:
+        """UiEventSink telemetry sink."""
+        return self._ui_event_sink
+
+    @ui_event_sink.setter
+    def ui_event_sink(self, value: UiEventSink | None) -> None:
+        self._ui_event_sink = value
+
     def pause(self) -> None:
         """Pause queue progression and release the sentinel lock for external edits."""
         self._is_paused = True
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_pause_requested()
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", "Queue execution paused")
+            except Exception:
+                pass
         self.release_lock()
 
     def resume(self) -> None:
         """Resume queue progression and re-acquire sentinel lock."""
         self._is_paused = False
+        if self._state_coordinator is not None:
+            try:
+                state = self._state_coordinator.get_or_create_state()
+                if state.status == StateStatus.PAUSE_REQUESTED:
+                    if state.active_ticket_id:
+                        self._state_coordinator.transition_to_working(
+                            ticket_id=state.active_ticket_id,
+                            session_id=state.opencode_session_id,
+                            verification_attempts=state.verification_attempts,
+                        )
+                    else:
+                        self._state_coordinator.transition_to_idle()
+            except Exception:
+                pass
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", "Queue execution resumed")
+            except Exception:
+                pass
         self.acquire_lock()
 
     def close(self) -> None:
@@ -364,8 +510,24 @@ class QueueOrchestrator:
 
         ticket = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
         if ticket is None:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
             self.release_lock()
             return None
+
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_working(ticket_id=ticket.id)
+            if (
+                hasattr(active_processor, "state_coordinator")
+                and getattr(active_processor, "state_coordinator", None) is None
+            ):
+                active_processor.state_coordinator = self._state_coordinator
+
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", f"Starting ticket {ticket.id}")
+            except Exception:
+                pass
 
         slug = None
         if ticket.spec_path:
@@ -408,6 +570,13 @@ class QueueOrchestrator:
             final_outcome = outcome.with_commit_sha(sha)
             self._last_outcome = final_outcome
 
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", f"Authoring commit: {prefix}: {ticket.title}")
+                    self._ui_event_sink.emit("runner", f"Ticket {ticket.id} approved")
+                except Exception:
+                    pass
+
         elif outcome.is_skipped:
             # 1. Reset working tree to pristine state
             await self._git_operations.reset_working_tree()
@@ -416,6 +585,12 @@ class QueueOrchestrator:
             self._ticket_store.finalize_skipped(ticket, details=outcome.details)
             final_outcome = outcome
             self._last_outcome = final_outcome
+
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", f"Ticket {ticket.id} skipped")
+                except Exception:
+                    pass
 
         elif outcome.is_aborted:
             self._last_outcome = outcome
@@ -433,6 +608,8 @@ class QueueOrchestrator:
         # If queue is now empty, release lock
         remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
         if remaining is None:
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
             self.release_lock()
 
         return final_outcome
@@ -489,6 +666,9 @@ class QueueOrchestrator:
         clean_slate_policy: str | None = None,
         sleep_fn: Callable[[float], Awaitable[None]] | None = None,
         clock: Callable[[], float] | None = None,
+        banner_delay: float = 2.0,
+        console: Any | None = None,
+        total_tokens: int | None = None,
     ) -> int:
         """Drive full queue lifecycle respecting queue_completion policy (standby/terminate).
 
@@ -502,6 +682,9 @@ class QueueOrchestrator:
             clean_slate_policy: Optional override for clean_slate policy (e.g. 'always' / 'never').
             sleep_fn: Optional injected async sleep callable for deterministic clock tests.
             clock: Optional injected clock callable for deterministic duration tests.
+            banner_delay: Delay in seconds to display celebration banner before clean exit.
+            console: Optional Rich Console for bold green banner formatting.
+            total_tokens: Optional total tokens consumed override for tests.
 
         Returns:
             Exit status code (0 clean terminate/stop, 1 runtime error, 2 abort, 130 SIGINT).
@@ -513,6 +696,7 @@ class QueueOrchestrator:
         active_processor = processor or self._processor
         active_sleep = sleep_fn or asyncio.sleep
         self._lifecycle_outcomes = []
+        self._accumulated_tokens = 0
         self._summary_printed = False
         self._deferred_clean_slate = False
         self._cleaned_spec_slugs.clear()
@@ -548,25 +732,28 @@ class QueueOrchestrator:
             if pending is not None and active_processor is None:
                 raise RuntimeError("No ticket processor configured.")
 
-            # 2. Process initial queue until empty or paused
+            # 2. Process initial queue until empty, waiting if paused
             if active_processor is not None:
-                while not self._is_paused:
-                    if stop_event is not None and stop_event.is_set():
-                        break
+                while not (stop_event is not None and stop_event.is_set()):
+                    if self._is_paused:
+                        self.release_lock()
+                        if stop_event is not None and sleep_fn is None:
+                            try:
+                                await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                                break
+                            except asyncio.TimeoutError:
+                                pass
+                        else:
+                            await active_sleep(effective_poll_interval)
+                        continue
+
                     outcome = await self.run_next(processor=active_processor)
                     if outcome is None:
                         break
                     self._lifecycle_outcomes.append(outcome)
-                    if stop_event is not None and stop_event.is_set():
-                        break
-
-            if self._is_paused:
-                self.release_lock()
-                await self.print_completion_summary(printer=printer, clock=active_clock)
-                return 0
 
             pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
-            if pending is not None:
+            if pending is not None and (stop_event is not None and stop_event.is_set()):
                 # Execution was stopped before queue drained
                 self.release_lock()
                 await self.print_completion_summary(printer=printer, clock=active_clock)
@@ -574,6 +761,13 @@ class QueueOrchestrator:
 
             # 3. Queue is exhausted
             printer("[Queue] Queue exhausted: no pending tickets.")
+            if self._ui_event_sink is not None:
+                try:
+                    self._ui_event_sink.emit("runner", "Queue complete: all tickets processed")
+                except Exception:
+                    pass
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_idle()
 
             # 4. Apply lifecycle policy
             if policy == "terminate":
@@ -581,6 +775,13 @@ class QueueOrchestrator:
                 await self._handle_clean_slate(policy=active_clean_slate, printer=printer)
                 printer("[Queue] Lifecycle policy 'terminate': Queue complete. Exiting.")
                 await self.print_completion_summary(printer=printer, clock=active_clock)
+                await self.print_celebration_banner(
+                    printer=printer,
+                    console=console,
+                    sleep_fn=active_sleep,
+                    delay=banner_delay,
+                    total_tokens=total_tokens,
+                )
                 return 0
 
             # Standby mode: archive at drain for 'always', defer prompt for 'interactive'
@@ -593,11 +794,24 @@ class QueueOrchestrator:
             self.release_lock()
             printer(STANDBY_BANNER)
             iteration = 0
-            while not self._is_paused:
-                if stop_event is not None and stop_event.is_set():
-                    break
+            while not (stop_event is not None and stop_event.is_set()):
                 if max_standby_iterations is not None and iteration >= max_standby_iterations:
                     break
+
+                if self._is_paused:
+                    self.release_lock()
+                    if stop_event is not None and sleep_fn is None:
+                        try:
+                            await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                            break
+                        except asyncio.TimeoutError:
+                            pass
+                    else:
+                        try:
+                            await active_sleep(effective_poll_interval)
+                        except asyncio.CancelledError:
+                            raise
+                    continue
 
                 if stop_event is not None and sleep_fn is None:
                     try:
@@ -613,7 +827,7 @@ class QueueOrchestrator:
 
                 iteration += 1
 
-                if self._is_paused or (stop_event is not None and stop_event.is_set()):
+                if stop_event is not None and stop_event.is_set():
                     break
 
                 pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
@@ -621,22 +835,28 @@ class QueueOrchestrator:
                     printer(f"[Queue] Detected new pending ticket '{pending.id}'. Resuming queue execution...")
                     if active_processor is None:
                         raise RuntimeError("No ticket processor configured.")
-                    while not self._is_paused:
-                        if stop_event is not None and stop_event.is_set():
-                            break
+                    while not (stop_event is not None and stop_event.is_set()):
+                        if self._is_paused:
+                            self.release_lock()
+                            if stop_event is not None and sleep_fn is None:
+                                try:
+                                    await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
+                                    break
+                                except asyncio.TimeoutError:
+                                    pass
+                            else:
+                                await active_sleep(effective_poll_interval)
+                            continue
                         outcome = await self.run_next(processor=active_processor)
                         if outcome is None:
                             break
                         self._lifecycle_outcomes.append(outcome)
-                        if stop_event is not None and stop_event.is_set():
-                            break
-
-                    if self._is_paused:
-                        break
 
                     remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
                     if remaining is None:
                         printer("[Queue] Queue exhausted: no pending tickets.")
+                        if self._state_coordinator is not None:
+                            self._state_coordinator.transition_to_idle()
                         if active_clean_slate == "always":
                             self.release_lock()
                             await self._handle_clean_slate(policy="always", printer=printer)

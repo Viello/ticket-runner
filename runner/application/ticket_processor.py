@@ -25,6 +25,7 @@ from runner.application.handoff_coordinator import (
     WorkerRunResult,
 )
 from runner.application.prompt_builder import PromptBuilder
+from runner.application.state_coordinator import StateCoordinator
 from runner.application.queue_orchestrator import (
     TicketOutcome,
     TicketOutcomeStatus,
@@ -60,9 +61,11 @@ class GatekeeperTicketProcessor:
         loop_factory: Callable[..., VerificationLoop] | None = None,
         printer: Callable[[str], None] | None = _DEFAULT_PRINTER,
         notify: Callable[[str], None] | None = None,
+        state_coordinator: StateCoordinator | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
+        self._state_coordinator = state_coordinator
         if self._notify_sink is None and coordinator is not None and getattr(coordinator, "_notify", None) is not None:
             self._notify_sink = coordinator._notify
 
@@ -151,6 +154,15 @@ class GatekeeperTicketProcessor:
         return self._intervention_gateway
 
     @property
+    def state_coordinator(self) -> StateCoordinator | None:
+        """State coordinator used to persist verification transitions."""
+        return self._state_coordinator
+
+    @state_coordinator.setter
+    def state_coordinator(self, value: StateCoordinator | None) -> None:
+        self._state_coordinator = value
+
+    @property
     def supervisor(self) -> Any:
         """Underlying WorkerSupervisor if available through coordinator."""
         if self._coordinator is not None and hasattr(self._coordinator, "supervisor"):
@@ -236,6 +248,10 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["notify"] = self._notify
+            if "state_coordinator" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["state_coordinator"] = self._state_coordinator
         except (ValueError, TypeError):
             pass
 

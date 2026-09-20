@@ -5,24 +5,33 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import time
 from typing import Any
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.adapters.ui.terminal import RichTerminalDisplay
+from runner.adapters.ui.terminal_detector import TerminalHostDetector
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
+from runner.adapters.ui.tui_launcher import TuiLauncher
 from runner.application.clean_slate import CleanSlateArchiver
+from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.gatekeeper import GatekeeperCommandExecutor
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import EscalationNotice, HandoffCoordinator
+from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.prompt_builder import PromptBuilder
 from runner.application.queue_orchestrator import DEFAULT_TICKETS_DIR, QueueOrchestrator
+from runner.application.state_coordinator import StateCoordinator
 from runner.application.ticket_processor import TicketProcessor
+from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import WorkerSupervisor
 from runner.domain.config import (
     DiscordConfig,
@@ -39,6 +48,8 @@ from runner.domain.runtime_paths import RuntimePaths
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.state_store import StateStore
+from runner.ports.terminal_display import TerminalDisplay, UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
 
@@ -74,6 +85,14 @@ class RunnerContainer:
     lock: QueueFileLock
     runtime_paths: RuntimePaths
     command_runner: CommandRunner
+    state_coordinator: StateCoordinator
+    state_store: StateStore
+    crash_recovery: CrashRecoveryCoordinator
+    terminal_display: TerminalDisplay | None = None
+    ui_event_sink: UiEventSink | None = None
+    presence_coordinator: PresenceCoordinator | None = None
+    tui_launcher: TuiLauncher | None = None
+    tui_coordinator: TuiCoordinator | None = None
 
 
 def build_container(
@@ -96,6 +115,8 @@ def build_container(
     processor: TicketProcessor | None = None,
     orchestrator: QueueOrchestrator | None = None,
     clean_slate_archiver: CleanSlateArchiver | None = None,
+    state_store: StateStore | None = None,
+    state_coordinator: StateCoordinator | None = None,
     cwd: Path | None = None,
     clock: Callable[[], float] | None = None,
     printer: Callable[[str], None] | None = print,
@@ -105,6 +126,14 @@ def build_container(
     gotchas_path: Path | str | None = None,
     commit_scope: str = "queue",
     spec_slug: str | None = None,
+    crash_recovery: CrashRecoveryCoordinator | None = None,
+    terminal_display: TerminalDisplay | None = None,
+    ui_event_sink: UiEventSink | None = None,
+    presence_coordinator: PresenceCoordinator | None = None,
+    tui_launcher: TuiLauncher | None = None,
+    tui_coordinator: TuiCoordinator | None = None,
+    console: Any | None = None,
+    terminal_detector: Any | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -147,9 +176,27 @@ def build_container(
         cwd=cwd,
     )
 
+    resolved_terminal_display = terminal_display or RichTerminalDisplay(console=console)
+    resolved_event_sink = ui_event_sink or resolved_terminal_display
+
     resolved_executor = executor or GatekeeperCommandExecutor(
         command_runner=resolved_command_runner,
         cwd=cwd,
+        ui_event_sink=resolved_event_sink,
+    )
+    if hasattr(resolved_executor, "ui_event_sink") and resolved_executor.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_executor.ui_event_sink = resolved_event_sink
+
+    resolved_state_store = state_store or JsonStateStore(
+        path=resolved_runtime_paths.state_path
+    )
+
+    resolved_state_coordinator = state_coordinator or StateCoordinator(
+        state_store=resolved_state_store,
+        branch=resolved_config.project.branch,
+        selected_model=model_id,
+        clock=clock,
+        terminal_display=resolved_terminal_display,
     )
 
     resolved_prompt_builder = prompt_builder or PromptBuilder()
@@ -165,7 +212,13 @@ def build_container(
         signal_repository=resolved_signal_repo,
         default_reasoning=resolved_config.model.default_reasoning,
         model_id=model_id,
+        state_coordinator=resolved_state_coordinator,
+        ui_event_sink=resolved_event_sink,
     )
+    if resolved_supervisor.state_coordinator is None:
+        resolved_supervisor.state_coordinator = resolved_state_coordinator
+    if hasattr(resolved_supervisor, "ui_event_sink") and resolved_supervisor.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_supervisor.ui_event_sink = resolved_event_sink
 
     resolved_coordinator = coordinator or HandoffCoordinator(
         supervisor=resolved_supervisor,
@@ -193,7 +246,10 @@ def build_container(
         gotchas_store=resolved_gotchas_store,
         worker_config=resolved_config.worker,
         printer=printer,
+        state_coordinator=resolved_state_coordinator,
     )
+    if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
+        resolved_processor.state_coordinator = resolved_state_coordinator
 
     resolved_orchestrator = orchestrator or QueueOrchestrator(
         ticket_store=resolved_ticket_store,
@@ -209,7 +265,63 @@ def build_container(
         cwd=cwd,
         clean_slate_archiver=clean_slate_archiver,
         clock=clock,
+        state_coordinator=resolved_state_coordinator,
+        ui_event_sink=resolved_event_sink,
     )
+    if hasattr(resolved_orchestrator, "_state_coordinator") and resolved_orchestrator.state_coordinator is None:
+        resolved_orchestrator._state_coordinator = resolved_state_coordinator
+    if hasattr(resolved_orchestrator, "ui_event_sink") and resolved_orchestrator.ui_event_sink is None and resolved_event_sink is not None:
+        resolved_orchestrator.ui_event_sink = resolved_event_sink
+
+    resolved_crash_recovery = crash_recovery or CrashRecoveryCoordinator(
+        state_store=resolved_state_store,
+        git_operations=resolved_git_ops,
+        worker_supervisor=resolved_supervisor,
+        state_coordinator=resolved_state_coordinator,
+        runtime_paths=resolved_runtime_paths,
+        ticket_store=resolved_ticket_store,
+        printer=printer,
+        clock=clock,
+    )
+
+    resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
+        state_coordinator=resolved_state_coordinator,
+        terminal_display=resolved_terminal_display,
+        ui_event_sink=resolved_event_sink,
+    )
+
+    resolved_tui_launcher = tui_launcher or TuiLauncher(
+        command_runner=resolved_command_runner,
+    )
+
+    raw_terminal_host = getattr(getattr(resolved_config, "ui", None), "session_terminal", "")
+    if not raw_terminal_host or raw_terminal_host.lower() == "auto":
+        detector_fn = terminal_detector or TerminalHostDetector
+        if hasattr(detector_fn, "detect"):
+            detected_host = detector_fn.detect()
+        elif callable(detector_fn):
+            try:
+                detected_host = detector_fn(path_resolver=shutil.which)
+            except TypeError:
+                detected_host = detector_fn()
+        else:
+            detected_host = None
+        resolved_terminal_host = detected_host or "wt.exe"
+    else:
+        resolved_terminal_host = raw_terminal_host
+
+    resolved_tui_coordinator = tui_coordinator or TuiCoordinator(
+        terminal_display=resolved_terminal_display,
+        launcher=resolved_tui_launcher,
+        state_coordinator=resolved_state_coordinator,
+        terminal_host=resolved_terminal_host,
+        supervisor=resolved_supervisor,
+        ui_event_sink=resolved_event_sink,
+        cwd=cwd,
+    )
+
+    if resolved_supervisor.tui_coordinator is None:
+        resolved_supervisor.tui_coordinator = resolved_tui_coordinator
 
     return RunnerContainer(
         config=resolved_config,
@@ -226,4 +338,13 @@ def build_container(
         lock=resolved_lock,
         runtime_paths=resolved_runtime_paths,
         command_runner=resolved_command_runner,
+        state_coordinator=resolved_state_coordinator,
+        state_store=resolved_state_store,
+        crash_recovery=resolved_crash_recovery,
+        terminal_display=resolved_terminal_display,
+        ui_event_sink=resolved_event_sink,
+        presence_coordinator=resolved_presence_coordinator,
+        tui_launcher=resolved_tui_launcher,
+        tui_coordinator=resolved_tui_coordinator,
     )
+

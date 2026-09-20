@@ -12,10 +12,15 @@ from typing import Any
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.filesystem.json_state_store import JsonStateStore
+from runner.adapters.ui.keyboard import KeyboardPoller
 from runner.adapters.ui.model_prompt import ModelPrompt
+from runner.application.crash_recovery import CrashRecoveryCoordinator
 from runner.application.doctor import Doctor, DoctorReport
+from runner.application.hotkey_dispatch import HotkeyDispatcher
 from runner.application.model_selection import ModelSelectionInteractor
+from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import RunnerContainer, build_container
 from runner.domain.exceptions import NonInteractiveError, UserAbortError
@@ -130,11 +135,12 @@ async def run_doctor(
     config_path: Path,
     local_only: bool,
     doctor_instance: Doctor | None = None,
+    terminal_detector: Any | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks and display formatted results."""
     pass_mark, fail_mark = _configure_console_encoding()
     print("[Doctor] Verifying environment...")
-    doctor = doctor_instance or Doctor(config_path=config_path)
+    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
     report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True)
 
     for check in report.checks:
@@ -167,13 +173,23 @@ async def run_start(
     state_store: StateStore | None = None,
     model_prompt: ModelPrompt | None = None,
     key_reader: Callable[[], str] | None = None,
+    crash_recovery_instance: CrashRecoveryCoordinator | None = None,
+    sleep_fn: Callable[[float], Awaitable[None]] | None = None,
+    console: Any | None = None,
+    keyboard_poller: KeyboardPoller | None = None,
+    keyboard_key_reader: Callable[[], str | None] | None = None,
+    presence_coordinator: PresenceCoordinator | None = None,
+    tui_coordinator: TuiCoordinator | None = None,
+    terminal_detector: Any | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
-    doctor = doctor_instance or Doctor(config_path=config_path)
+    _configure_console_encoding()
+    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
     doctor_code = await run_doctor(
         config_path=config_path,
         local_only=local_only,
         doctor_instance=doctor,
+        terminal_detector=terminal_detector,
     )
     if doctor_code != 0:
         return doctor_code
@@ -184,14 +200,35 @@ async def run_start(
         config = loader.load(config_path)
 
     supervisor: WorkerSupervisor | None = supervisor_instance
+    crash_recovery: CrashRecoveryCoordinator | None = crash_recovery_instance
+    state_coordinator = None
+    terminal_display = None
+    ui_event_sink = None
+    tui_coord: TuiCoordinator | None = tui_coordinator
     if container_instance is not None:
         orchestrator = container_instance.orchestrator
         if supervisor is None:
-            supervisor = container_instance.supervisor
+            supervisor = getattr(container_instance, "supervisor", None)
+        if crash_recovery is None:
+            crash_recovery = getattr(container_instance, "crash_recovery", None)
+        state_coordinator = getattr(container_instance, "state_coordinator", None)
+        terminal_display = getattr(container_instance, "terminal_display", None)
+        ui_event_sink = getattr(container_instance, "ui_event_sink", None)
+        if presence_coordinator is None:
+            presence_coordinator = getattr(container_instance, "presence_coordinator", None)
+        if tui_coord is None:
+            tui_coord = getattr(container_instance, "tui_coordinator", None)
     elif orchestrator_instance is not None:
         orchestrator = orchestrator_instance
         if supervisor is None:
             supervisor = getattr(orchestrator, "supervisor", None)
+        if crash_recovery is None:
+            crash_recovery = getattr(orchestrator, "crash_recovery", None)
+        state_coordinator = getattr(orchestrator, "state_coordinator", None)
+        terminal_display = getattr(orchestrator, "terminal_display", None)
+        ui_event_sink = getattr(orchestrator, "ui_event_sink", None)
+        if tui_coord is None:
+            tui_coord = getattr(orchestrator, "tui_coordinator", None)
     else:
         if model_id is not None:
             valid_model_ids = [m.id for m in config.model.models]
@@ -224,10 +261,38 @@ async def run_start(
             print(f"\n[Runner] Error: State persistence failed: {exc}")
             return 1
 
-        container = build_container(config=config, clock=clock, model_id=model_id)
-        orchestrator = container.orchestrator
+        container = build_container(
+            config=config,
+            clock=clock,
+            model_id=model_id,
+            state_store=effective_state_store,
+            console=console,
+            terminal_detector=terminal_detector,
+        )
+        orchestrator = getattr(container, "orchestrator", None)
         if supervisor is None:
-            supervisor = container.supervisor
+            supervisor = getattr(container, "supervisor", None)
+        if crash_recovery is None:
+            crash_recovery = getattr(container, "crash_recovery", None)
+        state_coordinator = getattr(container, "state_coordinator", None)
+        terminal_display = getattr(container, "terminal_display", None)
+        ui_event_sink = getattr(container, "ui_event_sink", None)
+        if presence_coordinator is None:
+            presence_coordinator = getattr(container, "presence_coordinator", None)
+        if tui_coord is None:
+            tui_coord = getattr(container, "tui_coordinator", None)
+
+    resolved_presence = presence_coordinator or PresenceCoordinator(
+        state_coordinator=state_coordinator,
+        terminal_display=terminal_display,
+        ui_event_sink=ui_event_sink,
+    )
+
+    if crash_recovery is not None:
+        try:
+            await crash_recovery.recover()
+        except Exception as exc:
+            print(f"\n[Runner] Error during crash recovery: {exc}")
 
     if stop_event is None:
         stop_event = asyncio.Event()
@@ -264,6 +329,32 @@ async def run_start(
     except (ValueError, AttributeError):
         pass
 
+    hotkey_dispatcher = HotkeyDispatcher(
+        orchestrator=orchestrator,
+        presence_coordinator=resolved_presence,
+        supervisor=supervisor,
+        stop_event=stop_event,
+        state_coordinator=state_coordinator,
+        ui_event_sink=ui_event_sink,
+        terminal_display=terminal_display,
+        on_shutdown=_trigger_graceful_stop,
+        tui_coordinator=tui_coord,
+    )
+
+    poller = keyboard_poller or KeyboardPoller(
+        key_reader=keyboard_key_reader,
+        on_key=hotkey_dispatcher,
+    )
+    poller.start()
+
+    active_display = (
+        terminal_display
+        or getattr(container_instance, "terminal_display", None)
+        or getattr(orchestrator_instance, "terminal_display", None)
+    )
+    if active_display is not None and hasattr(active_display, "start"):
+        active_display.start()
+
     draining = False
     try:
         exit_code = await orchestrator.run_lifecycle(
@@ -271,6 +362,8 @@ async def run_start(
             poll_interval=effective_poll_interval,
             stop_event=stop_event,
             clock=clock,
+            sleep_fn=sleep_fn,
+            console=console,
         )
         if shutting_down:
             return 130
@@ -292,6 +385,8 @@ async def run_start(
                     await active_supervisor._terminate_ladder(handle)
             except Exception:
                 pass
+        if active_display is not None and hasattr(active_display, "stop"):
+            active_display.stop()
         if hasattr(orchestrator, "print_completion_summary"):
             try:
                 await orchestrator.print_completion_summary()
@@ -311,6 +406,9 @@ async def run_start(
         print(f"\n[Runner] Error: {exc}")
         return 1
     finally:
+        await poller.stop()
+        if active_display is not None and hasattr(active_display, "stop"):
+            active_display.stop()
         if old_sigint is not None:
             try:
                 signal.signal(signal.SIGINT, old_sigint)

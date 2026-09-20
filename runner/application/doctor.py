@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import dataclasses
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 import shutil
-from typing import Mapping
+from typing import Any, Mapping
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.adapters.ui.terminal_detector import TerminalHostDetector
+from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
 from runner.application.gatekeeper import CMD_BUILTINS, leading_command_token
 from runner.application.git_operations import GitOperations
 from runner.domain.config import RunnerConfig
@@ -27,11 +30,14 @@ CHECK_GIT = "git"
 CHECK_QUEUE = "queue"
 CHECK_CONFIG = "config"
 CHECK_MODEL = "model"
+CHECK_TERMINAL_HOST = "session_terminal"
 CHECK_VERIFICATION_COMMANDS = "verification_commands"
 CHECK_HOOK = "pre_push_hook"
 CHECK_AGENTS_MD = "agents_md"
 CHECK_SKILLS = "skills"
 CHECK_DISCORD = "discord"
+
+CANDIDATE_TERMINAL_HOSTS = ("wt.exe", "pwsh.exe", "powershell.exe", "cmd.exe")
 
 DEFAULT_BRANCH = "agent/ticket-runner"
 DEFAULT_CONFIG_PATH = Path("config.yaml")
@@ -56,7 +62,7 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class DoctorReport:
-    """Consolidated pre-flight verification report."""
+    """Aggregated pre-flight verification outcomes."""
 
     passed: bool
     checks: list[CheckResult]
@@ -92,6 +98,9 @@ class Doctor:
         path_resolver: Callable[[str], str | None] | None = None,
         agents_md_path: Path | str | None = None,
         execution_skill_path: Path | str | None = None,
+        terminal_prompt: TerminalHostPrompt | None = None,
+        terminal_detector: Any | None = None,
+        ppid_resolver: Callable[[], str | None] | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -141,6 +150,9 @@ class Doctor:
         self._target_branch = target_branch
         self._loaded_config: RunnerConfig | None = None
         self._path_resolver = path_resolver or shutil.which
+        self._terminal_prompt = terminal_prompt or TerminalHostPrompt()
+        self._terminal_detector = terminal_detector or TerminalHostDetector
+        self._ppid_resolver = ppid_resolver
 
     @property
     def loaded_config(self) -> RunnerConfig | None:
@@ -321,6 +333,119 @@ class Doctor:
             name=CHECK_MODEL,
             passed=True,
             message=f"Model configuration verified with {len(models)} model(s) available.",
+            remediation=None,
+        )
+
+    async def check_terminal_host(self) -> CheckResult:
+        """Verify session_terminal host or detect, prompt, and persist if unconfigured."""
+        if self._loaded_config is None:
+            return CheckResult(
+                name=CHECK_TERMINAL_HOST,
+                passed=True,
+                message="Session terminal check skipped (configuration not loaded).",
+                remediation=None,
+            )
+
+        configured_host = self._loaded_config.ui.session_terminal.strip()
+        if configured_host.lower() == "auto":
+            detector = self._terminal_detector
+            if hasattr(detector, "detect"):
+                resolved = detector.detect(
+                    env=self._env,
+                    path_resolver=self._path_resolver,
+                    ppid_resolver=self._ppid_resolver,
+                )
+            elif callable(detector):
+                try:
+                    resolved = detector(
+                        env=self._env,
+                        path_resolver=self._path_resolver,
+                        ppid_resolver=self._ppid_resolver,
+                    )
+                except TypeError:
+                    resolved = detector()
+            else:
+                resolved = None
+
+            if resolved is not None and self._path_resolver(resolved) is not None:
+                new_ui = dataclasses.replace(self._loaded_config.ui, session_terminal=resolved)
+                self._loaded_config = dataclasses.replace(self._loaded_config, ui=new_ui)
+                return CheckResult(
+                    name=CHECK_TERMINAL_HOST,
+                    passed=True,
+                    message=f"Session terminal host 'auto' resolved to '{resolved}' on PATH.",
+                    remediation=None,
+                )
+
+            return CheckResult(
+                name=CHECK_TERMINAL_HOST,
+                passed=False,
+                message=(
+                    "No supported terminal host detected on PATH "
+                    f"(checked: {', '.join(CANDIDATE_TERMINAL_HOSTS)})."
+                ),
+                remediation=(
+                    "Install Windows Terminal (wt.exe), PowerShell (pwsh.exe / powershell.exe), "
+                    "or ensure cmd.exe is available on PATH."
+                ),
+            )
+
+        if configured_host:
+            if self._path_resolver(configured_host) is not None:
+                return CheckResult(
+                    name=CHECK_TERMINAL_HOST,
+                    passed=True,
+                    message=f"Session terminal host '{configured_host}' verified on PATH.",
+                    remediation=None,
+                )
+            return CheckResult(
+                name=CHECK_TERMINAL_HOST,
+                passed=False,
+                message=f"Configured session_terminal '{configured_host}' was not found on PATH.",
+                remediation=(
+                    f"Ensure '{configured_host}' is installed and accessible on PATH, "
+                    f"or update 'ui.session_terminal' in '{self._config_path}'."
+                ),
+            )
+
+        detected = [h for h in CANDIDATE_TERMINAL_HOSTS if self._path_resolver(h) is not None]
+        if not detected:
+            return CheckResult(
+                name=CHECK_TERMINAL_HOST,
+                passed=False,
+                message=(
+                    "No supported terminal host detected on PATH "
+                    f"(checked: {', '.join(CANDIDATE_TERMINAL_HOSTS)})."
+                ),
+                remediation=(
+                    "Install Windows Terminal (wt.exe), PowerShell (pwsh.exe / powershell.exe), "
+                    "or ensure cmd.exe is available on PATH."
+                ),
+            )
+
+        if len(detected) == 1:
+            selected = detected[0]
+        else:
+            selected = self._terminal_prompt.select_host(detected) or detected[0]
+
+        if hasattr(self._config_loader, "persist_session_terminal"):
+            try:
+                self._config_loader.persist_session_terminal(self._config_path, selected)
+            except Exception as exc:
+                return CheckResult(
+                    name=CHECK_TERMINAL_HOST,
+                    passed=False,
+                    message=f"Failed to persist session_terminal to '{self._config_path}': {exc}",
+                    remediation=f"Check write permissions for '{self._config_path}'.",
+                )
+
+        new_ui = dataclasses.replace(self._loaded_config.ui, session_terminal=selected)
+        self._loaded_config = dataclasses.replace(self._loaded_config, ui=new_ui)
+
+        return CheckResult(
+            name=CHECK_TERMINAL_HOST,
+            passed=True,
+            message=f"Session terminal '{selected}' selected and configured in '{self._config_path}'.",
             remediation=None,
         )
 
@@ -524,6 +649,7 @@ class Doctor:
             self.check_queue,
             self.check_config,
             self.check_model,
+            self.check_terminal_host,
             self.check_verification_commands,
             self.check_hook,
             self.check_agents_md,

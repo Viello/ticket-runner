@@ -23,6 +23,11 @@ def _default_read_key() -> str:
         if ch in ("\x00", "\xe0"):
             msvcrt.getwch()  # Consume multi-byte prefix
             return ""
+        if ch.isprintable():
+            msvcrt.putwch(ch)
+        elif ch in ("\r", "\n"):
+            msvcrt.putwch("\r")
+            msvcrt.putwch("\n")
         return ch
     except (ImportError, AttributeError, OSError, ValueError) as exc:
         raise NonInteractiveError(

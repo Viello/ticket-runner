@@ -86,6 +86,29 @@ class FakeDoctorFailing(Doctor):
         return DoctorReport(passed=False, checks=checks)
 
 
+@pytest.fixture(autouse=True)
+def isolate_agent_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_agent = tmp_path / ".agent"
+    fake_agent.mkdir(parents=True, exist_ok=True)
+    orig_init = RuntimePaths.__init__
+
+    def patched_init(self: RuntimePaths, root_dir: Path | None = None) -> None:
+        orig_init(self, root_dir=root_dir or fake_agent)
+
+    monkeypatch.setattr(RuntimePaths, "__init__", patched_init)
+
+
+@pytest.fixture(autouse=True)
+def fast_banner_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    orig_print_banner = QueueOrchestrator.print_celebration_banner
+
+    async def fast_banner(self: Any, *args: Any, **kwargs: Any) -> None:
+        kwargs["delay"] = 0.0
+        return await orig_print_banner(self, *args, **kwargs)
+
+    monkeypatch.setattr(QueueOrchestrator, "print_celebration_banner", fast_banner)
+
+
 def test_cli_no_args_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     code = ticket_runner.main([])
     assert code == 0
@@ -1042,5 +1065,47 @@ def test_cli_run_start_corrupt_state_warns_and_persists_cleanly(
     captured = capsys.readouterr()
     assert "corrupted" in captured.out.lower()
     assert store.write_calls[-1] == {"selected_model": "single/model"}
+
+
+def test_run_start_starts_and_stops_terminal_display(tmp_path: Path) -> None:
+    """Verify that run_start starts and stops terminal_display around run_lifecycle."""
+    fake_doc = FakeDoctorPassing()
+    started = False
+    stopped = False
+
+    class FakeTerminalDisplay:
+        def start(self) -> None:
+            nonlocal started
+            started = True
+
+        def stop(self) -> None:
+            nonlocal stopped
+            stopped = True
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            assert started is True
+            assert stopped is False
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        terminal_display: Any = FakeTerminalDisplay()
+
+    container = ContainerDouble()
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=fake_doc,
+            container_instance=container,
+        )
+    )
+
+    assert code == 0
+    assert started is True
+    assert stopped is True
+
+
 
 

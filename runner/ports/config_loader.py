@@ -25,3 +25,15 @@ class ConfigLoader(Protocol):
             ConfigError: If the file does not exist, syntax is invalid, or schema validation fails.
         """
         ...
+
+    def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
+        """Persist the selected session terminal to configuration storage.
+
+        Args:
+            path: Path to the configuration file.
+            session_terminal: The terminal executable name (e.g. 'wt.exe').
+
+        Raises:
+            ConfigError: If writing to the configuration file fails.
+        """
+        ...

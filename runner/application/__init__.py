@@ -1,5 +1,9 @@
 """Application use cases and interactors for Ticket Runner."""
 
+from runner.application.crash_recovery import (
+    CrashRecoveryCoordinator,
+    RecoveryResult,
+)
 from runner.application.doctor import CheckResult, Doctor, DoctorReport
 from runner.application.gatekeeper import (
     CommandOutcome,
@@ -38,6 +42,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor,
 )
+from runner.application.state_coordinator import StateCoordinator
 from runner.application.ticket_processor import GatekeeperTicketProcessor
 
 
@@ -47,6 +52,7 @@ __all__ = [
     "CHECKPOINT_STALE",
     "CheckResult",
     "CommandOutcome",
+    "CrashRecoveryCoordinator",
     "DEFAULT_INVARIANTS",
     "Doctor",
     "DoctorReport",
@@ -60,8 +66,10 @@ __all__ = [
     "PromptBuilder",
     "QueueOrchestrator",
     "READY",
+    "RecoveryResult",
     "SingleCycleResult",
     "SingleCycleStatus",
+    "StateCoordinator",
     "TicketOutcome",
     "TicketOutcomeStatus",
     "TicketProcessor",
