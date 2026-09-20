@@ -272,6 +272,15 @@ class CrashRecoveryCoordinator:
         if state_doc is None:
             return RecoveryResult(action="none", recovered=False)
 
+        # If the state document has no "status", it was not an in-flight or completed runner state
+        # (e.g. startup metadata like `selected_model` written by ModelSelectionInteractor before queue start).
+        # We must not falsely quarantine it or wipe the chosen model.
+        if "status" not in state_doc:
+            if self._state_coordinator is not None:
+                initial = self._state_coordinator.get_or_create_state()
+                self._state_coordinator.save_state(initial)
+            return RecoveryResult(action="none", recovered=False)
+
         try:
             runner_state = RunnerState.from_dict(state_doc)
         except StateFormatError as exc:

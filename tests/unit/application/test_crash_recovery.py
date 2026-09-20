@@ -233,6 +233,69 @@ def test_recover_corrupted_state_file_quarantines_and_initializes_clean(tmp_path
     assert any("corrupted" in log.lower() or "quarantined" in log.lower() for log in logs)
 
 
+def test_recover_startup_state_with_only_selected_model_does_not_quarantine(tmp_path: Path) -> None:
+    state_file = tmp_path / ".agent" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"selected_model": "opencode/nemotron-3.5-lightning-free"}', encoding="utf-8")
+
+    from runner.adapters.filesystem.json_state_store import JsonStateStore
+    store = JsonStateStore(path=state_file)
+    cmd_runner = FakeCommandRunner()
+    git_ops = GitOperations(runner=cmd_runner, cwd=tmp_path)
+    supervisor = FakeWorkerSupervisor()
+
+    logs: list[str] = []
+    coordinator = CrashRecoveryCoordinator(
+        state_store=store,
+        git_operations=git_ops,
+        worker_supervisor=supervisor,
+        printer=logs.append,
+    )
+
+    result = asyncio.run(coordinator.recover())
+
+    assert not result.recovered
+    assert result.action == "none"
+    assert result.quarantine_path is None
+    assert not any("corrupt" in p.name for p in state_file.parent.iterdir())
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted.get("selected_model") == "opencode/nemotron-3.5-lightning-free"
+
+
+def test_recover_startup_state_with_state_coordinator_initializes_idle_and_preserves_model(tmp_path: Path) -> None:
+    state_file = tmp_path / ".agent" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"selected_model": "opencode/nemotron-3.5-lightning-free"}', encoding="utf-8")
+
+    from runner.adapters.filesystem.json_state_store import JsonStateStore
+    store = JsonStateStore(path=state_file)
+    cmd_runner = FakeCommandRunner()
+    git_ops = GitOperations(runner=cmd_runner, cwd=tmp_path)
+    supervisor = FakeWorkerSupervisor()
+    state_coord = StateCoordinator(state_store=store, branch="agent/ticket-runner")
+
+    logs: list[str] = []
+    coordinator = CrashRecoveryCoordinator(
+        state_store=store,
+        git_operations=git_ops,
+        worker_supervisor=supervisor,
+        state_coordinator=state_coord,
+        printer=logs.append,
+    )
+
+    result = asyncio.run(coordinator.recover())
+
+    assert not result.recovered
+    assert result.action == "none"
+    assert result.quarantine_path is None
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted.get("selected_model") == "opencode/nemotron-3.5-lightning-free"
+    assert persisted.get("status") == "IDLE"
+    assert persisted.get("active_ticket_id") is None
+
+
+
+
 def test_recover_clean_git_tree_successful_session_resumption(tmp_path: Path) -> None:
     active_dict = _sample_active_state_dict(ticket_id="T042", opencode_session_id="ses_abc123")
     store = FakeStateStore(active_dict)
