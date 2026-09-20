@@ -1,5 +1,6 @@
 # T999 — Smoke ping helper and unit test verification
-Status: pending
+Status: completed
+Completed: 2026-09-20T07:57:58Z
 Spec: docs/specs/06-state-persistence-and-terminal-ui.md
 Blocked by: None
 Reasoning: low
