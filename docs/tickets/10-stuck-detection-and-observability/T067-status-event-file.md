@@ -1,5 +1,8 @@
 # T067 — Durable status event file
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T063
+Reasoning: low
 
 ### Requirements
 - Define a `StatusPublisher` port (interface / abstract base class) with a single method `publish(event: StatusEvent) → None`.

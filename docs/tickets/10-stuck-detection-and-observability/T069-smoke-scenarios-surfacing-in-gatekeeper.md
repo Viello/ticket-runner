@@ -1,5 +1,9 @@
 # T069 — Smoke Scenarios surfacing in Gatekeeper
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T066
+Security: required
+Reasoning: medium
 
 ### Requirements
 - Add an optional `manual_verification` field to `ReadySignal`: a tuple of dicts, each with keys `name`, `setup`, `steps`, `expected`. Defaults to an empty tuple when absent from the JSON payload (backward-compatible — existing ready signals without the field parse without error).
@@ -26,6 +30,7 @@ Jump-start:
 - When `manual_verification` contains two scenarios, the commit body includes a `"Manual verification required:"` section with one bullet per scenario name.
 - When `manual_verification` is empty, terminal emits `All Smoke Scenarios covered by automated tests — no manual steps required.` and Discord stub is not called.
 - A missing or stub Discord adapter never raises.
+- Security verification: `manual_verification` scenario entries from untrusted ready signal files are strictly validated and sanitized (stripping terminal escape sequences, carriage returns, and newlines from scenario names) to prevent git commit message header injection or terminal control exploits.
 - `python -m pytest tests/unit/application/test_verification_loop.py -x` exits 0.
 
 ### Smoke Scenarios
@@ -55,3 +60,4 @@ Jump-start:
 - `GitOperations` is not currently injected into `VerificationLoop`. Introduce it as `git_operations: GitOperations | None = None` in `__init__` and guard every call with `if self._git_operations is not None` — existing tests that don't supply it must not break.
 - Discord send is fire-and-forget and must never propagate exceptions. Wrap in `try/except Exception: logger.warning(...)` identical to the pattern in T066.
 - Scenario names in the commit body must be sanitised by `commit_ticket()`'s existing ticket-number-stripping regex — do not bypass it. Verify that a scenario name containing `"T069"` survives the strip (the regex targets `T\d{3,4}` prefixes in the title, not arbitrary body text; confirm the body is passed through `formatted_changes` which applies the same strip).
+- Security: Sanitize scenario names before appending to commit changes so that embedded newlines (`\n` or `\r\n`) cannot inject forged commit message trailers or author headers.

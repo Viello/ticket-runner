@@ -1,5 +1,9 @@
 # T065 — Failure analyser and isolation probe
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T063, T064
+Security: required
+Reasoning: medium
 
 ### Requirements
 - Implement a pure domain function `analyse(output_lines, exit_code, termination_reason, config) → FailureDiagnostic` with no subprocess dependencies. It must:
@@ -34,6 +38,7 @@ Jump-start:
 - `analyse()` given a non-zero exit with no recognisable pattern returns `label == "FLAKY"`.
 - The isolation command builder returns the correct template string for each known runner without executing anything.
 - `log_tail` contains at most 100 lines.
+- Security verification: `isolation_cmd` template interpolation safely constructs argument vectors without shell invocation (`shell=False`), preventing command or argument injection via malicious `{test_id}` extracted strings or shell metacharacters.
 - `python -m pytest tests/unit/domain/test_failure_analyser.py -x` exits 0.
 
 ### Smoke Scenarios
@@ -43,3 +48,4 @@ All scenarios are covered by automated tests. No manual steps required.
 - Classification must be evaluated in strict priority order (HANG → ENV → CASCADE → FLAKY). An ENV error appearing in a suite that also has many FAILED lines must still classify as ENV, because fixing the environment will likely resolve the cascade too.
 - Test identifier extraction patterns differ by runner: pytest uses `test_file.py::test_fn`, jest uses `describe > test name`, go test uses `--- FAIL: TestFoo`. The heuristic must parse the first occurrence, not the last. If none is found, `root_tests` is an empty list — not an error.
 - The isolation probe must not inherit the full original command (e.g. `python -m pytest`) verbatim; it needs the single-test form. Validate that `{test_id}` substitution resolves before spawning.
+- Security: Never invoke `shell=True` when executing the isolation probe. Always parse the interpolated command into an argument vector using `shlex.split` so metacharacters in test identifiers cannot trigger arbitrary command execution.

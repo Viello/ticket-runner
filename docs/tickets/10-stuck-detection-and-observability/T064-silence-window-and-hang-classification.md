@@ -1,5 +1,9 @@
 # T064 — Silence window in verification command runner
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T063
+Security: required
+Reasoning: medium
 
 ### Requirements
 - Extend the verification command runner's subprocess streaming loop with a silence timer: if no stdout/stderr line arrives within `verification.silence_window_seconds` seconds, terminate the process tree and surface `termination_reason = HANG` in the result.
@@ -24,6 +28,8 @@ Jump-start:
 - A fake subprocess that completes normally in < `silence_window_seconds` returns exit code 0 with no kill.
 - When `per_test_timeout_seconds > 0` and `test_cmd` contains `pytest`, the spawned command includes `--timeout=N`.
 - When `test_cmd` contains `cargo test` (no native flag supported), no extra flag is injected regardless of `per_test_timeout_seconds`.
+- Security verification: Framework timeout flag injection safely constructs argument vectors without shell evaluation, preventing arbitrary argument or command injection through malicious `per_test_timeout_seconds` or crafted `test_cmd`.
+- Security verification: Process tree termination handles already-exited processes (`ProcessLookupError` / WinError) cleanly without leaking orphaned subprocesses or raising unhandled exceptions.
 - `python -m pytest tests/ -x` exits 0.
 
 ### Smoke Scenarios
@@ -32,3 +38,4 @@ All scenarios are covered by automated tests. No manual steps required.
 ### Gotchas
 - The silence timer must reset on each received line — not just on process start — otherwise a slow-but-alive suite that emits one line every 45 seconds would be killed by a 60-second window. Only a genuine *gap* between lines triggers the kill.
 - The per-test timeout flag must be injected before the command is passed to `shutil.which` resolution; verify the flag does not appear as the first positional argument where it would shadow the executable name.
+- Process tree killing via `taskkill /T /F` must cleanly swallow non-zero exit codes caused by processes exiting asynchronously between inspection and termination.

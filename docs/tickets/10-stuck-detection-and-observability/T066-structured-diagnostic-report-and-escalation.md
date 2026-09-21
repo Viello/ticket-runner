@@ -1,5 +1,8 @@
 # T066 — Structured diagnostic report and escalation prompt
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T065
+Reasoning: medium
 
 ### Requirements
 - After each failed verification attempt, call the failure analyser (T065) to build a `FailureDiagnostic`, then check escalation policy (`bug_escalation_at` from config) to decide whether to surface it.

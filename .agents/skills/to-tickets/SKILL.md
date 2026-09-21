@@ -78,8 +78,10 @@ Do NOT close or modify any parent issue.
 
 # T<NNN> — <Ticket title>
 Status: pending
-Security: required (include only if touching credentials, subprocesses, path sanitization, network, or untrusted inputs; omit otherwise)
-Reasoning: medium   # optional: low | medium | high | max (provider-specific; omit to use config default)
+Spec: docs/specs/<spec-slug>.md
+Blocked by: <comma-separated blocker ticket IDs, or "None">
+Security: required # include only if touching credentials, subprocesses, path sanitization, network, or untrusted inputs; omit otherwise
+Reasoning: medium  # optional: low | medium | high | max (provider-specific; omit to use config default)
 
 ### Requirements
 - <What to build: the end-to-end behaviour this ticket makes work, from the user's perspective>
@@ -88,6 +90,7 @@ Reasoning: medium   # optional: low | medium | high | max (provider-specific; om
 ### Acceptance Criteria
 - <Criterion 1>
 - <Criterion 2>
+- <Explicit security verification criterion: required whenever Security: required is set (e.g. input sanitization, safe subprocess invocation, command escaping)>
 
 ### Smoke Scenarios
 **Scenario: <name>**

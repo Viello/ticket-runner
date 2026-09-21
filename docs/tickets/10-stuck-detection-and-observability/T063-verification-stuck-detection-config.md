@@ -1,5 +1,8 @@
 # T063 — Verification stuck-detection config schema
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: None
+Reasoning: low
 
 ### Requirements
 - Add four new fields to the `verification:` section of the config schema, loader, and validator so downstream tickets have a settled API to work against:

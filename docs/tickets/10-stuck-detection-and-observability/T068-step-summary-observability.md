@@ -1,5 +1,8 @@
 # T068 — Step-summary observability
 Status: pending
+Spec: docs/specs/10-stuck-detection-and-observability.md
+Blocked by: T067
+Reasoning: low
 
 ### Requirements
 - Hook into `WorkerSupervisor`'s `step_finish` event processing to extract the assistant message text (the model's narration of what it just did) and publish it as a `STEP_FINISHED` `StatusEvent` via `StatusPublisher` (T067).
