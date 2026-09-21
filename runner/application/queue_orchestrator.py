@@ -37,6 +37,7 @@ class TicketOutcomeStatus(str, Enum):
     APPROVED = "approved"
     SKIPPED = "skipped"
     ABORTED = "aborted"
+    INTERVENTION_REQUESTED = "intervention_requested"
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,24 @@ class TicketOutcome:
     def is_aborted(self) -> bool:
         """Return True if ticket execution was aborted by operator."""
         return self.status == TicketOutcomeStatus.ABORTED
+
+    @property
+    def is_intervention_requested(self) -> bool:
+        """Return True if operator intervention was requested."""
+        return self.status == TicketOutcomeStatus.INTERVENTION_REQUESTED
+
+    @classmethod
+    def intervention_requested(
+        cls,
+        diagnostic: Any = None,
+        details: str | None = None,
+    ) -> TicketOutcome:
+        """Construct an INTERVENTION_REQUESTED outcome."""
+        return cls(
+            status=TicketOutcomeStatus.INTERVENTION_REQUESTED,
+            details=details if details is not None else (str(diagnostic) if diagnostic is not None else None),
+        )
+
 
     def with_commit_sha(self, commit_sha: str) -> TicketOutcome:
         """Return a clone of this outcome with commit SHA populated."""

@@ -547,4 +547,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: In a test suite where setup or import failure cascades into 5+ subsequent `FAILED` entries, evaluating cascade checks first misclassifies the failure as `CASCADE` instead of identifying the underlying environment error.
 - **Solution**: Evaluate classification in strict priority order (`HANG` -> `ENV` -> `CASCADE` -> `FLAKY`). An environment error occurring before test identifier lines takes absolute precedence over downstream cascaded test failures.
 
+### INTERVENTION_REQUESTED Preserves Verification Retry Budget
+- **Problem**: When diagnostic escalation prompts the operator whether to run `/diagnosing-bugs` and the operator confirms (Y / Enter), incrementing the verification attempt counter burns a retry budget attempt, tripping the circuit breaker prematurely before the root-cause bug can be triaged and addressed.
+- **Solution**: Evaluate the escalation policy and prompt the operator before consuming the attempt counter (`self._attempts`). Yield `INTERVENTION_REQUESTED` without incrementing `self._attempts` so the retry budget remains fully intact for subsequent verification.
+
+### Bounding Diagnostic Log Tail for Discord and Terminal Delivery
+- **Problem**: Unbounded command output tails embedded into diagnostic reports can exceed Discord's 2,000-character message ceiling and overflow terminal scroll buffers, causing remote dispatch failures and unreadable prompts.
+- **Solution**: Bound the report log tail to at most 100 lines during formatting and enforce a hard 2,000-character safety truncation with ellipsis for Discord webhook/bot dispatch, ensuring delivery never raises or overflows.
+
+
 

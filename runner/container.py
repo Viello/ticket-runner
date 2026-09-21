@@ -247,6 +247,8 @@ def build_container(
         worker_config=resolved_config.worker,
         printer=printer,
         state_coordinator=resolved_state_coordinator,
+        runtime_paths=resolved_runtime_paths,
+        token_budget=resolved_config.tokens,
     )
     if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
         resolved_processor.state_coordinator = resolved_state_coordinator

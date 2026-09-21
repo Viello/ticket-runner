@@ -70,3 +70,19 @@ class InterventionGateway(Protocol):
                 adapter cannot fall back to abort.
         """
         ...
+
+    def prompt_escalation(self, ticket: Ticket, report: str) -> bool:
+        """Prompt the human whether to run /diagnosing-bugs upon diagnostic escalation (T066).
+
+        Args:
+            ticket: Ticket whose verification failed.
+            report: Rendered structured diagnostic report.
+
+        Returns:
+            True if operator confirms (Y / Enter), False if operator declines (N).
+
+        Raises:
+            NonInteractiveError: If no interactive stdin is available.
+        """
+        ...
+

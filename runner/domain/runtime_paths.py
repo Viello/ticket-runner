@@ -93,6 +93,10 @@ class RuntimePaths:
         """Alias to session_stderr_path for caller convenience."""
         return self.session_stderr_path(ticket_id, session_id)
 
+    def diagnostic_log_path(self, ticket_id: str) -> Path:
+        """Path to a ticket's diagnostic report log (.agent/logs/{ticket_id}_diagnostic.md)."""
+        return self.logs_dir / f"{ticket_id}_diagnostic.md"
+
     def safe_session_paths(
         self, ticket_id: str, session_id: str
     ) -> tuple[Path, Path] | None:

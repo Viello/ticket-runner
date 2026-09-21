@@ -388,3 +388,59 @@ def analyse(
         isolation_output=isolation_output,
         suggested_action=suggested_action,
     )
+
+
+def render_diagnostic_report(
+    diagnostic: FailureDiagnostic,
+    token_count: int | str = 0,
+    token_budget: int | str = 150000,
+    prompt_question: bool = True,
+) -> str:
+    """Render a structured diagnostic report from FailureDiagnostic and token usage (T066).
+
+    Format:
+        ⚠ <LABEL> detected — <root_test or "unknown">
+        Top errors: <top_errors joined by ", ">
+        <isolation_output if present, else omitted>
+        --- last 100 lines ---
+        <log_tail>
+        Token budget: <token_count> / <token_budget>
+        Suggested: <suggested_action>
+        Run /diagnosing-bugs? [Y/n]
+    """
+    root_test = diagnostic.root_tests[0] if diagnostic.root_tests else "unknown"
+    label = diagnostic.label or LABEL_FLAKY
+    top_errors_str = ", ".join(diagnostic.top_errors) if diagnostic.top_errors else "none"
+
+    lines: list[str] = [
+        f"⚠ {label} detected — {root_test}",
+        f"Top errors: {top_errors_str}",
+    ]
+
+    if diagnostic.isolation_output and diagnostic.isolation_output.strip():
+        lines.append(diagnostic.isolation_output.strip())
+
+    lines.append("--- last 100 lines ---")
+
+    bounded_tail = (
+        diagnostic.log_tail[-100:]
+        if len(diagnostic.log_tail) > 100
+        else diagnostic.log_tail
+    )
+    if bounded_tail:
+        lines.extend(bounded_tail)
+
+    tc_str = f"{token_count:,}" if isinstance(token_count, int) else str(token_count)
+    tb_str = f"{token_budget:,}" if isinstance(token_budget, int) else str(token_budget)
+    lines.append(f"Token budget: {tc_str} / {tb_str}")
+
+    suggested = (
+        diagnostic.suggested_action
+        or SUGGESTED_ACTIONS.get(label, SUGGESTED_ACTIONS[LABEL_FLAKY])
+    )
+    lines.append(f"Suggested: {suggested}")
+
+    if prompt_question:
+        lines.append("Run /diagnosing-bugs? [Y/n]")
+
+    return "\n".join(lines)

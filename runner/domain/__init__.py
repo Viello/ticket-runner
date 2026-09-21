@@ -41,6 +41,7 @@ from runner.domain.failure_analyser import (
     extract_error_fingerprints,
     extract_test_identifiers,
     interpolate_isolation_command,
+    render_diagnostic_report,
 )
 from runner.domain.ring_buffer import (
     MAX_RING_BUFFER_ENTRIES,
@@ -122,4 +123,5 @@ __all__ = [
     "extract_test_identifiers",
     "interpolate_isolation_command",
     "parse_ticket_status",
+    "render_diagnostic_report",
 ]

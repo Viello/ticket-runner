@@ -19,10 +19,18 @@ import time
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.discord import DiscordAdapter
+from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
-from runner.domain.config import VerificationConfig
-from runner.domain.exceptions import SignalFormatError, UserAbortError
+from runner.domain.config import TokenBudgetConfig, VerificationConfig
+from runner.domain.exceptions import NonInteractiveError, SignalFormatError, UserAbortError
+from runner.domain.failure_analyser import (
+    FailureDiagnostic,
+    analyse,
+    render_diagnostic_report,
+)
+from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner
@@ -584,6 +592,7 @@ class VerificationLoopStatus(str, Enum):
     PASSED = "passed"
     SKIPPED = "skipped"
     QUESTION_PENDING = "question_pending"
+    INTERVENTION_REQUESTED = "intervention_requested"
 
 
 @dataclass(frozen=True)
@@ -597,6 +606,7 @@ class VerificationLoopResult:
     session_id: str | None = None
     attempts: int = 0
     resources_accessed: frozenset[str] = frozenset()
+    failure_diagnostic: FailureDiagnostic | None = None
 
     @property
     def is_passed(self) -> bool:
@@ -612,6 +622,11 @@ class VerificationLoopResult:
     def is_question_pending(self) -> bool:
         """True when a Worker question interrupted verification."""
         return self.status == VerificationLoopStatus.QUESTION_PENDING
+
+    @property
+    def is_intervention_requested(self) -> bool:
+        """True when operator requested intervention after failure diagnostic."""
+        return self.status == VerificationLoopStatus.INTERVENTION_REQUESTED
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, (str, VerificationLoopStatus)):
@@ -665,6 +680,24 @@ class VerificationLoopResult:
             attempts=attempts,
         )
 
+    @classmethod
+    def intervention_requested(
+        cls,
+        failure_diagnostic: FailureDiagnostic,
+        attempts: int,
+        session_id: str | None = None,
+        diagnostics: str | None = None,
+        resources_accessed: frozenset[str] = frozenset(),
+    ) -> VerificationLoopResult:
+        return cls(
+            status=VerificationLoopStatus.INTERVENTION_REQUESTED,
+            failure_diagnostic=failure_diagnostic,
+            attempts=attempts,
+            session_id=session_id,
+            diagnostics=diagnostics,
+            resources_accessed=resources_accessed,
+        )
+
 
 @runtime_checkable
 class WorkerCycleRunner(Protocol):
@@ -697,6 +730,10 @@ class VerificationLoop:
         notify: Callable[[str], None] | None = None,
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
+        failure_analyser: Callable[..., FailureDiagnostic] | None = None,
+        discord_adapter: Any | None = None,
+        runtime_paths: RuntimePaths | None = None,
+        token_budget: int | TokenBudgetConfig | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -717,6 +754,16 @@ class VerificationLoop:
         self._accumulated_resources: set[str] = set()
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
+        self._failure_analyser = failure_analyser or analyse
+        self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
+        self._runtime_paths = runtime_paths or RuntimePaths()
+        if isinstance(token_budget, TokenBudgetConfig):
+            self._effective_token_budget = token_budget.ceiling
+        elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
+            self._effective_token_budget = token_budget
+        else:
+            self._effective_token_budget = 150000
+        self._last_token_count: int = 0
         if ui_event_sink is not None and getattr(self._executor, "ui_event_sink", None) is None:
             self._executor.ui_event_sink = ui_event_sink
 
@@ -852,6 +899,9 @@ class VerificationLoop:
                     if hasattr(sr, "resources_accessed"):
                         self._accumulated_resources.update(sr.resources_accessed)
 
+            if hasattr(run_result, "occupancy") and run_result.occupancy:
+                self._last_token_count = run_result.occupancy
+
             # Reset pending prompt since it has been consumed
             self._pending_prompt = None
 
@@ -890,6 +940,13 @@ class VerificationLoop:
 
                 # Verification failed
                 diagnostics = "\n\n".join(report.diagnostics)
+                failed_outcome = next((r for r in report.results if not r.passed), None)
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics, outcome=failed_outcome
+                )
+                if escalation_result is not None:
+                    return escalation_result
+
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -915,6 +972,9 @@ class VerificationLoop:
                 # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
                 self._clean_question(self._ticket.id)
                 diagnostics = str(exc)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -940,6 +1000,9 @@ class VerificationLoop:
                     or (run_result.escalation.reason if run_result.escalation else run_result.status.value)
                 )
                 self._signal_repository.consume_ready(self._ticket.id)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -955,6 +1018,9 @@ class VerificationLoop:
             if ready_format_error is not None:
                 self._signal_repository.consume_ready(self._ticket.id)
                 diagnostics = str(ready_format_error)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -969,6 +1035,9 @@ class VerificationLoop:
             diagnostics = (
                 f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
             )
+            escalation_result = await self._check_escalation(diagnostics=diagnostics)
+            if escalation_result is not None:
+                return escalation_result
             self._attempts += 1
             self._last_diagnostics = diagnostics
             action = await self._handle_failure(diagnostics)
@@ -979,6 +1048,97 @@ class VerificationLoop:
                     session_id=self._active_session_id,
                 )
             continue
+
+    async def _check_escalation(
+        self,
+        diagnostics: str,
+        outcome: CommandOutcome | None = None,
+    ) -> VerificationLoopResult | None:
+        """Check escalation policy and prompt operator if threshold met (T066)."""
+        current_attempt = self._attempts + 1
+        policy = self._verification_config.bug_escalation_at
+
+        should_escalate = False
+        if policy == 0:
+            should_escalate = False
+        elif policy == -1:
+            should_escalate = current_attempt >= self._max_attempts
+        elif policy >= 1:
+            should_escalate = (
+                current_attempt >= policy
+                or current_attempt >= self._max_attempts
+            )
+
+        if not should_escalate:
+            return None
+
+        output_lines = outcome.tail if outcome and outcome.tail else diagnostics
+        exit_code = outcome.exit_code if outcome else 1
+        termination_reason = outcome.termination_reason if outcome else None
+
+        diagnostic = self._failure_analyser(
+            output_lines=output_lines,
+            exit_code=exit_code,
+            termination_reason=termination_reason,
+            config=self._verification_config,
+        )
+
+        report_text = render_diagnostic_report(
+            diagnostic=diagnostic,
+            token_count=self._last_token_count,
+            token_budget=self._effective_token_budget,
+            prompt_question=True,
+        )
+
+        # Discord notification (fire-and-forget, never raises)
+        if self._discord_adapter is not None and hasattr(self._discord_adapter, "send"):
+            try:
+                discord_msg = (
+                    report_text
+                    if len(report_text) <= 2000
+                    else report_text[:1990] + "\n..."
+                )
+                res = self._discord_adapter.send(discord_msg)
+                if inspect.iscoroutine(res):
+                    await res
+            except Exception as exc:
+                logger.warning("Discord send failed: %s", exc)
+
+        # Terminal prompt via InterventionGateway
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_waiting_for_user()
+
+        answered_yes = False
+        try:
+            decision = self._intervention_gateway.prompt_escalation(
+                ticket=self._ticket,
+                report=report_text,
+            )
+            if inspect.iscoroutine(decision):
+                decision = await decision
+            answered_yes = bool(decision)
+        except (NonInteractiveError, EOFError, OSError):
+            answered_yes = False
+
+        if answered_yes:
+            return VerificationLoopResult.intervention_requested(
+                failure_diagnostic=diagnostic,
+                attempts=self._attempts,
+                session_id=self._active_session_id,
+                diagnostics=diagnostics,
+                resources_accessed=frozenset(self._accumulated_resources),
+            )
+
+        # Operator declined or non-interactive: log diagnostic to .agent/logs/<ticket_id>_diagnostic.md
+        try:
+            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
+            diag_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(diag_path, report_text)
+        except Exception as exc:
+            logger.warning("Failed to write diagnostic log: %s", exc)
+
+        return None
+
 
     async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
         """Handle attempt failure, evaluating budget exhaustion and intervention menu."""

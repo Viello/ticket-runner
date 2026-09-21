@@ -122,6 +122,18 @@ class TerminalInterventionGateway:
                 continue
             return InterventionDecision(action=action, hint=hint)
 
+    def prompt_escalation(self, ticket: Ticket, report: str) -> bool:
+        """Prompt operator whether to run /diagnosing-bugs upon diagnostic escalation."""
+        raw = self._read_line(f"{report}\n> ")
+        if raw is None:
+            raise NonInteractiveError(
+                f"Cannot prompt escalation for ticket {ticket.id}: stdin is not interactive"
+            )
+        cleaned = raw.strip().lower()
+        if not cleaned or cleaned in _CONFIRM_WORDS:
+            return True
+        return False
+
 
 def _default_read_terminal_key() -> str:
     """Read a single raw key from console; returns empty string if unavailable."""
