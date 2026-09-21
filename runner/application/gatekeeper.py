@@ -12,8 +12,10 @@ import inspect
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
+import time
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
@@ -159,6 +161,61 @@ def build_shell_argv(command: str, platform: str | None = None) -> list[str]:
     return [shell, "-c", command]
 
 
+def inject_test_timeout(test_cmd: str, per_test_timeout_seconds: int) -> str:
+    """Inject test framework native per-test timeout flag when supported and enabled.
+
+    Args:
+        test_cmd: Configured test command string.
+        per_test_timeout_seconds: Timeout in seconds per test; 0 disables injection.
+
+    Returns:
+        Command string with native timeout flag prepended to framework arguments,
+        or unchanged command string if unsupported or disabled.
+    """
+    if (
+        isinstance(per_test_timeout_seconds, bool)
+        or not isinstance(per_test_timeout_seconds, int)
+        or per_test_timeout_seconds <= 0
+    ):
+        return test_cmd
+
+    # Cargo test, dotnet test, and unknown test runners are explicitly unflagged
+    if re.search(r"\b(cargo\s+test|dotnet\s+test)\b", test_cmd, re.IGNORECASE):
+        return test_cmd
+
+    timeout_s = int(per_test_timeout_seconds)
+
+    # 1. go test -> -timeout Ns
+    if re.search(r"\bgo\s+test\b", test_cmd):
+        return re.sub(
+            r"(\bgo\s+test\b)",
+            rf"\1 -timeout {timeout_s}s",
+            test_cmd,
+            count=1,
+        )
+
+    # 2. pytest -> --timeout=N
+    if re.search(r"\bpytest\b", test_cmd):
+        return re.sub(
+            r"(\bpytest\b)",
+            rf"\1 --timeout={timeout_s}",
+            test_cmd,
+            count=1,
+        )
+
+    # 3. jest / vitest -> --testTimeout=N000 (milliseconds)
+    if re.search(r"\b(jest|vitest)\b", test_cmd):
+        timeout_ms = timeout_s * 1000
+        return re.sub(
+            r"(\b(jest|vitest)\b)",
+            rf"\1 --testTimeout={timeout_ms}",
+            test_cmd,
+            count=1,
+        )
+
+    return test_cmd
+
+
 @dataclass(frozen=True)
 class CommandOutcome:
     """Outcome of a single Gatekeeper verification command.
@@ -173,6 +230,7 @@ class CommandOutcome:
             available on the command runner port, so ordering is normalized.
         not_found: The leading executable token that could not be resolved on
             PATH, causing the command to be rejected before spawning.
+        termination_reason: Specific reason for process termination ("HANG", None).
     """
 
     label: str
@@ -181,11 +239,17 @@ class CommandOutcome:
     timed_out: bool
     tail: str
     not_found: str | None = None
+    termination_reason: str | None = None
 
     @property
     def passed(self) -> bool:
         """A command passes only when it exited with code 0 and never timed out."""
-        return not self.timed_out and self.exit_code == 0 and self.not_found is None
+        return (
+            not self.timed_out
+            and self.exit_code == 0
+            and self.not_found is None
+            and self.termination_reason is None
+        )
 
 
 @dataclass(frozen=True)
@@ -205,10 +269,19 @@ class VerificationReport:
     skipped_commands: tuple[str, ...]
 
 
-def _format_diagnostic(outcome: CommandOutcome, timeout_seconds: int) -> str:
+def _format_diagnostic(
+    outcome: CommandOutcome,
+    timeout_seconds: int,
+    silence_window_seconds: int | None = None,
+) -> str:
     """Render one failed command block: header, status line, then the output tail."""
     if outcome.not_found is not None:
         status = f"command not found: '{outcome.not_found}'"
+    elif outcome.termination_reason == "HANG":
+        if silence_window_seconds is not None:
+            status = f"hung (silence window of {silence_window_seconds}s exceeded)"
+        else:
+            status = "hung (silence window exceeded)"
     elif outcome.timed_out:
         status = f"timed out after {timeout_seconds}s"
     else:
@@ -229,12 +302,14 @@ class GatekeeperCommandExecutor:
         platform: str | None = None,
         path_resolver: Callable[[str], str | None] | None = None,
         ui_event_sink: UiEventSink | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._command_runner = command_runner or SubprocessRunner()
         self._cwd = cwd
         self._platform = platform if platform is not None else sys.platform
         self._path_resolver = path_resolver or shutil.which
         self._ui_event_sink = ui_event_sink
+        self._clock = clock or time.monotonic
 
     @property
     def ui_event_sink(self) -> UiEventSink | None:
@@ -257,12 +332,19 @@ class GatekeeperCommandExecutor:
 
         if config.build_cmd.strip():
             build_outcome = await self._execute(
-                BUILD_LABEL, config.build_cmd, config.timeout_seconds
+                BUILD_LABEL,
+                config.build_cmd,
+                config.timeout_seconds,
+                silence_window_seconds=config.silence_window_seconds,
             )
             results.append(build_outcome)
             if not build_outcome.passed:
                 diagnostics.append(
-                    _format_diagnostic(build_outcome, config.timeout_seconds)
+                    _format_diagnostic(
+                        build_outcome,
+                        config.timeout_seconds,
+                        silence_window_seconds=config.silence_window_seconds,
+                    )
                 )
                 skipped.append(config.test_cmd)
                 return VerificationReport(
@@ -272,12 +354,24 @@ class GatekeeperCommandExecutor:
                     skipped_commands=tuple(skipped),
                 )
 
+        effective_test_cmd = inject_test_timeout(
+            config.test_cmd, config.per_test_timeout_seconds
+        )
         test_outcome = await self._execute(
-            TEST_LABEL, config.test_cmd, config.timeout_seconds
+            TEST_LABEL,
+            effective_test_cmd,
+            config.timeout_seconds,
+            silence_window_seconds=config.silence_window_seconds,
         )
         results.append(test_outcome)
         if not test_outcome.passed:
-            diagnostics.append(_format_diagnostic(test_outcome, config.timeout_seconds))
+            diagnostics.append(
+                _format_diagnostic(
+                    test_outcome,
+                    config.timeout_seconds,
+                    silence_window_seconds=config.silence_window_seconds,
+                )
+            )
 
         return VerificationReport(
             passed=all(outcome.passed for outcome in results),
@@ -287,7 +381,11 @@ class GatekeeperCommandExecutor:
         )
 
     async def _execute(
-        self, label: str, command: str, timeout_seconds: int
+        self,
+        label: str,
+        command: str,
+        timeout_seconds: int,
+        silence_window_seconds: int | float | None = None,
     ) -> CommandOutcome:
         """Spawn one shell command and wait for output and exit under its timeout bound."""
         token = leading_command_token(command)
@@ -311,23 +409,75 @@ class GatekeeperCommandExecutor:
         handle = await self._command_runner.spawn(argv, cwd=self._cwd)
 
         stdout_lines: deque[str] = deque(maxlen=TAIL_LINE_LIMIT)
+        exit_code: int | None = None
+        timed_out = False
+        termination_reason: str | None = None
+
+        start_time = self._clock()
+        last_activity_time = start_time
+        silence_window = (
+            float(silence_window_seconds)
+            if silence_window_seconds is not None and silence_window_seconds > 0
+            else float(timeout_seconds)
+        )
+        total_timeout = float(timeout_seconds)
+
+        activity_event = asyncio.Event()
 
         async def _consume_stdout() -> None:
+            nonlocal last_activity_time
             async for line in handle.stdout_lines():
                 stdout_lines.append(line.rstrip("\r\n"))
+                last_activity_time = self._clock()
+                activity_event.set()
 
         stdout_task = asyncio.ensure_future(_consume_stdout())
         wait_task = asyncio.ensure_future(handle.wait())
-        exit_code: int | None = None
-        timed_out = False
+        last_stderr_len = len(handle.stderr)
 
-        _, pending = await asyncio.wait(
-            {stdout_task, wait_task},
-            timeout=float(timeout_seconds),
-            return_when=asyncio.ALL_COMPLETED,
-        )
-        if pending:
-            timed_out = True
+        while True:
+            if stdout_task.done() and wait_task.done():
+                break
+
+            current_stderr_len = len(handle.stderr)
+            if current_stderr_len > last_stderr_len:
+                last_stderr_len = current_stderr_len
+                last_activity_time = self._clock()
+
+            if activity_event.is_set():
+                activity_event.clear()
+                last_activity_time = self._clock()
+
+            now = self._clock()
+            elapsed_total = now - start_time
+            if elapsed_total >= total_timeout:
+                timed_out = True
+                break
+
+            elapsed_silence = now - last_activity_time
+            if elapsed_silence >= silence_window:
+                timed_out = True
+                termination_reason = "HANG"
+                break
+
+            remaining_total = max(0.001, total_timeout - elapsed_total)
+            remaining_silence = max(0.001, silence_window - elapsed_silence)
+            step_timeout = min(remaining_total, remaining_silence)
+
+            event_task = asyncio.ensure_future(activity_event.wait())
+            try:
+                await asyncio.wait(
+                    {stdout_task, wait_task, event_task},
+                    timeout=step_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                if not event_task.done():
+                    event_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await event_task
+
+        if timed_out:
             with suppress(Exception):
                 await handle.terminate()
             _, pending = await asyncio.wait(
@@ -344,7 +494,8 @@ class GatekeeperCommandExecutor:
 
         if not timed_out:
             exit_code = wait_task.result()
-            stdout_task.result()
+            with suppress(Exception):
+                stdout_task.result()
 
         tail_source = list(stdout_lines)
         tail_source.extend(handle.stderr.splitlines()[-TAIL_LINE_LIMIT:])
@@ -355,6 +506,7 @@ class GatekeeperCommandExecutor:
             exit_code=exit_code,
             timed_out=timed_out,
             tail="\n".join(tail_source[-TAIL_LINE_LIMIT:]),
+            termination_reason=termination_reason,
         )
 
         if self._ui_event_sink is not None:

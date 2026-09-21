@@ -523,3 +523,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Conflating the verification subprocess silence guard with the Worker session's stall timeout leads to incorrect timeout configuration or false-alarm kills when test suites take time to initialize on slow hardware.
 - **Solution**: Distinguish the two timeouts explicitly in schema and documentation: `silence_window_seconds` guards the test/build subprocess execution directly, whereas `WorkerSupervisor` manages LLM worker session stalls. Apply all default timeout values at load time in the configuration parser so domain models are fully populated without downstream null checks.
 
+### Silence Timer Reset on Received Lines
+- **Problem**: In a long-running but active verification test suite, a silence window that checks elapsed time from process spawn falsely terminates a suite that emits output periodically (e.g. every 45s with a 60s silence window).
+- **Solution**: Track `last_activity_time` independently of process start time and reset the activity timer upon receiving each stdout line (or stderr growth). Only an uninterrupted gap exceeding `silence_window_seconds` triggers process tree termination and surfaces `termination_reason = "HANG"`.
+
+### Prepending Test Timeout Flags Without Shadowing Executable
+- **Problem**: Injecting framework-native timeout flags (like `--timeout=N` or `-timeout Ns`) by naively prepending them to the front of `test_cmd` places the flag at index 0. This causes `leading_command_token` and `shutil.which` to treat the flag (e.g. `--timeout=10`) as the command binary, failing executable resolution.
+- **Solution**: Inject timeout flags after the test framework keyword (e.g. `pytest --timeout=N` or `go test -timeout Ns`), keeping the executable token in the leading position. Validate that `per_test_timeout_seconds` is strictly formatted as an integer without shell evaluation.
+
+### Process Tree Termination Exception Handling
+- **Problem**: When killing a hanging process tree using `taskkill /T /F` or POSIX signals, processes that exit asynchronously between inspection and signal delivery raise non-zero exit codes (e.g. 128) or `ProcessLookupError` / `OSError` (WinError), crashing the verification runner.
+- **Solution**: Catch and swallow `(ProcessLookupError, OSError)` during fallback termination ladders and gracefully swallow non-zero exit codes from `taskkill`, ensuring already-exited processes never raise unhandled exceptions or leak resources.
+
+

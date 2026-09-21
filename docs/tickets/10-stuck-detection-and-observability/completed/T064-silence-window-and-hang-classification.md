@@ -1,5 +1,6 @@
 # T064 — Silence window in verification command runner
-Status: pending
+Status: completed
+Completed: 2026-09-21T04:30:19Z
 Spec: docs/specs/10-stuck-detection-and-observability.md
 Blocked by: T063
 Security: required

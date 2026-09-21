@@ -146,12 +146,12 @@ class SubprocessProcessHandle:
                         # Fallback to direct process termination
                         try:
                             self._proc.terminate()
-                        except ProcessLookupError:
+                        except (ProcessLookupError, OSError):
                             pass
         else:
             try:
                 self._proc.terminate()
-            except ProcessLookupError:
+            except (ProcessLookupError, OSError):
                 pass
 
         # Bounded wait for process to finish
@@ -160,7 +160,7 @@ class SubprocessProcessHandle:
         except asyncio.TimeoutError:
             try:
                 self._proc.kill()
-            except ProcessLookupError:
+            except (ProcessLookupError, OSError):
                 pass
             try:
                 await asyncio.wait_for(self.wait(), timeout=2.0)
