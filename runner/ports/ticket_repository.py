@@ -50,6 +50,10 @@ class TicketRepository(Protocol):
         """Check if the backing queue directory exists."""
         ...
 
+    def is_completed(self, ticket_id: str) -> bool:
+        """Check whether a ticket is already completed or located in completed/."""
+        ...
+
     def finalize_completed(
         self,
         ticket: Ticket | Path | str,

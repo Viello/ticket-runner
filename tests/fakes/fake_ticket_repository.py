@@ -84,6 +84,19 @@ class FakeTicketRepository:
         pending = self.list_pending(spec_slug=spec_slug)
         return pending[0] if pending else None
 
+    def is_completed(self, ticket_id: str) -> bool:
+        """Check whether a ticket is already completed or in completed/."""
+        if self._error:
+            raise self._error
+        target_id = ticket_id.strip()
+        for t in self._tickets:
+            if t.id == target_id:
+                if t.status in (TicketStatus.COMPLETED, TicketStatus.SKIPPED):
+                    return True
+                if t.path and t.path.parent.name == "completed":
+                    return True
+        return False
+
     def _find_ticket(self, ticket: Ticket | Path | str) -> Ticket:
         target_id = ticket.id if isinstance(ticket, Ticket) else Path(str(ticket)).stem.split("-")[0]
         for t in self._tickets:

@@ -973,6 +973,60 @@ class VerificationLoop:
                         attempt=self._attempts,
                         last_step_summary="Verification passed",
                     )
+
+                    # --- Manual verification handling ---
+                    if ready_signal.manual_verification_is_default:
+                        # manual_verification was absent from the payload => backward-compatible, do not emit
+                        pass
+                    elif not ready_signal.manual_verification:
+                        # manual_verification was present but empty => emit all covered notice
+                        if self._notify is not None:
+                            try:
+                                self._notify(
+                                    "All Smoke Scenarios covered by automated tests — no manual steps required."
+                                )
+                            except Exception:
+                                print(
+                                    "All Smoke Scenarios covered by automated tests — no manual steps required."
+                                )
+                    else:
+                        # Emit scenario details to terminal
+                        scenario_lines: list[str] = []
+                        for scenario in ready_signal.manual_verification:
+                            name = scenario.get("name", "")
+                            setup = scenario.get("setup", "")
+                            steps = scenario.get("steps", "")
+                            expected = scenario.get("expected", "")
+                            scenario_lines.append(f"name: {name}")
+                            if setup:
+                                scenario_lines.append(f"setup: {setup}")
+                            if steps:
+                                scenario_lines.append(f"steps: {steps}")
+                            if expected:
+                                scenario_lines.append(f"expected: {expected}")
+                        scenario_text = "\n".join(scenario_lines)
+                        if self._notify is not None:
+                            try:
+                                self._notify(scenario_text)
+                            except Exception:
+                                print(scenario_text)
+
+                        # Discord notification (fire-and-forget, names-only summary)
+                        discord_msg = ", ".join(
+                            s.get("name", "") for s in ready_signal.manual_verification
+                        )
+                        if self._discord_adapter is not None and hasattr(
+                            self._discord_adapter, "send"
+                        ):
+                            try:
+                                res = self._discord_adapter.send(discord_msg)
+                                if inspect.iscoroutine(res):
+                                    await res
+                            except Exception as exc:
+                                logger.warning(
+                                    "Discord send failed: %s", exc
+                                )
+
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
                         report=report,

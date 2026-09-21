@@ -177,6 +177,41 @@ def _validate_answer(
     return None
 
 
+def _validate_manual_verification(value: object, label: str) -> tuple[dict, ...]:
+    """Validate and coerce the manual_verification field.
+
+    Each entry must be a dict where all values are strings.
+    Returns a tuple of dicts, or raises SignalFormatError.
+    Accepts _MISSING_SENTINEL to represent "field absent from payload".
+    """
+    if value is _MISSING_SENTINEL or value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise SignalFormatError(
+            f"{label} field 'manual_verification' must be an array of dicts, got: {_preview(value)}"
+        )
+    result: list[dict[str, str]] = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise SignalFormatError(
+                f"{label} field 'manual_verification[{i}]' must be a dict, got: {_preview(entry)}"
+            )
+        # Validate all values are strings
+        sanitized: dict[str, str] = {}
+        for k, v in entry.items():
+            if not isinstance(v, str):
+                raise SignalFormatError(
+                    f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
+                )
+            # Sanitize: strip terminal escape sequences, carriage returns, and newlines
+            s = v.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+            # Strip ANSI escape sequences
+            s = re.sub(r"\x1b\[[0-9;]*m", "", s)
+            sanitized[k] = s
+        result.append(sanitized)
+    return tuple(result)
+
+
 def _validate_ticket_match(actual: str, expected: object, label: str) -> None:
     if not isinstance(expected, str) or not expected.strip():
         raise SignalFormatError(
@@ -222,6 +257,14 @@ def _require_text(payload: Mapping[str, Any], field: str, label: str) -> str:
     return _validate_text(_require_present(payload, field, label), field, label)
 
 
+_MISSING_SENTINEL = object()
+
+
+def _has_manual_verification_key(payload: Mapping[str, Any]) -> bool:
+    """Check if 'manual_verification' key exists in the raw payload dict."""
+    return "manual_verification" in payload
+
+
 @dataclass(frozen=True)
 class ReadySignal:
     """Worker declaration that implementation is ready for Gatekeeper verification."""
@@ -233,6 +276,8 @@ class ReadySignal:
     new_gotchas: tuple[str, ...]
     timestamp: datetime
     scope: str | None = None
+    manual_verification: tuple[dict, ...] = ()
+    _manual_verification_was_present: bool = False
 
     def __post_init__(self) -> None:
         label = _READY_LABEL
@@ -259,6 +304,16 @@ class ReadySignal:
             _coerce_timestamp(self.timestamp, "timestamp", label),
         )
         object.__setattr__(self, "scope", _validate_scope(self.scope, label))
+        object.__setattr__(
+            self,
+            "manual_verification",
+            _validate_manual_verification(self.manual_verification, label),
+        )
+
+    @property
+    def manual_verification_is_default(self) -> bool:
+        """Return True when manual_verification was not present in the payload."""
+        return not self._manual_verification_was_present
 
     @classmethod
     def parse(
@@ -277,6 +332,8 @@ class ReadySignal:
             new_gotchas=_require_present(payload, "new_gotchas", label),
             timestamp=_require_present(payload, "timestamp", label),
             scope=payload.get("scope"),
+            manual_verification=payload.get("manual_verification", ()),
+            _manual_verification_was_present=_has_manual_verification_key(payload),
         )
 
 

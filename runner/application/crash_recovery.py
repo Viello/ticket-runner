@@ -297,6 +297,29 @@ class CrashRecoveryCoordinator:
 
         ticket_id = runner_state.active_ticket_id
 
+        # Check if the active ticket is already completed
+        if self._ticket_store is not None:
+            try:
+                if self._ticket_store.is_completed(ticket_id):
+                    msg = (
+                        f"[Runner] Active ticket '{ticket_id}' from state is already completed. "
+                        "Resetting state to idle."
+                    )
+                    logger.info(msg)
+                    self._log_or_print(msg)
+                    clean_state = RunnerState.idle(
+                        branch=runner_state.branch or "agent/ticket-runner",
+                        selected_model=runner_state.selected_model,
+                        presence_mode=runner_state.presence_mode,
+                    )
+                    if self._state_coordinator is not None:
+                        self._state_coordinator.save_state(clean_state)
+                    else:
+                        self._state_store.write(clean_state.to_dict())
+                    return RecoveryResult(action="none", recovered=False)
+            except Exception as exc:
+                logger.warning(f"Failed to check completion status for ticket '{ticket_id}': {exc}")
+
         # 3. Inspect working tree status
         try:
             status_output = await self._git_operations.status_porcelain()

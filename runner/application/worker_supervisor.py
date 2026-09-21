@@ -578,6 +578,13 @@ class WorkerSupervisor:
                     except (asyncio.CancelledError, Exception):
                         pass
 
+                for t in (next_line_task, kill_task):
+                    if t.done() and not t.cancelled():
+                        try:
+                            _ = t.exception()
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
                 if self._kill_reason is not None:
                     termination_reason = self._kill_reason
                     if next_line_task in done and not next_line_task.cancelled():
@@ -775,6 +782,11 @@ class WorkerSupervisor:
                 await heartbeat_task
             except (asyncio.CancelledError, Exception):
                 pass
+            if hasattr(iterator, "aclose"):
+                try:
+                    await iterator.aclose()
+                except Exception:
+                    pass
             if hasattr(handle, "close"):
                 try:
                     handle.close()
