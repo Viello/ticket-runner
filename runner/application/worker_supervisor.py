@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
+from datetime import datetime, timezone
 import io
 import json
 import logging
@@ -24,10 +25,12 @@ from runner.adapters.opencode.opencode_worker import (
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig
 from runner.domain.runtime_paths import RuntimePaths
+from runner.domain.status_event import RunState, StatusEvent
 from runner.domain.telemetry import BudgetAction, BudgetMonitor
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import UiEventSink
 
 
@@ -206,6 +209,11 @@ class WorkerSupervisor:
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
         tui_coordinator: Any | None = None,
+        status_publisher: StatusPublisher | None = None,
+        presence_mode: str = "nearby",
+        printer: Callable[[str], None] | None = None,
+        heartbeat_interval: float = 30.0,
+        max_attempts: int = 3,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -227,6 +235,11 @@ class WorkerSupervisor:
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
         self._tui_coordinator = tui_coordinator
+        self._status_publisher = status_publisher
+        self._presence_mode = presence_mode
+        self._printer = printer or print
+        self._heartbeat_interval = float(heartbeat_interval)
+        self._max_attempts = int(max_attempts)
 
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
@@ -289,6 +302,33 @@ class WorkerSupervisor:
     def signal_first_seen_at(self) -> float | None:
         """Timestamp when the active Ticket's Signal was first detected during this run."""
         return self._signal_first_seen_at
+
+    @property
+    def status_publisher(self) -> StatusPublisher | None:
+        """Configured StatusPublisher port."""
+        return self._status_publisher
+
+    @status_publisher.setter
+    def status_publisher(self, value: StatusPublisher | None) -> None:
+        self._status_publisher = value
+
+    @property
+    def presence_mode(self) -> str:
+        """Current presence mode ('nearby' or 'away')."""
+        return self._presence_mode
+
+    @presence_mode.setter
+    def presence_mode(self, value: str) -> None:
+        self._presence_mode = value
+
+    @property
+    def printer(self) -> Callable[[str], None]:
+        """Printer callable for terminal output."""
+        return self._printer
+
+    @printer.setter
+    def printer(self, value: Callable[[str], None]) -> None:
+        self._printer = value
 
     @property
     def runtime_paths(self) -> RuntimePaths:
@@ -454,6 +494,23 @@ class WorkerSupervisor:
 
         start_time = self._clock()
         last_line_time = start_time
+        last_step_time = start_time
+        step_counter = 0
+
+        # Heartbeat background task
+        async def _heartbeat_worker() -> None:
+            nonlocal last_step_time
+            while True:
+                await asyncio.sleep(min(0.01, self._heartbeat_interval))
+                now_hb = self._clock()
+                if (now_hb - last_step_time) >= self._heartbeat_interval:
+                    last_step_time = now_hb
+                    if self._presence_mode == "nearby":
+                        tokens_k = self._budget_monitor.latest_occupancy // 1000
+                        hb_line = f"[{ticket_id} | attempt 1/{self._max_attempts} | {tokens_k}k tokens | idle…]"
+                        self._printer(hb_line)
+
+        heartbeat_task = asyncio.create_task(_heartbeat_worker())
 
         try:
             iterator = handle.stdout_lines().__aiter__()
@@ -569,6 +626,7 @@ class WorkerSupervisor:
                 if arrival_time - last_line_time >= self._stall_timeout:
                     termination_reason = RunTerminationReason.STALLED
                     break
+                last_line_time = arrival_time
 
                 if bounded and (arrival_time - start_time) >= self._bounded_timeout:
                     termination_reason = RunTerminationReason.STALLED
@@ -577,13 +635,6 @@ class WorkerSupervisor:
                 if self._signal_first_seen_at is None:
                     if self._is_signal_present(ticket_id):
                         self._signal_first_seen_at = arrival_time
-
-                if self._signal_first_seen_at is not None:
-                    if (arrival_time - self._signal_first_seen_at) >= self._signal_grace_timeout:
-                        termination_reason = RunTerminationReason.KILLED_SIGNAL
-                        break
-
-                last_line_time = arrival_time
 
                 event = decode_event(line)
 
@@ -630,27 +681,64 @@ class WorkerSupervisor:
                 if event.type == "error":
                     has_error_event = True
 
-                if event.type == "step_finish" and event.token_usage is not None:
-                    action = self._budget_monitor.observe(event.token_usage)
-                    if self._on_budget_action is not None:
-                        self._on_budget_action(action, self._budget_monitor.latest_occupancy)
+                if event.type == "step_finish":
+                    last_step_time = self._clock()
+                    step_counter += 1
 
-                    if self._state_coordinator is not None:
-                        curr_state = self._state_coordinator.current_state
-                        prev_warning = curr_state.tokens.warning_sent if curr_state else False
-                        warning_sent = prev_warning or (action == BudgetAction.WARN)
-                        self._state_coordinator.record_tokens(
-                            self._budget_monitor.latest_occupancy,
-                            warning_sent=warning_sent,
-                        )
+                    # Extract assistant narration text (guard missing key/substructures)
+                    narration = ""
+                    part = event.part if isinstance(event.part, dict) else {}
+                    if isinstance(part.get("text"), str):
+                        narration = part.get("text") or ""
+                    elif isinstance(event.raw, dict):
+                        raw_part = event.raw.get("part")
+                        if isinstance(raw_part, dict) and isinstance(raw_part.get("text"), str):
+                            narration = raw_part.get("text") or ""
+                    summary = narration[:120]
 
-                    if action == BudgetAction.WARN:
-                        notice = (
-                            f"[{ticket_id}] Token budget warning: occupancy reached "
-                            f"{self._budget_monitor.latest_occupancy} tokens "
-                            f"(warn threshold: {self._budget_monitor.warn_threshold})"
-                        )
-                        self._notify(notice)
+                    if event.token_usage is not None:
+                        action = self._budget_monitor.observe(event.token_usage)
+                        if self._on_budget_action is not None:
+                            self._on_budget_action(action, self._budget_monitor.latest_occupancy)
+
+                        if self._state_coordinator is not None:
+                            curr_state = self._state_coordinator.current_state
+                            prev_warning = curr_state.tokens.warning_sent if curr_state else False
+                            warning_sent = prev_warning or (action == BudgetAction.WARN)
+                            self._state_coordinator.record_tokens(
+                                self._budget_monitor.latest_occupancy,
+                                warning_sent=warning_sent,
+                            )
+
+                        if action == BudgetAction.WARN:
+                            notice = (
+                                f"[{ticket_id}] Token budget warning: occupancy reached "
+                                f"{self._budget_monitor.latest_occupancy} tokens "
+                                f"(warn threshold: {self._budget_monitor.warn_threshold})"
+                            )
+                            self._notify(notice)
+
+                    tokens_k = self._budget_monitor.latest_occupancy // 1000
+                    if self._presence_mode == "nearby":
+                        display_line = f"[{ticket_id} | step {step_counter} | {tokens_k}k tokens] {summary}"
+                        self._printer(display_line[:120])
+
+                    if self._status_publisher is not None:
+                        try:
+                            status_event = StatusEvent(
+                                ticket_id=ticket_id,
+                                run_state=RunState.RUNNING,
+                                attempt=1,
+                                max_attempts=self._max_attempts,
+                                token_count=self._budget_monitor.latest_occupancy,
+                                token_budget=self._budget_monitor.effective_ceiling,
+                                last_step_summary=summary,
+                                last_step_at=datetime.now(timezone.utc).isoformat(),
+                                last_event="STEP_FINISHED",
+                            )
+                            self._status_publisher.publish(status_event)
+                        except Exception as pub_exc:
+                            logger.warning(f"[{ticket_id}] Failed to publish status event: {pub_exc}")
 
                 if self._kill_reason is not None:
                     termination_reason = self._kill_reason
@@ -682,6 +770,11 @@ class WorkerSupervisor:
             await self._terminate_ladder(handle)
             raise
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
             if hasattr(handle, "close"):
                 try:
                     handle.close()

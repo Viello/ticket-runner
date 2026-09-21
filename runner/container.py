@@ -206,6 +206,10 @@ def build_container(
     resolved_prompt_builder = prompt_builder or PromptBuilder()
     resolved_spec_parser = spec_parser or SpecMarkdownParser()
 
+    resolved_status_publisher = status_publisher or JsonFileStatusPublisher(
+        target=resolved_runtime_paths.status_file
+    )
+
     resolved_supervisor = supervisor or WorkerSupervisor(
         command_runner=resolved_command_runner,
         runtime_paths=resolved_runtime_paths,
@@ -218,11 +222,17 @@ def build_container(
         model_id=model_id,
         state_coordinator=resolved_state_coordinator,
         ui_event_sink=resolved_event_sink,
+        status_publisher=resolved_status_publisher,
+        presence_mode=resolved_config.presence.default_mode,
+        printer=printer,
+        max_attempts=resolved_config.verification.max_attempts,
     )
     if resolved_supervisor.state_coordinator is None:
         resolved_supervisor.state_coordinator = resolved_state_coordinator
     if hasattr(resolved_supervisor, "ui_event_sink") and resolved_supervisor.ui_event_sink is None and resolved_event_sink is not None:
         resolved_supervisor.ui_event_sink = resolved_event_sink
+    if hasattr(resolved_supervisor, "status_publisher") and resolved_supervisor.status_publisher is None:
+        resolved_supervisor.status_publisher = resolved_status_publisher
 
     resolved_coordinator = coordinator or HandoffCoordinator(
         supervisor=resolved_supervisor,
@@ -236,10 +246,6 @@ def build_container(
         notify=notify,
         git_operations=resolved_git_ops,
         signal_repository=resolved_signal_repo,
-    )
-
-    resolved_status_publisher = status_publisher or JsonFileStatusPublisher(
-        target=resolved_runtime_paths.status_file
     )
 
     resolved_processor = processor or TicketProcessor(

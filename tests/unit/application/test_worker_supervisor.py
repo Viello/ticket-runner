@@ -2124,6 +2124,237 @@ def test_supervisor_without_model_id_omits_m_flag(tmp_path: Path) -> None:
     assert "-m" not in fake_runner.spawns[0]
 
 
+# --- T068: Step-Summary Observability & Heartbeat ---
+
+
+def test_step_summary_published_and_printed_in_nearby_mode(tmp_path: Path) -> None:
+    """A step_finish event updates status.json via StatusPublisher and prints truncated line in nearby mode."""
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+    from runner.domain.status_event import RunState
+
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_step123"
+    fake_publisher = FakeStatusPublisher()
+    printed_lines: list[str] = []
+
+    lines = [
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {
+                "text": "Edited runner/verification.py — added silence window loop",
+                "tokens": {"total": 42000, "input": 35000, "output": 7000},
+            },
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "prompt text"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        status_publisher=fake_publisher,
+        presence_mode="nearby",
+        printer=printed_lines.append,
+    )
+    ticket = _make_ticket("T068")
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    # Assert StatusPublisher was updated
+    assert len(fake_publisher.events) == 1
+    evt = fake_publisher.events[0]
+    assert evt.ticket_id == "T068"
+    assert evt.last_event == "STEP_FINISHED"
+    assert evt.run_state == RunState.RUNNING
+    assert evt.last_step_summary == "Edited runner/verification.py — added silence window loop"
+    assert evt.token_count == 42000
+
+    # Assert terminal output format: [T068 | step 1 | 42k tokens] Edited runner/verification.py — added silence window loop
+    assert len(printed_lines) == 1
+    assert printed_lines[0] == "[T068 | step 1 | 42k tokens] Edited runner/verification.py — added silence window loop"
+    assert len(printed_lines[0]) <= 120
+
+
+def test_step_summary_truncates_long_narration(tmp_path: Path) -> None:
+    """Assistant narration longer than 120 chars is truncated to <= 120 chars before publishing and printing."""
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_long123"
+    fake_publisher = FakeStatusPublisher()
+    printed_lines: list[str] = []
+
+    long_narration = "A" * 300
+    lines = [
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {
+                "text": long_narration,
+                "tokens": {"total": 10000},
+            },
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "prompt text"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        status_publisher=fake_publisher,
+        presence_mode="nearby",
+        printer=printed_lines.append,
+    )
+    ticket = _make_ticket("T068")
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    assert len(fake_publisher.events) == 1
+    evt = fake_publisher.events[0]
+    assert len(evt.last_step_summary) <= 120
+    assert len(printed_lines) == 1
+    assert len(printed_lines[0]) <= 120
+
+
+def test_step_summary_in_away_mode_does_not_print(tmp_path: Path) -> None:
+    """In away mode, no line is printed to terminal, but status_publisher is still called."""
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_away123"
+    fake_publisher = FakeStatusPublisher()
+    printed_lines: list[str] = []
+
+    lines = [
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {
+                "text": "Completed first step silently",
+                "tokens": {"total": 25000},
+            },
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "prompt text"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        status_publisher=fake_publisher,
+        presence_mode="away",
+        printer=printed_lines.append,
+    )
+    ticket = _make_ticket("T068")
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    assert len(printed_lines) == 0
+    assert len(fake_publisher.events) == 1
+    assert fake_publisher.events[0].last_step_summary == "Completed first step silently"
+
+
+def test_heartbeat_fires_after_silence_in_nearby_mode(tmp_path: Path) -> None:
+    """Heartbeat prints [T068 | attempt 1/3 | 0k tokens | idle…] if heartbeat interval elapses."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_heartbeat"
+    printed_lines: list[str] = []
+
+    # Two lines with a delay between them: line 1 arrives immediately, line 2 arrives after 0.05s
+    lines = [
+        json.dumps({
+            "type": "step_start",
+            "sessionID": session_id,
+        }) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {
+                "text": "Done after long silence",
+                "tokens": {"total": 50000},
+            },
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "prompt text"],
+        stdout_lines=lines,
+        line_delays=[0.0, 0.06],
+        exit_code=0,
+    )
+
+    # Injected heartbeat_interval of 0.02s
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        presence_mode="nearby",
+        heartbeat_interval=0.02,
+        printer=printed_lines.append,
+    )
+    ticket = _make_ticket("T068")
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    # Assert heartbeat line was printed
+    heartbeats = [line for line in printed_lines if "idle…" in line]
+    assert len(heartbeats) >= 1
+    assert "[T068 | attempt 1/3 | 0k tokens | idle…]" in heartbeats[0]
+
+
+def test_heartbeat_does_not_fire_after_worker_exits(tmp_path: Path) -> None:
+    """Heartbeat background task is cancelled upon worker exit and does not print after exit."""
+    fake_runner = FakeCommandRunner()
+    session_id = "ses_exited"
+    printed_lines: list[str] = []
+
+    lines = [
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": session_id,
+            "part": {
+                "text": "Quick step",
+                "tokens": {"total": 10000},
+            },
+        }) + "\n",
+    ]
+
+    fake_runner.register_spawn(
+        ["opencode", "run", "--format", "json", "--auto", "prompt text"],
+        stdout_lines=lines,
+        exit_code=0,
+    )
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        presence_mode="nearby",
+        heartbeat_interval=0.01,
+        printer=printed_lines.append,
+    )
+    ticket = _make_ticket("T068")
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    count_at_exit = len(printed_lines)
+    # Wait longer than heartbeat interval to ensure no trailing heartbeat
+    asyncio.run(asyncio.sleep(0.05))
+    assert len(printed_lines) == count_at_exit
+
+
+
 
 
 

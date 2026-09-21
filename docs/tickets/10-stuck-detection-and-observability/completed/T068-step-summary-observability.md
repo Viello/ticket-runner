@@ -1,5 +1,6 @@
 # T068 — Step-summary observability
-Status: pending
+Status: completed
+Completed: 2026-09-21T05:59:59Z
 Spec: docs/specs/10-stuck-detection-and-observability.md
 Blocked by: T067
 Reasoning: low

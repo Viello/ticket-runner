@@ -559,5 +559,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Serializing optional status fields (like `last_step_summary: None`) by omitting the key from the output dictionary causes downstream status consumers and observers (Discord, terminal, TUI) to fail with `KeyError`s or encounter unstable schema layouts across successive reads.
 - **Solution**: Explicitly include `last_step_summary` as `null` in JSON output rather than dropping absent keys, providing a stable, predictable schema for all polling observers.
 
+### Worker Heartbeat Task Lifetime and Cancellation in Finally
+- **Problem**: An unmanaged background heartbeat task in `WorkerSupervisor` continues sleeping and evaluating idle state even after the Worker process has exited or failed, keeping the event loop alive and emitting spurious idle lines during subsequent test phases.
+- **Solution**: Spawn the heartbeat loop via `asyncio.create_task` and unconditionally cancel it in a `finally` block on supervisor exit, awaiting the task with exceptions suppressed to ensure clean shutdown before returning control.
+
+### Step Narration Truncation Before Publishing and Display
+- **Problem**: Passing raw assistant text from `step_finish` events directly to `StatusPublisher` or printing to the terminal creates massive multi-kilobyte status payloads and overflows terminal line widths when the model outputs lengthy code explanations or reflections.
+- **Solution**: Guard narration extraction with `part.get("text") or ""` and truncate text to $\le 120$ characters immediately before both printing to the terminal and publishing to `status.json`.
+
 
 
