@@ -5,6 +5,7 @@ from runner.ports.config_loader import ConfigLoader
 from runner.ports.intervention import InterventionAction, InterventionDecision, InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.state_store import StateStore
+from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import TerminalDisplay, UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
@@ -17,6 +18,7 @@ __all__ = [
     "ProcessHandle",
     "SignalRepository",
     "StateStore",
+    "StatusPublisher",
     "TerminalDisplay",
     "TicketRepository",
     "UiEventSink",

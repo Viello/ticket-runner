@@ -13,6 +13,7 @@ from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+from runner.adapters.json_status_publisher import JsonFileStatusPublisher
 from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
@@ -49,6 +50,7 @@ from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.state_store import StateStore
+from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import TerminalDisplay, UiEventSink
 from runner.ports.ticket_repository import TicketRepository
 
@@ -88,6 +90,7 @@ class RunnerContainer:
     state_coordinator: StateCoordinator
     state_store: StateStore
     crash_recovery: CrashRecoveryCoordinator
+    status_publisher: StatusPublisher | None = None
     terminal_display: TerminalDisplay | None = None
     ui_event_sink: UiEventSink | None = None
     presence_coordinator: PresenceCoordinator | None = None
@@ -132,6 +135,7 @@ def build_container(
     presence_coordinator: PresenceCoordinator | None = None,
     tui_launcher: TuiLauncher | None = None,
     tui_coordinator: TuiCoordinator | None = None,
+    status_publisher: StatusPublisher | None = None,
     console: Any | None = None,
     terminal_detector: Any | None = None,
 ) -> RunnerContainer:
@@ -234,6 +238,10 @@ def build_container(
         signal_repository=resolved_signal_repo,
     )
 
+    resolved_status_publisher = status_publisher or JsonFileStatusPublisher(
+        target=resolved_runtime_paths.status_file
+    )
+
     resolved_processor = processor or TicketProcessor(
         coordinator=resolved_coordinator,
         signal_repository=resolved_signal_repo,
@@ -249,6 +257,7 @@ def build_container(
         state_coordinator=resolved_state_coordinator,
         runtime_paths=resolved_runtime_paths,
         token_budget=resolved_config.tokens,
+        status_publisher=resolved_status_publisher,
     )
     if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
         resolved_processor.state_coordinator = resolved_state_coordinator
@@ -343,6 +352,7 @@ def build_container(
         state_coordinator=resolved_state_coordinator,
         state_store=resolved_state_store,
         crash_recovery=resolved_crash_recovery,
+        status_publisher=resolved_status_publisher,
         terminal_display=resolved_terminal_display,
         ui_event_sink=resolved_event_sink,
         presence_coordinator=resolved_presence_coordinator,

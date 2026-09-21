@@ -38,6 +38,7 @@ from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.status_publisher import StatusPublisher
 
 _DEFAULT_PRINTER: Callable[[str], None] = print
 
@@ -65,6 +66,7 @@ class GatekeeperTicketProcessor:
         discord_adapter: Any | None = None,
         runtime_paths: RuntimePaths | None = None,
         token_budget: Any | None = None,
+        status_publisher: StatusPublisher | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
@@ -72,6 +74,7 @@ class GatekeeperTicketProcessor:
         self._discord_adapter = discord_adapter
         self._runtime_paths = runtime_paths
         self._token_budget = token_budget
+        self._status_publisher = status_publisher
         if self._notify_sink is None and coordinator is not None and getattr(coordinator, "_notify", None) is not None:
             self._notify_sink = coordinator._notify
 
@@ -270,6 +273,10 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["token_budget"] = self._token_budget
+            if "status_publisher" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["status_publisher"] = self._status_publisher
         except (ValueError, TypeError):
             pass
 

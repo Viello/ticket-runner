@@ -57,6 +57,11 @@ class RuntimePaths:
         """Path to the runner state file (.agent/state.json)."""
         return self.root_dir / "state.json"
 
+    @property
+    def status_file(self) -> Path:
+        """Path to the runner status file (.agent/status.json)."""
+        return self.root_dir / "status.json"
+
     def ready_signal_path(self, ticket_id: str) -> Path:
         """Path to a ticket's ready signal file (.agent/signals/{ticket_id}_ready.json)."""
         return self.signals_dir / f"{ticket_id}_ready.json"

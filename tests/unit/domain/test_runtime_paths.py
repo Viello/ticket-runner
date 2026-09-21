@@ -38,6 +38,14 @@ def test_state_path() -> None:
     assert custom.state_path == Path("custom/agent/state.json")
 
 
+def test_status_file() -> None:
+    paths = RuntimePaths()
+    assert paths.status_file == Path(".agent/status.json")
+
+    custom = RuntimePaths(root_dir=Path("custom/agent"))
+    assert custom.status_file == Path("custom/agent/status.json")
+
+
 
 def test_ready_signal_path_embeds_ticket_id() -> None:
     paths = RuntimePaths()

@@ -32,6 +32,7 @@ from runner.domain.failure_analyser import (
 )
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
+from runner.domain.status_event import RunState, StatusEvent
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import (
@@ -40,6 +41,7 @@ from runner.ports.intervention import (
     InterventionGateway,
 )
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import UiEventSink
 
 logger = logging.getLogger(__name__)
@@ -734,6 +736,7 @@ class VerificationLoop:
         discord_adapter: Any | None = None,
         runtime_paths: RuntimePaths | None = None,
         token_budget: int | TokenBudgetConfig | None = None,
+        status_publisher: StatusPublisher | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -757,6 +760,7 @@ class VerificationLoop:
         self._failure_analyser = failure_analyser or analyse
         self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
         self._runtime_paths = runtime_paths or RuntimePaths()
+        self._status_publisher = status_publisher
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
         elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
@@ -766,6 +770,34 @@ class VerificationLoop:
         self._last_token_count: int = 0
         if ui_event_sink is not None and getattr(self._executor, "ui_event_sink", None) is None:
             self._executor.ui_event_sink = ui_event_sink
+
+    def _publish_status(
+        self,
+        event_name: str,
+        run_state: RunState,
+        attempt: int | None = None,
+        last_step_summary: str | None = None,
+    ) -> None:
+        """Publish a status event if a status publisher is configured."""
+        if self._status_publisher is None:
+            return
+        from datetime import datetime, timezone
+
+        event = StatusEvent(
+            ticket_id=self._ticket.id,
+            run_state=run_state,
+            attempt=attempt if attempt is not None else self._attempts,
+            max_attempts=self._max_attempts,
+            token_count=self._last_token_count,
+            token_budget=self._effective_token_budget,
+            last_step_summary=last_step_summary,
+            last_step_at=datetime.now(timezone.utc).isoformat(),
+            last_event=event_name,
+        )
+        try:
+            self._status_publisher.publish(event)
+        except Exception as exc:
+            logger.warning("Failed to publish status event %s: %s", event_name, exc)
 
     @property
     def ui_event_sink(self) -> UiEventSink | None:
@@ -927,9 +959,20 @@ class VerificationLoop:
                     )
 
                 # Execute Gatekeeper independent verification commands
+                self._publish_status(
+                    event_name="ATTEMPT_STARTED",
+                    run_state=RunState.VERIFYING,
+                    attempt=self._attempts + 1,
+                )
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
                     self._attempts += 1
+                    self._publish_status(
+                        event_name="ATTEMPT_ENDED",
+                        run_state=RunState.DONE,
+                        attempt=self._attempts,
+                        last_step_summary="Verification passed",
+                    )
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
                         report=report,
@@ -939,6 +982,12 @@ class VerificationLoop:
                     )
 
                 # Verification failed
+                self._publish_status(
+                    event_name="ATTEMPT_ENDED",
+                    run_state=RunState.RUNNING,
+                    attempt=self._attempts + 1,
+                    last_step_summary="Verification failed",
+                )
                 diagnostics = "\n\n".join(report.diagnostics)
                 failed_outcome = next((r for r in report.results if not r.passed), None)
                 escalation_result = await self._check_escalation(
@@ -1090,6 +1139,13 @@ class VerificationLoop:
             prompt_question=True,
         )
 
+        self._publish_status(
+            event_name="ESCALATION_EMITTED",
+            run_state=RunState.ESCALATING,
+            attempt=current_attempt,
+            last_step_summary=f"Escalation emitted: {diagnostic.label}",
+        )
+
         # Discord notification (fire-and-forget, never raises)
         if self._discord_adapter is not None and hasattr(self._discord_adapter, "send"):
             try:
@@ -1143,6 +1199,12 @@ class VerificationLoop:
     async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
         """Handle attempt failure, evaluating budget exhaustion and intervention menu."""
         if self._attempts >= self._max_attempts:
+            self._publish_status(
+                event_name="CIRCUIT_BREAKER_TRIPPED",
+                run_state=RunState.IDLE,
+                attempt=self._attempts,
+                last_step_summary="Circuit breaker tripped",
+            )
             if self._state_coordinator is not None:
                 self._state_coordinator.transition_to_waiting_for_user()
             decision = self._intervention_gateway.request_intervention(

@@ -551,9 +551,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When diagnostic escalation prompts the operator whether to run `/diagnosing-bugs` and the operator confirms (Y / Enter), incrementing the verification attempt counter burns a retry budget attempt, tripping the circuit breaker prematurely before the root-cause bug can be triaged and addressed.
 - **Solution**: Evaluate the escalation policy and prompt the operator before consuming the attempt counter (`self._attempts`). Yield `INTERVENTION_REQUESTED` without incrementing `self._attempts` so the retry budget remains fully intact for subsequent verification.
 
-### Bounding Diagnostic Log Tail for Discord and Terminal Delivery
-- **Problem**: Unbounded command output tails embedded into diagnostic reports can exceed Discord's 2,000-character message ceiling and overflow terminal scroll buffers, causing remote dispatch failures and unreadable prompts.
-- **Solution**: Bound the report log tail to at most 100 lines during formatting and enforce a hard 2,000-character safety truncation with ellipsis for Discord webhook/bot dispatch, ensuring delivery never raises or overflows.
+### Pure Path Object Instantiation Without Disk Side-Effects
+- **Problem**: Adding directory or file path accessors to `RuntimePaths` that eagerly trigger directory creation (`mkdir`) causes pure path manipulations or container composition calls to write unintended runtime folders to disk during dry tests or imports.
+- **Solution**: Keep path properties on `RuntimePaths` (such as `status_file`) as pure `Path` computations without side-effects, delegating directory creation to explicit `ensure_*` helpers or the writing adapter on demand.
+
+### Explicit Null Serialization for Missing Optional Step Summaries
+- **Problem**: Serializing optional status fields (like `last_step_summary: None`) by omitting the key from the output dictionary causes downstream status consumers and observers (Discord, terminal, TUI) to fail with `KeyError`s or encounter unstable schema layouts across successive reads.
+- **Solution**: Explicitly include `last_step_summary` as `null` in JSON output rather than dropping absent keys, providing a stable, predictable schema for all polling observers.
 
 
 
