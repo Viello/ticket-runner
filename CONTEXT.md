@@ -119,3 +119,7 @@ _Avoid_: State manager, DB, cache
 **Terminal Display**:
 The local terminal user interface built with Rich Live that renders the pinned status header, token gauge, scrolling telemetry ring buffer, and hotkey legends during execution.
 _Avoid_: Dashboard, console UI, terminal viewer
+
+**Smoke Scenarios**:
+The named, human-executable verification scripts embedded in each ticket under `### Smoke Scenarios`. Each scenario specifies Setup (synthetic conditions to manufacture), Steps (numbered operator actions), and Expected (observable outcome). Populated during ticket drafting; audited for automated coverage by the Worker at Smoke Scenarios Handoff; human-action scenarios forwarded to the operator via terminal and ready signal.
+_Avoid_: Manual Verification, Human Verification, Operator Checklist, manual tests

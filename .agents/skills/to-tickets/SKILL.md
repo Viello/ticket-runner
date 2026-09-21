@@ -38,6 +38,8 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges**: the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
+For each ticket, draft its **Smoke Scenarios**: the named, human-executable scripts the operator runs after the Gatekeeper passes to confirm the feature works at the surface. Derive scenarios from Requirements and Acceptance Criteria, targeting what automated tests cannot reach — observable UX, terminal output, interactive prompts, multi-process timing, and file side-effects a human must inspect. For each scenario, capture the synthetic conditions needed (config tweaks, fake input, environment state) so the operator can manufacture them without guessing.
+
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
 
 ### 4. Quiz the user
@@ -47,14 +49,16 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
+- **Smoke Scenarios** (draft): the named scenarios the operator will run to confirm it works
 
 Ask the user:
 
 - Does the granularity feel right? (too coarse / too fine)
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
 - Should any tickets be merged or split further?
+- Does the Smoke Scenarios list cover every edge case you care about? Add or adjust any scenario before approving.
 
-Iterate until the user approves the breakdown.
+Iterate until the user approves both the breakdown and the scenario coverage.
 
 ### 5. Publish the tickets to the configured tracker
 
@@ -84,6 +88,15 @@ Reasoning: medium   # optional: low | medium | high | max (provider-specific; om
 ### Acceptance Criteria
 - <Criterion 1>
 - <Criterion 2>
+
+### Smoke Scenarios
+**Scenario: <name>**
+- Setup: <config values, env vars, or synthetic conditions the operator must put in place>
+- Steps: <numbered human actions — what to run, type, or observe>
+- Expected: <the exact output, file content, or UX state that confirms it worked>
+
+<!-- For tickets where automated tests cover all criteria, replace the block above with:
+All scenarios are covered by automated tests. No manual steps required. -->
 
 ### Gotchas
 - <Ticket-specific quirks, edge cases, or pitfalls discovered during breakdown>

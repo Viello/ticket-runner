@@ -18,6 +18,7 @@ Specs 01–03 (Doctor, Queue, Worker) are implemented and tested. Spec 04 (Signa
 ## Invariants
 - OpenCode is invoked as a subprocess, never a daemon: `opencode run --format json --session <id> --auto "<prompt>"`; resume with the same session id (ADR 0001).
 - Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement/SKILL.md`), performing pre-signal reviews (`/code-review`, and `/security-review` when flagged), but never commits directly
+- Before emitting `{ticket_id}_ready.json`, Worker must confirm the test suite is not stuck: if the suite hangs or cascades, classify the failure and isolate the first failing test following `/diagnosing-bugs` § Stuck-Test-Suite Protocol before signalling readiness.
 - Worker↔Runner messages are durable JSON files (`.agent/signals/{ticket_id}_ready.json`, `.agent/questions/{ticket_id}.json`) — never parse model stdout for state (ADR 0004).
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker (ADR 0002).
 - All automated work happens on `agent/ticket-runner`; the Runner stages and commits, and `.git/hooks/pre-push` blocks pushes (ADR 0005). Never `git push`.
@@ -53,6 +54,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 - **Pre-signal review**: Conduct two-axis standards and spec review before committing or emitting `{ticket_id}_ready.json`: `/code-review`.
 - **Security review**: When explicitly flagged by ticket requirements/frontmatter (`Security: required`) or the user, invoke `/security-review` before committing or emitting `{ticket_id}_ready.json`.
 - **Root-cause debugging**: Build a tight, red-capable feedback loop when diagnosing hard failures: `/diagnosing-bugs`.
+- **Stuck-suite triage**: When the verification suite hangs or cascades, classify the failure and isolate the first failing test before retrying or escalating — `/diagnosing-bugs` § Stuck-Test-Suite Protocol.
 - **Context preservation**: Checkpoint progress to `.agent/checkpoints/{ticket_id}/handoff.md` at 135k tokens: `/handoff`.
 
 ## Agent skills

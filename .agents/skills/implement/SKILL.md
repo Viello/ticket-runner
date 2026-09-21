@@ -15,4 +15,13 @@ Implement the work described in the active ticket or spec:
      - State positive target behaviors and actionable solutions; prune trivial syntax errors and CLI reference lookups.
    - Update ticket frontmatter: set `Status: completed` and record `Completed: <ISO-8601-UTC-timestamp>`.
    - Relocate the ticket file to `docs/tickets/<spec-slug>/completed/T<NNN>-<slug>.md`.
-5. **Commit**: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Commit to the current branch following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers).
+5. **Commit** *(interactive mode only — skip in Ticket Runner autonomous execution)*: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Commit to the current branch following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers). Append scenario names from `### Smoke Scenarios` that require human action as a trailing section in the commit body:
+   ```
+   Manual verification required:
+   - <Scenario name 1>
+   - <Scenario name 2>
+   ```
+   Omit the section if all scenarios are auto-covered.
+6. **Smoke Scenarios Handoff**: Read the ticket's `### Smoke Scenarios` section and produce a coverage audit — for each scenario, determine whether the automated test suite fully exercises it (`[auto-covered]` or `[needs human]`). Then branch by execution mode:
+   - **Interactive mode**: Print the full `[needs human]` checklist (Setup / Steps / Expected verbatim) to the terminal. If all are auto-covered, emit: `All Smoke Scenarios covered by automated tests — no manual steps required.`
+   - **Ticket Runner autonomous mode**: Embed the structured checklist as `manual_verification` in `.agent/signals/<ticket_id>_ready.json` — a JSON array of `{"name", "setup", "steps", "expected"}` objects for each `[needs human]` scenario. The Gatekeeper reads this field, appends scenario names to the commit body, and re-surfaces the full checklist to the operator after committing. Emit an empty array if all scenarios are auto-covered.
