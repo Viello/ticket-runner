@@ -1,5 +1,6 @@
 # T063 — Verification stuck-detection config schema
-Status: pending
+Status: completed
+Completed: 2026-09-21T04:16:00Z
 Spec: docs/specs/10-stuck-detection-and-observability.md
 Blocked by: None
 Reasoning: low

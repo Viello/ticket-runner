@@ -209,6 +209,10 @@ git: {}
     assert config.verification.build_cmd == ""
     assert config.verification.max_attempts == 3
     assert config.verification.timeout_seconds == 300
+    assert config.verification.silence_window_seconds == 60
+    assert config.verification.per_test_timeout_seconds == 0
+    assert config.verification.isolation_cmd == ""
+    assert config.verification.bug_escalation_at == 1
     assert config.presence.idle_escalation_minutes == 3
     assert config.discord.enabled is True
     assert config.discord.channel_id == ""
@@ -275,6 +279,73 @@ def test_load_discord_raw_token_in_token_env() -> None:
         loader.load_from_dict(data)
 
 
+def test_load_verification_custom_values() -> None:
+    yaml_custom_verification = VALID_CONFIG_YAML + """
+verification:
+  test_cmd: "pytest"
+  build_cmd: "make build"
+  max_attempts: 5
+  timeout_seconds: 600
+  silence_window_seconds: 90
+  per_test_timeout_seconds: 15
+  isolation_cmd: "pytest {test_id} -x"
+  bug_escalation_at: 2
+"""
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_custom_verification)
+    assert config.verification.silence_window_seconds == 90
+    assert config.verification.per_test_timeout_seconds == 15
+    assert config.verification.isolation_cmd == "pytest {test_id} -x"
+    assert config.verification.bug_escalation_at == 2
+
+
+@pytest.mark.parametrize(
+    ("invalid_override", "expected_match"),
+    [
+        ({"silence_window_seconds": 0}, "silence_window_seconds"),
+        ({"silence_window_seconds": -1}, "silence_window_seconds"),
+        ({"silence_window_seconds": "invalid"}, "silence_window_seconds"),
+        ({"per_test_timeout_seconds": -1}, "per_test_timeout_seconds"),
+        ({"per_test_timeout_seconds": "invalid"}, "per_test_timeout_seconds"),
+        ({"bug_escalation_at": -2}, "bug_escalation_at"),
+        ({"bug_escalation_at": "invalid"}, "bug_escalation_at"),
+        ({"isolation_cmd": 123}, "isolation_cmd"),
+    ],
+)
+def test_load_verification_invalid_fields(invalid_override: dict[str, object], expected_match: str) -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["verification"].update(invalid_override)
+
+    with pytest.raises(ConfigError, match=expected_match):
+        loader.load_from_dict(data)
+
+
+def test_verification_dump_round_trip() -> None:
+    yaml_custom = VALID_CONFIG_YAML + """
+verification:
+  test_cmd: "pytest"
+  build_cmd: ""
+  max_attempts: 3
+  timeout_seconds: 300
+  silence_window_seconds: 45
+  per_test_timeout_seconds: 10
+  isolation_cmd: "python -m pytest {test_id}"
+  bug_escalation_at: -1
+"""
+    loader = YamlConfigLoader()
+    config1 = loader.load_from_string(yaml_custom)
+    dumped = loader.dump(config1)
+    config2 = loader.load_from_string(dumped)
+
+    assert config1.verification == config2.verification
+    assert config2.verification.silence_window_seconds == 45
+    assert config2.verification.per_test_timeout_seconds == 10
+    assert config2.verification.isolation_cmd == "python -m pytest {test_id}"
+    assert config2.verification.bug_escalation_at == -1
+
+
 def test_load_config_example_yaml() -> None:
     loader = YamlConfigLoader()
     example_path = Path("config.example.yaml")
@@ -285,6 +356,10 @@ def test_load_config_example_yaml() -> None:
     assert config.project.branch == "agent/ticket-runner"
     assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
     assert config.verification.test_cmd == "python -m pytest"
+    assert config.verification.silence_window_seconds == 60
+    assert config.verification.per_test_timeout_seconds == 0
+    assert config.verification.isolation_cmd == ""
+    assert config.verification.bug_escalation_at == 1
     assert config.tokens.warn == 120000
     assert config.tokens.handoff == 135000
     assert config.tokens.ceiling == 150000

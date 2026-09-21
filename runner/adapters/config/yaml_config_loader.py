@@ -151,6 +151,10 @@ class YamlConfigLoader(ConfigLoader):
             build_cmd=verification_dict.get("build_cmd", ""),
             max_attempts=verification_dict.get("max_attempts", 3),
             timeout_seconds=verification_dict.get("timeout_seconds", 300),
+            silence_window_seconds=verification_dict.get("silence_window_seconds", 60),
+            per_test_timeout_seconds=verification_dict.get("per_test_timeout_seconds", 0),
+            isolation_cmd=verification_dict.get("isolation_cmd", ""),
+            bug_escalation_at=verification_dict.get("bug_escalation_at", 1),
         )
 
         # 4. Tokens section
@@ -321,6 +325,10 @@ class YamlConfigLoader(ConfigLoader):
                 "build_cmd": config.verification.build_cmd,
                 "max_attempts": config.verification.max_attempts,
                 "timeout_seconds": config.verification.timeout_seconds,
+                "silence_window_seconds": config.verification.silence_window_seconds,
+                "per_test_timeout_seconds": config.verification.per_test_timeout_seconds,
+                "isolation_cmd": config.verification.isolation_cmd,
+                "bug_escalation_at": config.verification.bug_escalation_at,
             },
             "tokens": {
                 "warn": config.tokens.warn,

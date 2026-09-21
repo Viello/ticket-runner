@@ -519,3 +519,7 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: Passing dynamic or sentinel configuration strings like `"auto"` directly into downstream components (such as `TuiCoordinator` and `build_tui_command`) causes runtime validation failures because command security builders reject non-concrete binary names against allowlists.
 - **Solution**: Resolve dynamic configuration strings (such as `ui.session_terminal: "auto"`) into concrete, PATH-verified binary names early during container composition (`build_container`) and Doctor pre-flight checks, ensuring downstream consumers receive strictly valid binary targets.
 
+### Verification Subprocess Silence Window vs Worker Stall Timeout
+- **Problem**: Conflating the verification subprocess silence guard with the Worker session's stall timeout leads to incorrect timeout configuration or false-alarm kills when test suites take time to initialize on slow hardware.
+- **Solution**: Distinguish the two timeouts explicitly in schema and documentation: `silence_window_seconds` guards the test/build subprocess execution directly, whereas `WorkerSupervisor` manages LLM worker session stalls. Apply all default timeout values at load time in the configuration parser so domain models are fully populated without downstream null checks.
+

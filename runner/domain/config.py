@@ -48,6 +48,10 @@ class VerificationConfig:
     build_cmd: str = ""
     max_attempts: int = 3
     timeout_seconds: int = 300
+    silence_window_seconds: int = 60
+    per_test_timeout_seconds: int = 0
+    isolation_cmd: str = ""
+    bug_escalation_at: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.test_cmd, str) or not self.test_cmd.strip():
@@ -58,6 +62,26 @@ class VerificationConfig:
             raise ConfigError("Verification max_attempts must be a positive integer")
         if not isinstance(self.timeout_seconds, int) or self.timeout_seconds <= 0:
             raise ConfigError("Verification timeout_seconds must be a positive integer")
+        if (
+            isinstance(self.silence_window_seconds, bool)
+            or not isinstance(self.silence_window_seconds, int)
+            or self.silence_window_seconds <= 0
+        ):
+            raise ConfigError("Verification silence_window_seconds must be a positive integer (> 0)")
+        if (
+            isinstance(self.per_test_timeout_seconds, bool)
+            or not isinstance(self.per_test_timeout_seconds, int)
+            or self.per_test_timeout_seconds < 0
+        ):
+            raise ConfigError("Verification per_test_timeout_seconds must be a non-negative integer (>= 0)")
+        if not isinstance(self.isolation_cmd, str):
+            raise ConfigError("Verification isolation_cmd must be a string")
+        if (
+            isinstance(self.bug_escalation_at, bool)
+            or not isinstance(self.bug_escalation_at, int)
+            or self.bug_escalation_at < -1
+        ):
+            raise ConfigError("Verification bug_escalation_at must be an integer >= -1")
 
 
 @dataclass(frozen=True)
