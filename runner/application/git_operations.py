@@ -172,6 +172,10 @@ class GitOperations:
         # Sanitize bulleted changes
         formatted_changes: list[str] = []
         for change in changes:
+            raw_stripped = change.strip()
+            if raw_stripped.startswith("Manual verification required:"):
+                formatted_changes.append("\nManual verification required:")
+                continue
             c = re.sub(r"\bT\d{3,4}\b", "", change, flags=re.IGNORECASE)
             c = re.sub(r"\(\s*\)", "", c)
             c = c.strip().lstrip("-* ").rstrip(".")

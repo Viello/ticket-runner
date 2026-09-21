@@ -151,7 +151,9 @@ def build_prompt(
 ## Execution Skill & Discipline
 Before writing or modifying any code, use your file-reading tool (e.g. `read`) to first read and adhere to `{skill_path}`, and then read `AGENTS.md` to ground your work in project-wide architectural constraints. Apply the core implementation discipline:
 - Test-Driven Development (TDD) at pre-agreed seams.
-- Regular typechecks and test runs to maintain a green test suite.
+- Fast Feedback Loop: Run targeted single test files matching modified modules (e.g. `python -m pytest tests/unit/application/test_foo.py -x`). Do NOT run the full test suite repeatedly during development loops.
+- Windows Shell Environment: Subcommands run under Windows PowerShell. Never pipe test output to Unix-only utilities (`tail`, `grep`, `head`) as they do not exist on Windows.
+- Broad Suite Check: Run broader test suites only once implementation passes targeted tests, immediately before emitting the ready signal.
 
 ## Architectural Context (Spec Excerpt)
 Full specification reference: `{resolved_spec_path}`
@@ -186,6 +188,7 @@ Full specification reference: `{resolved_spec_path}`
    - `modified_files`: array of strings containing repository-relative paths modified during this ticket (e.g. `["runner/application/foo.py"]`)
    - `self_review_notes`: string summarizing findings, verification results, and standards compliance
    - `new_gotchas`: array of newly discovered runtime gotchas or lessons learned strings (empty array `[]` if none)
+   - `manual_verification`: array of objects `[{{"name": "...", "setup": "...", "steps": "...", "expected": "..."}}]` for Smoke Scenarios requiring human verification (empty array `[]` if all are automated)
    - `timestamp`: current ISO-8601 UTC timestamp string
    - `scope`: optional lowercase architectural layer token (e.g. "application", "domain", "adapters"; omit or null to use the default queue scope; never use a ticket number)
 5. **Question Protocol (Clarification / Blocked)**:

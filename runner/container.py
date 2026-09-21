@@ -264,6 +264,7 @@ def build_container(
         runtime_paths=resolved_runtime_paths,
         token_budget=resolved_config.tokens,
         status_publisher=resolved_status_publisher,
+        git_operations=resolved_git_ops,
     )
     if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
         resolved_processor.state_coordinator = resolved_state_coordinator

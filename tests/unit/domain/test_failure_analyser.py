@@ -376,3 +376,17 @@ class TestSecurityInterpolationAndSubprocess:
             _, kwargs = mock_run.call_args
             assert kwargs.get("shell") is False
 
+    def test_analyse_classifies_worker_stall_on_no_signal_after_nudge(self) -> None:
+        """NO_SIGNAL_AFTER_NUDGE is classified as WORKER_STALL with actionable guidance."""
+        config = _make_config(test_cmd="pytest")
+        diag = analyse(
+            output_lines=["NO_SIGNAL_AFTER_NUDGE", "Token budget: 75,837 / 150,000"],
+            exit_code=1,
+            termination_reason="NO_SIGNAL_AFTER_NUDGE",
+            config=config,
+        )
+        assert diag.label == "WORKER_STALL"
+        assert "Worker session stalled" in diag.suggested_action
+        assert diag.isolation_output is None
+
+

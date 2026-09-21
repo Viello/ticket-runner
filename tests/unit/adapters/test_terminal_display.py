@@ -356,3 +356,35 @@ async def test_queue_orchestrator_emits_to_ui_event_sink(tmp_path: Path) -> None
     assert "Authoring commit: feat: Add display" in msgs
     assert "Ticket T042 approved" in msgs
 
+
+def test_display_scrolling_and_navigation() -> None:
+    console = Console(record=True, width=80, height=25)
+    display = RichTerminalDisplay(console=console, max_entries=50)
+
+    for i in range(30):
+        src = "worker" if i % 2 == 0 else "runner"
+        display.emit(src, f"Log message {i}")
+
+    assert display.scroll_offset == 0
+
+    # Scroll up by 5
+    display.scroll_up(lines=5)
+    assert display.scroll_offset == 5
+
+    # Scroll down by 2
+    display.scroll_down(lines=2)
+    assert display.scroll_offset == 3
+
+    # Scroll to top
+    display.scroll_to_top()
+    assert display.scroll_offset == 29
+
+    # Scroll to bottom
+    display.scroll_to_bottom()
+    assert display.scroll_offset == 0
+
+    # Verify rendering when scrolled
+    display.scroll_up(lines=10)
+    panel = display._build_bottom_panel()
+    assert "SCROLLED UP +10" in panel.title
+

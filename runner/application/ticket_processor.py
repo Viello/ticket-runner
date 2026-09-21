@@ -31,6 +31,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor as TicketProcessorProtocol,
 )
+from runner.application.git_operations import GitOperations
 from runner.domain.config import VerificationConfig, WorkerConfig
 from runner.domain.exceptions import SignalFormatError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
@@ -67,6 +68,7 @@ class GatekeeperTicketProcessor:
         runtime_paths: RuntimePaths | None = None,
         token_budget: Any | None = None,
         status_publisher: StatusPublisher | None = None,
+        git_operations: GitOperations | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
@@ -75,6 +77,14 @@ class GatekeeperTicketProcessor:
         self._runtime_paths = runtime_paths
         self._token_budget = token_budget
         self._status_publisher = status_publisher
+        if git_operations is not None:
+            self._git_operations = git_operations
+        elif coordinator is not None and getattr(coordinator, "git_operations", None) is not None:
+            self._git_operations = coordinator.git_operations
+        elif coordinator is not None and getattr(coordinator, "_git_operations", None) is not None:
+            self._git_operations = coordinator._git_operations
+        else:
+            self._git_operations = None
         if self._notify_sink is None and coordinator is not None and getattr(coordinator, "_notify", None) is not None:
             self._notify_sink = coordinator._notify
 
@@ -277,6 +287,10 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["status_publisher"] = self._status_publisher
+            if "git_operations" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["git_operations"] = self._git_operations
         except (ValueError, TypeError):
             pass
 
@@ -293,7 +307,12 @@ class GatekeeperTicketProcessor:
             if result.is_passed:
                 ready_signal = result.ready_signal
                 if ready_signal is not None:
-                    changes = tuple(f"Update {p}" for p in ready_signal.modified_files)
+                    changes_list = [f"Update {p}" for p in ready_signal.modified_files]
+                    if ready_signal.manual_verification:
+                        changes_list.append("Manual verification required:")
+                        for s in ready_signal.manual_verification:
+                            changes_list.append(f"- {s.get('name', '')}")
+                    changes = tuple(changes_list)
                     new_gotchas = ready_signal.new_gotchas
                     scope = ready_signal.scope
                     if ready_signal.self_review_notes and self._printer is not None:

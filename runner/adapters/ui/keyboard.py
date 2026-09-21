@@ -30,11 +30,14 @@ def read_windows_key(msvcrt_module: Any = msvcrt) -> str | None:
 
         char_bytes = msvcrt_module.getch()
 
-        # Handle 2-byte special keys (e.g. arrows, F-keys)
+        # Handle 2-byte special keys (e.g. arrows, F-keys) - discard per Spec 06
         if char_bytes in (b"\x00", b"\xe0"):
             if msvcrt_module.kbhit():
                 msvcrt_module.getch()
             return None
+
+        if char_bytes == b"\x1b":
+            return "esc"
 
         decoded = char_bytes.decode("ascii", errors="ignore").lower()
         return decoded if decoded else None

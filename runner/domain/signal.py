@@ -203,10 +203,11 @@ def _validate_manual_verification(value: object, label: str) -> tuple[dict, ...]
                 raise SignalFormatError(
                     f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
                 )
-            # Sanitize: strip terminal escape sequences, carriage returns, and newlines
-            s = v.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
             # Strip ANSI escape sequences
-            s = re.sub(r"\x1b\[[0-9;]*m", "", s)
+            s = re.sub(r"\x1b\[[0-9;]*m", "", v)
+            if k == "name":
+                # Sanitize scenario name: strip carriage returns and newlines to prevent git header injection
+                s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
             sanitized[k] = s
         result.append(sanitized)
     return tuple(result)

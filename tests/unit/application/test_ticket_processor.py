@@ -1196,3 +1196,61 @@ def test_multi_cycle_resource_accumulation(tmp_path: Path) -> None:
     # code-review was NOT in notices because it was accessed in Cycle 1
     assert not any("code-review" in n for n in notices)
 
+
+def test_ticket_processor_outcome_includes_manual_verification(tmp_path: Path) -> None:
+    """When ready signal contains manual_verification, approved outcome.changes includes scenarios."""
+    ticket = _make_ticket(ticket_id="T069", security_required=False)
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signals = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = runtime_paths.ready_signal_path(ticket.id)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/application/gatekeeper.py"],
+                "self_review_notes": "Implemented feature",
+                "new_gotchas": [],
+                "timestamp": "2026-09-21T00:00:00+00:00",
+                "manual_verification": [
+                    {
+                        "name": "Verify terminal checklist",
+                        "setup": "Local terminal",
+                        "steps": "Check display",
+                        "expected": "Formatted correctly",
+                    }
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_mv",
+                resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            ),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+    assert "Update runner/application/gatekeeper.py" in outcome.changes
+    assert "Manual verification required:" in outcome.changes
+    assert "- Verify terminal checklist" in outcome.changes
+
+

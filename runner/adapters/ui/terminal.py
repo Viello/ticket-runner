@@ -21,9 +21,9 @@ WARNING_THRESHOLD: int = 120_000
 HANDOFF_THRESHOLD: int = 135_000
 
 HOTKEY_LEGENDS: Mapping[str, str] = {
-    "normal": "[p] pause  [m] toggle mode  [q] quit  [o] open TUI",
+    "normal": "[p] pause  [m] toggle mode  [q] quit  [o] open TUI  [j/k] scroll",
     "confirm_pending": "Open TUI? [y] confirm / [n] cancel",
-    "tui_queued": "[p] pause  [m] toggle mode  [q] quit  [o] pending…",
+    "tui_queued": "[p] pause  [m] toggle mode  [q] quit  [o] pending…  [j/k] scroll",
     "tui_open": "[r] Resume  (all other keys suspended)",
 }
 
@@ -88,6 +88,10 @@ def build_warning_panel() -> Panel:
     return Panel(Group(*lines), border_style="yellow")
 
 
+DEFAULT_TELEMETRY_CAPACITY: int = 500
+SCROLL_STEP: int = 5
+
+
 class RichTerminalDisplay(TerminalDisplay):
     """Terminal display adapter rendering split interactive dashboard using rich.live.Live."""
 
@@ -95,16 +99,44 @@ class RichTerminalDisplay(TerminalDisplay):
         self,
         console: Console | None = None,
         ring_buffer: RingBuffer | None = None,
+        max_entries: int = DEFAULT_TELEMETRY_CAPACITY,
     ) -> None:
         self._console = console or Console()
-        self._ring_buffer = ring_buffer or RingBuffer()
+        self._ring_buffer = ring_buffer or RingBuffer(max_entries=max_entries)
         self._current_state: RunnerState | None = None
         self._queue_remaining: int = 0
         self._legend_state: str = "normal"
         self._is_active: bool = False
         self._show_warning: bool = False
+        self._scroll_offset: int = 0
         self._layout = self._build_layout()
         self._live: Live | None = None
+
+    @property
+    def scroll_offset(self) -> int:
+        """Current scroll offset (0 = live stream at bottom, >0 = scrolled up into history)."""
+        return self._scroll_offset
+
+    def scroll_up(self, lines: int = SCROLL_STEP) -> None:
+        """Scroll viewport up into past logs."""
+        max_scroll = max(0, len(self._ring_buffer) - 1)
+        self._scroll_offset = min(max_scroll, self._scroll_offset + lines)
+        self._update_layout()
+
+    def scroll_down(self, lines: int = SCROLL_STEP) -> None:
+        """Scroll viewport down towards live logs."""
+        self._scroll_offset = max(0, self._scroll_offset - lines)
+        self._update_layout()
+
+    def scroll_to_top(self) -> None:
+        """Jump to oldest available log entries."""
+        self._scroll_offset = max(0, len(self._ring_buffer) - 1)
+        self._update_layout()
+
+    def scroll_to_bottom(self) -> None:
+        """Reset scroll to bottom (live streaming mode)."""
+        self._scroll_offset = 0
+        self._update_layout()
 
     @property
     def is_active(self) -> bool:
@@ -206,10 +238,44 @@ class RichTerminalDisplay(TerminalDisplay):
         return Panel(group, height=8)
 
     def _build_bottom_panel(self) -> Panel:
-        """Build the bottom panel displaying the rolling ring buffer."""
-        lines = self._ring_buffer.lines
-        text = Text("\n".join(lines)) if lines else Text("")
-        return Panel(text, title="Telemetry")
+        """Build the bottom panel displaying the rolling ring buffer with scroll support and source highlights."""
+        all_lines = list(self._ring_buffer.lines)
+        total = len(all_lines)
+
+        if total == 0:
+            return Panel(Text(""), title="Telemetry", border_style="blue")
+
+        viewport_height = 15
+        if self._console and hasattr(self._console, "size") and self._console.size and self._console.size.height > 12:
+            viewport_height = max(5, self._console.size.height - 12)
+
+        max_offset = max(0, total - 1)
+        offset = min(max_offset, self._scroll_offset)
+
+        if offset == 0:
+            visible_lines = all_lines[-viewport_height:]
+            title = "Telemetry"
+        else:
+            end_idx = total - offset
+            start_idx = max(0, end_idx - viewport_height)
+            visible_lines = all_lines[start_idx:end_idx]
+            title = f"Telemetry [SCROLLED UP +{offset} — [Esc]/[G] for live]"
+
+        formatted_text = Text()
+        for i, line in enumerate(visible_lines):
+            t = Text(line)
+            if "[worker]" in line:
+                t.highlight_regex(r"\[worker\]", "bold green")
+            elif "[runner]" in line:
+                t.highlight_regex(r"\[runner\]", "bold cyan")
+            elif "[gate  ]" in line:
+                t.highlight_regex(r"\[gate  \]", "bold yellow")
+            formatted_text.append_text(t)
+            if i < len(visible_lines) - 1:
+                formatted_text.append("\n")
+
+        border_color = "yellow" if offset > 0 else "blue"
+        return Panel(formatted_text, title=title, border_style=border_color)
 
     def _build_layout(self) -> Layout:
         """Construct the split Layout container."""

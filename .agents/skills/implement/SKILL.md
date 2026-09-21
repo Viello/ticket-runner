@@ -7,7 +7,7 @@ disable-model-invocation: true
 Implement the work described in the active ticket or spec:
 
 1. **Seams & TDD**: Agree seams before writing code. Drive implementation test-first via red-green cycles.
-2. **Verification**: Run typechecking and tests regularly; ensure the full test suite passes.
+2. **Verification & Speed**: Run typechecking and tests regularly. During development iterations, run targeted single test files matching your edits. Avoid piping to Unix-only commands (`tail`, `grep`) on Windows. Run broader test suites only once targeted tests pass before signalling readiness.
 3. **Review**: Run `/code-review` to verify standards and spec alignment. If flagged by ticket requirements or frontmatter (`Security: required`), also run `/security-review` before committing or signaling ready.
 4. **Ticket Transition & Gotchas**: When executing a ticket under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md`:
    - Append newly discovered runtime lessons and ticket-specified gotchas to `docs/tickets/gotchas.md` as a chronological log with problem and solution sub-bullets:

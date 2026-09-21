@@ -613,3 +613,38 @@ def test_recover_completed_ticket_resets_state_to_idle(tmp_path: Path) -> None:
     assert state["active_ticket_id"] is None
     assert any("already completed" in m for m in printed)
 
+
+def test_recover_bypasses_stalled_session_when_diagnostic_file_present(tmp_path: Path) -> None:
+    active_dict = _sample_active_state_dict(ticket_id="T042", opencode_session_id="ses_stalled123")
+    store = FakeStateStore(active_dict)
+    cmd_runner = FakeCommandRunner()
+    git_ops = GitOperations(runner=cmd_runner, cwd=tmp_path)
+    supervisor = FakeWorkerSupervisor([
+        SessionRunResult(
+            reason=RunTerminationReason.EXITED,
+            session_id="ses_fresh456",
+            exit_code=0,
+        )
+    ])
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path)
+    diag_file = runtime_paths.diagnostic_log_path("T042")
+    diag_file.parent.mkdir(parents=True, exist_ok=True)
+    diag_file.write_text("NO_SIGNAL_AFTER_NUDGE\nToken budget: 100k", encoding="utf-8")
+
+    coordinator = CrashRecoveryCoordinator(
+        state_store=store,
+        git_operations=git_ops,
+        worker_supervisor=supervisor,
+        runtime_paths=runtime_paths,
+    )
+
+    result = asyncio.run(coordinator.recover())
+
+    assert result.recovered
+    assert result.action == "resumed_checkpoint"
+    assert result.session_id == "ses_fresh456"
+    assert len(supervisor.run_calls) == 1
+    # Check that it did NOT call run with the stalled session ID
+    assert supervisor.run_calls[0]["session_id"] is None
+

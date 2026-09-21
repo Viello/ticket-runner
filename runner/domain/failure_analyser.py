@@ -18,12 +18,14 @@ LABEL_HANG: str = "HANG"
 LABEL_ENV: str = "ENV"
 LABEL_CASCADE: str = "CASCADE"
 LABEL_FLAKY: str = "FLAKY"
+LABEL_WORKER_STALL: str = "WORKER_STALL"
 
 FAILURE_LABELS: frozenset[str] = frozenset({
     LABEL_HANG,
     LABEL_ENV,
     LABEL_CASCADE,
     LABEL_FLAKY,
+    LABEL_WORKER_STALL,
 })
 
 SUGGESTED_ACTIONS: dict[str, str] = {
@@ -31,6 +33,7 @@ SUGGESTED_ACTIONS: dict[str, str] = {
     LABEL_ENV: "Check environment, dependencies, and imports before retrying.",
     LABEL_CASCADE: "Investigate root failing test in isolation to fix common failure class.",
     LABEL_FLAKY: "Inspect test failure trace or re-run test suite.",
+    LABEL_WORKER_STALL: "Worker session stalled or timed out without emitting ready signal. Reset session, check model availability, or inspect prompt.",
 }
 
 ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
@@ -336,8 +339,14 @@ def analyse(
                 first_test_line_idx = idx
                 break
 
+    # 0. WORKER_STALL: termination_reason is NO_SIGNAL_AFTER_NUDGE / WORKER_STALL or lines indicate no signal
+    if (
+        termination_reason is not None
+        and str(termination_reason).strip().upper() in {"NO_SIGNAL_AFTER_NUDGE", "WORKER_STALL"}
+    ) or any("no_signal_after_nudge" in line.lower() for line in lines):
+        label = LABEL_WORKER_STALL
     # 1. HANG: termination_reason is HANG / STALLED
-    if termination_reason is not None and str(termination_reason).strip().upper() in {
+    elif termination_reason is not None and str(termination_reason).strip().upper() in {
         "HANG",
         "STALLED",
     }:

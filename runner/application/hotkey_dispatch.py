@@ -46,7 +46,37 @@ class HotkeyDispatcher:
             "p": self.handle_pause,
             "m": self.handle_toggle_mode,
             "q": self.handle_quit,
+            "k": self.handle_scroll_up,
+            "up": self.handle_scroll_up,
+            "pageup": lambda: self.handle_scroll_up(lines=15),
+            "j": self.handle_scroll_down,
+            "down": self.handle_scroll_down,
+            "pagedown": lambda: self.handle_scroll_down(lines=15),
+            "g": self.handle_scroll_top,
+            "home": self.handle_scroll_top,
+            "end": self.handle_scroll_bottom,
+            "esc": self.handle_scroll_bottom,
         }
+
+    def handle_scroll_up(self, lines: int = 5) -> None:
+        """Scroll terminal display up into historical telemetry logs."""
+        if self._terminal_display is not None and hasattr(self._terminal_display, "scroll_up"):
+            self._terminal_display.scroll_up(lines)
+
+    def handle_scroll_down(self, lines: int = 5) -> None:
+        """Scroll terminal display down towards live telemetry logs."""
+        if self._terminal_display is not None and hasattr(self._terminal_display, "scroll_down"):
+            self._terminal_display.scroll_down(lines)
+
+    def handle_scroll_top(self) -> None:
+        """Scroll terminal display to oldest telemetry logs."""
+        if self._terminal_display is not None and hasattr(self._terminal_display, "scroll_to_top"):
+            self._terminal_display.scroll_to_top()
+
+    def handle_scroll_bottom(self) -> None:
+        """Reset terminal display scroll offset to live bottom."""
+        if self._terminal_display is not None and hasattr(self._terminal_display, "scroll_to_bottom"):
+            self._terminal_display.scroll_to_bottom()
 
     def register_handler(self, key: str, handler: Callable[[], Any]) -> None:
         """Register or override an action handler for a hotkey."""

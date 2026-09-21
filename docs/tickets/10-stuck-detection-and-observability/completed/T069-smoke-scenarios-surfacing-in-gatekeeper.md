@@ -1,5 +1,5 @@
 # T069 — Smoke Scenarios surfacing in Gatekeeper
-Status: pending
+Status: completed
 Spec: docs/specs/10-stuck-detection-and-observability.md
 Blocked by: T066
 Security: required

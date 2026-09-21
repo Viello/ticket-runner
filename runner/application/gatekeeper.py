@@ -43,6 +43,7 @@ from runner.ports.intervention import (
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import UiEventSink
+from runner.application.git_operations import GitOperations
 
 logger = logging.getLogger(__name__)
 
@@ -737,6 +738,7 @@ class VerificationLoop:
         runtime_paths: RuntimePaths | None = None,
         token_budget: int | TokenBudgetConfig | None = None,
         status_publisher: StatusPublisher | None = None,
+        git_operations: GitOperations | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -761,6 +763,7 @@ class VerificationLoop:
         self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
         self._runtime_paths = runtime_paths or RuntimePaths()
         self._status_publisher = status_publisher
+        self._git_operations = git_operations
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
         elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
@@ -974,58 +977,88 @@ class VerificationLoop:
                         last_step_summary="Verification passed",
                     )
 
-                    # --- Manual verification handling ---
+                    # --- Manual verification handling (T069) ---
                     if ready_signal.manual_verification_is_default:
                         # manual_verification was absent from the payload => backward-compatible, do not emit
                         pass
                     elif not ready_signal.manual_verification:
                         # manual_verification was present but empty => emit all covered notice
+                        all_covered_msg = (
+                            "All Smoke Scenarios covered by automated tests — no manual steps required."
+                        )
                         if self._notify is not None:
                             try:
-                                self._notify(
-                                    "All Smoke Scenarios covered by automated tests — no manual steps required."
-                                )
+                                self._notify(all_covered_msg)
                             except Exception:
-                                print(
-                                    "All Smoke Scenarios covered by automated tests — no manual steps required."
-                                )
+                                print(all_covered_msg)
+                        else:
+                            print(all_covered_msg)
                     else:
-                        # Emit scenario details to terminal
+                        # 1. Commit body injection if GitOperations is available
+                        if self._git_operations is not None:
+                            changes = [f"Update {p}" for p in ready_signal.modified_files] + [
+                                "Manual verification required:",
+                                *(f"- {s.get('name', '')}" for s in ready_signal.manual_verification),
+                            ]
+                            try:
+                                commit_res = self._git_operations.commit_ticket(
+                                    scope=ready_signal.scope or "adapters",
+                                    title=self._ticket.title,
+                                    changes=changes,
+                                )
+                                if inspect.iscoroutine(commit_res):
+                                    await commit_res
+                            except Exception as exc:
+                                logger.warning("GitOperations commit_ticket failed: %s", exc)
+                        else:
+                            logger.warning(
+                                "GitOperations not provided to VerificationLoop; skipping commit-body injection"
+                            )
+
+                        # 2. Emit full human-action checklist to terminal
                         scenario_lines: list[str] = []
                         for scenario in ready_signal.manual_verification:
                             name = scenario.get("name", "")
                             setup = scenario.get("setup", "")
                             steps = scenario.get("steps", "")
                             expected = scenario.get("expected", "")
-                            scenario_lines.append(f"name: {name}")
+                            scenario_lines.append(f"Scenario: {name}")
                             if setup:
-                                scenario_lines.append(f"setup: {setup}")
+                                scenario_lines.append(f"Setup: {setup}")
                             if steps:
-                                scenario_lines.append(f"steps: {steps}")
+                                scenario_lines.append(f"Steps: {steps}")
                             if expected:
-                                scenario_lines.append(f"expected: {expected}")
+                                scenario_lines.append(f"Expected: {expected}")
                         scenario_text = "\n".join(scenario_lines)
                         if self._notify is not None:
                             try:
                                 self._notify(scenario_text)
                             except Exception:
                                 print(scenario_text)
+                        else:
+                            print(scenario_text)
 
-                        # Discord notification (fire-and-forget, names-only summary)
-                        discord_msg = ", ".join(
-                            s.get("name", "") for s in ready_signal.manual_verification
-                        )
+                        # 3. Discord notification (fire-and-forget, names-only summary)
                         if self._discord_adapter is not None and hasattr(
                             self._discord_adapter, "send"
                         ):
+                            names = [
+                                s.get("name", "")
+                                for s in ready_signal.manual_verification
+                                if s.get("name")
+                            ]
+                            bullets = "\n".join(f"• {n}" for n in names)
+                            discord_msg = (
+                                f"✅ Gatekeeper passed — manual verification required:\n{bullets}"
+                            )
                             try:
                                 res = self._discord_adapter.send(discord_msg)
                                 if inspect.iscoroutine(res):
                                     await res
                             except Exception as exc:
-                                logger.warning(
-                                    "Discord send failed: %s", exc
-                                )
+                                logger.warning("Discord send failed: %s", exc)
+                        else:
+                            logger.warning("Discord adapter not provided to VerificationLoop")
 
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
