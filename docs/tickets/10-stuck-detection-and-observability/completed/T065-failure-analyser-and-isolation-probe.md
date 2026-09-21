@@ -1,5 +1,6 @@
 # T065 — Failure analyser and isolation probe
-Status: pending
+Status: completed
+Completed: 2026-09-21T04:41:22Z
 Spec: docs/specs/10-stuck-detection-and-observability.md
 Blocked by: T063, T064
 Security: required

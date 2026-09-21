@@ -535,4 +535,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem**: When killing a hanging process tree using `taskkill /T /F` or POSIX signals, processes that exit asynchronously between inspection and signal delivery raise non-zero exit codes (e.g. 128) or `ProcessLookupError` / `OSError` (WinError), crashing the verification runner.
 - **Solution**: Catch and swallow `(ProcessLookupError, OSError)` during fallback termination ladders and gracefully swallow non-zero exit codes from `taskkill`, ensuring already-exited processes never raise unhandled exceptions or leak resources.
 
+### Test Runner Heuristic Matching Substring Collisions
+- **Problem**: Detecting test runners using naive substring searches (e.g. `"go test" in cmd`) produces false-positive matches for `"cargo test"` because `"cargo test"` contains `"go test"` as a substring.
+- **Solution**: Match test runners using word boundaries (`re.search(r"\bgo\s+test\b", cmd)`) and check specific framework tokens before broader patterns to prevent false runner identification.
+
+### Safe Isolation Probe Command Interpolation Without Shell Invocation
+- **Problem**: Formatting test identifiers into shell command strings and spawning via `shell=True` creates command injection vulnerabilities if test names contain shell metacharacters (`;`, `&&`, `|`, `$()`).
+- **Solution**: Parse command templates into tokenized argument vectors with `shlex.split`, safely substitute test identifiers, and execute the isolation probe strictly with `shell=False`.
+
+### Failure Classification Priority Order
+- **Problem**: In a test suite where setup or import failure cascades into 5+ subsequent `FAILED` entries, evaluating cascade checks first misclassifies the failure as `CASCADE` instead of identifying the underlying environment error.
+- **Solution**: Evaluate classification in strict priority order (`HANG` -> `ENV` -> `CASCADE` -> `FLAKY`). An environment error occurring before test identifier lines takes absolute precedence over downstream cascaded test failures.
+
 
