@@ -64,7 +64,7 @@ Use as the working spec for diagnosis. On the squash path this draft is in-sessi
 
 ### Ticket Runner / local scratch template
 
-```
+<ticket-runner-template>
 # T<NNN> — Smoke regression: <Scenario Title>
 Status: pending
 Spec: docs/specs/<spec-slug>.md
@@ -91,7 +91,7 @@ Blocked by: None
 
 ### Gotchas
 - <Triage insights or quirks noted during failure capture>
-```
+</ticket-runner-template>
 
 ### GitHub / Linear template
 
