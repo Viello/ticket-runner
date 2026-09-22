@@ -1,54 +1,177 @@
-﻿---
+---
 name: smoke-fail
-description: "Create a regression ticket from a failed smoke scenario found during batch review."
+description: "Create a regression ticket from a failed smoke scenario across Ticket Runner, issue trackers, or local scratch files, then initiate diagnosis."
 disable-model-invocation: true
 ---
 
-# /smoke-fail
+# Smoke Fail Recovery
 
-> **Stub** — full automation is deferred. This skill guides an interactive session today.
-> When automation is ready, it will read `.agent/smoke_log_<spec-slug>.md` directly and
-> file a pre-populated regression ticket without human copy-paste.
+Triage failed smoke scenarios and generate reproducible regression tickets across any project or tracking system, ensuring human verification scenarios persist through fixes.
 
 ## When to use
 
-After reviewing `.agent/smoke_log_<spec-slug>.md` and finding a scenario that failed,
-run `/smoke-fail` to capture the failure and create a regression ticket.
+Run `/smoke-fail` whenever a manual check, batch smoke review, PR verification, or ad-hoc smoke test fails.
 
-## Steps
+---
 
-1. **Identify the failure**. Ask the human:
-   - Which ticket ID contained the failing scenario? (e.g. `T042`)
-   - What is the exact scenario name from the smoke log?
-   - What did you observe? (copy the actual output or behaviour)
-   - What did the scenario expect? (copy from the log)
+## Step 1: Detect destination tracker and workspace context
 
-2. **Diagnose first** (if not already done). Open the scenario steps from the smoke log
-   and walk through them together. If the failure looks like a code defect, invoke
-   `/diagnosing-bugs` before creating a ticket — a tight, red-capable feedback loop first.
+Inspect the workspace to determine the primary ticket destination, then confirm with the operator:
 
-3. **Draft the regression ticket**. Create a new ticket file under the same spec slug
-   as the originating ticket:
+1. **Ticket Runner directory queue**: detected when `docs/tickets/` exists or `AGENTS.md` defines Ticket Runner architecture.
+   - Target path: `docs/tickets/<spec-slug>/T<NNN>-smoke-regression-<scenario-slug>.md`
+   - Identifier: dynamically inspect `docs/tickets/` across all spec subdirectories (active and `completed/`) to determine the highest existing `T<NNN>` and increment by 1.
+2. **Issue tracker (GitHub, Linear)**: detected when `.github/` exists or git remote points to a hosted repository and tracking CLI (`gh`) is present.
+   - Command: `gh issue create` with labels `bug`, `regression`, `ready-for-agent`.
+3. **Local scratch files**: fallback or lightweight mode.
+   - Target path: `.scratch/<feature-slug>/issues/<NN>-smoke-regression-<scenario-slug>.md`
 
-   ```
-   docs/tickets/<spec-slug>/T<NNN>-<slug>.md
-   ```
+Prompt the operator to confirm the detected destination or select an alternative before drafting.
 
-   Pre-populate with:
-   - `Title`: `Smoke regression: <scenario name>`
-   - `Status: todo`
-   - A `### Context` section referencing the originating ticket
-   - A `### Observed` section with what the human saw
-   - A `### Expected` section from the smoke log entry
-   - A `### Smoke Scenarios` section carrying the same scenario (so the fix is also smoke-tested)
+**Completion criterion**: Destination tracker confirmed and target directory or tracker access validated.
 
-4. **Confirm with the human** before saving. Read the draft back and ask if it captures the
-   failure accurately.
+---
 
-## Future automation target
+## Step 2: Ingest the failed scenario details
 
-When implemented, `/smoke-fail` will:
-- Parse `.agent/smoke_log_<spec-slug>.md` to locate the entry by ticket ID + scenario name.
-- Extract Setup / Steps / Expected automatically.
-- Assign the next available ticket number and write the file without human copy-paste.
-- Emit a summary of the created ticket.
+Extract failure information using smart intake with manual fallback:
+
+1. **Inspect durable smoke logs**:
+   - Check `.agent/smoke_log_<spec-slug>.md` if present.
+   - Match the scenario by originating ticket ID or scenario title.
+   - Extract `Setup`, `Steps`, and `Expected` verbatim from the log entry.
+   - Ask the operator for the `Observed` behavior: terminal error, stack trace, unexpected output, or UI divergence.
+2. **Interactive intake (when no smoke log exists)**:
+   - Ask the operator for:
+     - **Originating context**: ticket ID, PR number, commit SHA, or feature area.
+     - **Scenario title**: concise descriptive name.
+     - **Setup**: synthetic configuration, environment variables, or fixtures required.
+     - **Steps**: sequence of human actions executed.
+     - **Observed**: actual behavior observed.
+     - **Expected**: desired behavior expected from the requirement.
+
+**Completion criterion**: Originating context, scenario name, setup, steps, observed outcome, and expected outcome are fully captured.
+
+---
+
+## Step 3: Draft the regression ticket
+
+Draft the ticket using the template matching the confirmed destination tracker:
+
+### Destination: Ticket Runner Queue
+
+Adheres strictly to the domain entity parser in `runner.domain.ticket.Ticket.parse`:
+
+<ticket-runner-template>
+# T<NNN> — Smoke regression: <Scenario Title>
+Status: pending
+Spec: docs/specs/<spec-slug>.md
+Blocked by: None
+
+### Requirements
+- Fix regression identified during smoke verification of <originating_id>:
+  - Observed: <observed_output>
+  - Expected: <expected_output>
+- Jump-start:
+  - Files to touch: <files_to_touch>
+  - Seams to work at: <seams_or_modules>
+  - Verification: <verification_command>
+
+### Acceptance Criteria
+- Smoke scenario "<Scenario Title>" passes verification.
+- Automated regression test added covering the failure mode.
+
+### Smoke Scenarios
+**Scenario: <Scenario Title>**
+- Setup: <setup_steps>
+- Steps: <test_steps>
+- Expected: <expected_output>
+
+### Gotchas
+- <Triage insights or quirks noted during failure capture>
+</ticket-runner-template>
+
+### Destination: Local Scratch File
+
+<local-ticket-template>
+# <NN>: Smoke regression: <Scenario Title>
+
+**Originating Context:** <originating_id_or_feature>
+
+**Observed vs Expected:**
+- Observed: <observed_output>
+- Expected: <expected_output>
+
+**Jump-start:**
+- Files to touch: <files_to_touch>
+- Verification command: <verification_command>
+
+**Status:** ready-for-agent
+
+### Acceptance criteria
+- [ ] Reproduce failure with automated test
+- [ ] Fix root defect
+- [ ] Confirm smoke scenario passes
+
+### Smoke Scenarios
+**Scenario: <Scenario Title>**
+- Setup: <setup_steps>
+- Steps: <test_steps>
+- Expected: <expected_output>
+</local-ticket-template>
+
+### Destination: Issue Tracker (GitHub / Linear)
+
+<issue-template>
+## Originating Context
+Regression observed during smoke testing of <originating_id_or_feature>.
+
+## Observed Behavior
+<observed_output>
+
+## Expected Behavior
+<expected_output>
+
+## Reproduction Steps
+1. Setup: <setup_steps>
+2. Steps: <test_steps>
+
+## Smoke Scenarios
+**Scenario: <Scenario Title>**
+- Setup: <setup_steps>
+- Steps: <test_steps>
+- Expected: <expected_output>
+
+## Jump-start
+- Files to inspect: <files_to_touch>
+- Verification: <verification_command>
+</issue-template>
+
+**Completion criterion**: Regression ticket text completely filled out with concrete paths, observed/expected behaviors, and embedded smoke scenario.
+
+---
+
+## Step 4: Confirm and persist
+
+1. Present the draft ticket to the operator for review.
+2. Ask: *"Does this accurately capture the failure and reproduction steps?"*
+3. Save or publish upon confirmation:
+   - For file-based destinations (Ticket Runner or local scratch): write the file to the target path and confirm file creation.
+   - For issue trackers: run CLI command (e.g. `gh issue create --title "..." --body "..." --label bug,regression`) and report the created issue URL.
+
+**Completion criterion**: Ticket persisted to disk or published to tracker, and file path or issue URL reported to operator.
+
+---
+
+## Step 5: Transition to diagnosis
+
+Immediately following ticket persistence, prompt the operator to begin diagnosis:
+
+> *"Regression ticket persisted: `<path_or_url>`. Would you like to begin root-cause diagnosis now using `/diagnosing-bugs` to build an isolated red feedback loop?"*
+
+When accepted:
+1. Load `/diagnosing-bugs`.
+2. Anchor the diagnosis loop on the reproduction steps and observed failure recorded in the regression ticket.
+3. Build the tight automated test or harness before modifying implementation code.
+
+**Completion criterion**: Operator transitioned to diagnosis session or session closed upon operator request.
