@@ -8,8 +8,12 @@ from typing import Any
 import discord
 from discord import app_commands
 
+from runner.adapters.discord.commands import register_commands
+from runner.adapters.discord.thread_listener import process_thread_reply
 from runner.domain.config import DiscordConfig, RunnerConfig
 from runner.domain.exceptions import DiscordGatewayError
+from runner.ports.signal_repository import SignalRepository
+from runner.ports.state_store import StateStore
 
 
 class DiscordClient:
@@ -20,6 +24,8 @@ class DiscordClient:
         config: RunnerConfig | DiscordConfig | None = None,
         client: discord.Client | None = None,
         tree: app_commands.CommandTree | None = None,
+        state_store: StateStore | None = None,
+        signal_repository: SignalRepository | None = None,
     ) -> None:
         if config is not None:
             self.config: DiscordConfig = (
@@ -36,10 +42,31 @@ class DiscordClient:
             self.client = discord.Client(intents=intents)
 
         self.tree = tree if tree is not None else app_commands.CommandTree(self.client)
+        self.state_store = state_store
+        self.signal_repository = signal_repository
         self.ready_event = asyncio.Event()
 
-        # Wire on_ready lifecycle handler
+        # Wire lifecycle and message event handlers
         self.client.event(self.on_ready)
+        self.client.event(self.on_message)
+
+        # Register slash commands on the command tree
+        register_commands(self.tree, self.state_store)
+
+    async def on_message(self, message: discord.Message) -> None:
+        """Handle incoming Discord messages by delegating to thread reply listener."""
+        sig_repo = self.signal_repository
+        if sig_repo is None:
+            try:
+                from runner.domain.runtime_paths import RuntimePaths
+                from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+                sig_repo = FilesystemSignalRepository(RuntimePaths.default())
+            except Exception:
+                sig_repo = None
+
+        if sig_repo is not None:
+            await process_thread_reply(message, sig_repo, self.config)
 
     async def on_ready(self) -> None:
         """Handle Discord gateway on_ready event.
@@ -155,10 +182,18 @@ def init_client(
     config: RunnerConfig | DiscordConfig,
     client: discord.Client | None = None,
     tree: app_commands.CommandTree | None = None,
+    state_store: StateStore | None = None,
+    signal_repository: SignalRepository | None = None,
 ) -> DiscordClient:
     """Initialize and set the global default DiscordClient instance."""
     global _default_client
-    _default_client = DiscordClient(config=config, client=client, tree=tree)
+    _default_client = DiscordClient(
+        config=config,
+        client=client,
+        tree=tree,
+        state_store=state_store,
+        signal_repository=signal_repository,
+    )
     return _default_client
 
 

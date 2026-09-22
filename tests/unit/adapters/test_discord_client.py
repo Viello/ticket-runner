@@ -284,3 +284,31 @@ async def test_module_level_interface(
 
     await client_module.close()
     mock_client.close.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_on_message_delegates_to_process_thread_reply(
+    mock_client: MagicMock,
+    sample_discord_config: DiscordConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DiscordClient.on_message calls process_thread_reply with message, repo, and config."""
+    mock_process = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "runner.adapters.discord.client.process_thread_reply", mock_process
+    )
+
+    mock_repo = MagicMock()
+    dc = DiscordClient(
+        sample_discord_config,
+        client=mock_client,
+        signal_repository=mock_repo,
+    )
+
+    fake_message = MagicMock(spec=discord.Message)
+    await dc.on_message(fake_message)
+
+    mock_process.assert_awaited_once_with(
+        fake_message, mock_repo, sample_discord_config
+    )
+
