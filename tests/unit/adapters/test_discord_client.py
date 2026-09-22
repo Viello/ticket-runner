@@ -43,6 +43,7 @@ def mock_tree() -> MagicMock:
     """Fixture providing a mock app_commands.CommandTree."""
     mock = MagicMock()
     mock.sync = AsyncMock()
+    mock.copy_global_to = MagicMock()
     return mock
 
 
@@ -55,6 +56,7 @@ def test_client_init_defaults(sample_discord_config: DiscordConfig) -> None:
     assert dc.tree is not None
     assert isinstance(dc.ready_event, asyncio.Event)
     assert not dc.ready_event.is_set()
+    assert dc.ready_error is None
 
 
 def test_client_init_with_runner_config(
@@ -91,6 +93,7 @@ async def test_on_ready_explicit_guild_id(
     await dc.on_ready()
 
     mock_client.fetch_channel.assert_awaited_once_with(10001)
+    mock_tree.copy_global_to.assert_called_once_with(guild=discord.Object(id=20002))
     mock_tree.sync.assert_awaited_once_with(guild=discord.Object(id=20002))
     assert dc.ready_event.is_set()
 
@@ -111,6 +114,7 @@ async def test_on_ready_fallback_to_channel_guild_id(
     await dc.on_ready()
 
     mock_client.fetch_channel.assert_awaited_once_with(10001)
+    mock_tree.copy_global_to.assert_called_once_with(guild=discord.Object(id=30003))
     mock_tree.sync.assert_awaited_once_with(guild=discord.Object(id=30003))
     assert dc.ready_event.is_set()
 
@@ -159,6 +163,22 @@ async def test_on_ready_tree_sync_error_wrapped(
     mock_tree.sync.side_effect = discord.HTTPException(
         MagicMock(), "Sync rate limited"
     )
+
+    dc = DiscordClient(cfg, client=mock_client, tree=mock_tree)
+
+    with pytest.raises(DiscordGatewayError, match="Failed to sync command tree"):
+        await dc.on_ready()
+
+    assert not dc.ready_event.is_set()
+
+
+@pytest.mark.anyio
+async def test_on_ready_copy_global_to_error_wrapped(
+    mock_client: MagicMock, mock_tree: MagicMock
+) -> None:
+    """Exceptions during tree.copy_global_to in on_ready are wrapped in DiscordGatewayError."""
+    cfg = DiscordConfig(channel_id="10001", guild_id="20002")
+    mock_tree.copy_global_to.side_effect = RuntimeError("Copy failed")
 
     dc = DiscordClient(cfg, client=mock_client, tree=mock_tree)
 
@@ -228,17 +248,38 @@ async def test_start_security_token_never_stored_on_instance(
 
 
 @pytest.mark.anyio
+async def test_on_error_sets_ready_error_and_event(
+    mock_client: MagicMock, sample_discord_config: DiscordConfig
+) -> None:
+    """DiscordClient.on_error records active exception as ready_error and unblocks ready_event."""
+    dc = DiscordClient(sample_discord_config, client=mock_client)
+    assert not dc.ready_event.is_set()
+    assert dc.ready_error is None
+
+    test_exc = ValueError("Fatal event dispatch crash")
+    try:
+        raise test_exc
+    except ValueError:
+        await dc.on_error("on_ready")
+
+    assert dc.ready_error is test_exc
+    assert dc.ready_event.is_set()
+
+
+@pytest.mark.anyio
 async def test_close_normal(
     mock_client: MagicMock, sample_discord_config: DiscordConfig
 ) -> None:
-    """Calling close() awaits client.close() and clears ready_event."""
+    """Calling close() awaits client.close(), clears ready_event, and resets ready_error."""
     dc = DiscordClient(sample_discord_config, client=mock_client)
     dc.ready_event.set()
+    dc.ready_error = RuntimeError("old error")
 
     await dc.close()
 
     mock_client.close.assert_awaited_once()
     assert not dc.ready_event.is_set()
+    assert dc.ready_error is None
 
 
 @pytest.mark.anyio

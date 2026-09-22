@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from typing import Any
+
 import discord
 from discord import app_commands
 
@@ -45,13 +47,24 @@ class DiscordClient:
         self.state_store = state_store
         self.signal_repository = signal_repository
         self.ready_event = asyncio.Event()
+        self.ready_error: Exception | None = None
 
-        # Wire lifecycle and message event handlers
+        # Wire lifecycle, message, and error event handlers
         self.client.event(self.on_ready)
         self.client.event(self.on_message)
+        self.client.event(self.on_error)
 
         # Register slash commands on the command tree
         register_commands(self.tree, self.state_store)
+
+    async def on_error(self, event_method: str, *args: Any, **kwargs: Any) -> None:
+        """Handle errors in discord.py event dispatchers."""
+        exc_info = sys.exc_info()
+        exc = exc_info[1]
+        if isinstance(exc, Exception):
+            if not self.ready_event.is_set():
+                self.ready_error = exc
+                self.ready_event.set()
 
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming Discord messages by delegating to thread reply listener."""
@@ -76,6 +89,7 @@ class DiscordClient:
         3. Calls tree.sync(guild=discord.Object(id=guild_id)).
         4. Sets ready_event.
         """
+        # Step 1: fetch channel (if configured)
         channel: Any | None = None
         if self.config.channel_id:
             try:
@@ -124,6 +138,8 @@ class DiscordClient:
         # Step 3: sync command tree to guild
         try:
             guild_obj = discord.Object(id=guild_id)
+            if hasattr(self.tree, "copy_global_to"):
+                self.tree.copy_global_to(guild=guild_obj)
             await self.tree.sync(guild=guild_obj)
         except discord.DiscordException as exc:
             raise DiscordGatewayError(
@@ -136,6 +152,7 @@ class DiscordClient:
 
         # Step 4: signal readiness
         self.ready_event.set()
+
 
     async def start(self, token: str | None = None) -> None:
         """Start the Discord client connection.
@@ -165,6 +182,8 @@ class DiscordClient:
             pass
         finally:
             self.ready_event.clear()
+            self.ready_error = None
+
 
 
 _default_client: DiscordClient | None = None

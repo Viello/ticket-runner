@@ -241,6 +241,74 @@ async def test_run_bot_smoke_auth_failure(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.anyio
+async def test_run_bot_smoke_ready_error_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_bot --smoke reports client.ready_error to stderr and exits 1 without timing out."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config()
+
+    mock_discord_client = MagicMock(spec=DiscordClient)
+    mock_discord_client.ready_event = asyncio.Event()
+    mock_discord_client.ready_error = DiscordGatewayError("Failed to sync command tree to guild 123: 403 Forbidden")
+    mock_discord_client.ready_event.set()
+    mock_discord_client.start = AsyncMock()
+    mock_discord_client.close = AsyncMock()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=mock_discord_client,
+    )
+
+    stderr = StringIO()
+    exit_code = await run_bot(
+        smoke=True,
+        container_instance=container,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    err_output = stderr.getvalue()
+    assert "Discord connection error" in err_output
+    assert "Failed to sync command tree" in err_output
+    mock_discord_client.close.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_run_bot_run_ready_error_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_bot --run reports client.ready_error to stderr and exits 1."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config()
+
+    mock_discord_client = MagicMock(spec=DiscordClient)
+    mock_discord_client.ready_event = asyncio.Event()
+    mock_discord_client.ready_error = DiscordGatewayError("Failed to sync command tree to guild 123: 403 Forbidden")
+    mock_discord_client.ready_event.set()
+    mock_discord_client.start = AsyncMock()
+    mock_discord_client.close = AsyncMock()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=mock_discord_client,
+    )
+
+    stderr = StringIO()
+    exit_code = await run_bot(
+        run=True,
+        container_instance=container,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    err_output = stderr.getvalue()
+    assert "Discord connection error" in err_output
+    assert "Failed to sync command tree" in err_output
+    mock_discord_client.close.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_run_bot_run_sigint_clean_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_bot --run exits 130 cleanly on SIGINT / stop_event."""
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")

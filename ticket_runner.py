@@ -492,7 +492,7 @@ async def run_bot(
             done, pending = await asyncio.wait(
                 [start_task, ready_task],
                 return_when=asyncio.FIRST_COMPLETED,
-                timeout=15.0,
+                timeout=30.0,
             )
             if ready_task not in done:
                 if start_task in done:
@@ -500,6 +500,13 @@ async def run_bot(
                     err_stream.write(f"Authentication failed: {exc}\n")
                 else:
                     err_stream.write("Authentication failed: Connection timed out connecting to Discord.\n")
+                for p in pending:
+                    p.cancel()
+                await client.close()
+                return 1
+
+            if getattr(client, "ready_error", None) is not None:
+                err_stream.write(f"Discord connection error: {client.ready_error}\n")
                 for p in pending:
                     p.cancel()
                 await client.close()
@@ -586,9 +593,10 @@ async def run_bot(
 
         start_task = asyncio.create_task(client.start())
         try:
+            ready_task = asyncio.create_task(client.ready_event.wait())
             wait_task = asyncio.create_task(effective_stop_event.wait())
             done, pending = await asyncio.wait(
-                [start_task, wait_task],
+                [start_task, ready_task, wait_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if effective_stop_event.is_set():
@@ -600,6 +608,24 @@ async def run_bot(
                 if exc is not None:
                     err_stream.write(f"Bot error: {exc}\n")
                     return 1
+            if getattr(client, "ready_error", None) is not None:
+                err_stream.write(f"Discord connection error: {client.ready_error}\n")
+                return 1
+            if ready_task in done and not effective_stop_event.is_set():
+                print("[Bot] Connected to Discord and slash commands synced. Ready.")
+                done2, pending2 = await asyncio.wait(
+                    [start_task, wait_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if effective_stop_event.is_set():
+                    return 130
+                if start_task in done2:
+                    exc = start_task.exception()
+                    if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                        return 130
+                    if exc is not None:
+                        err_stream.write(f"Bot error: {exc}\n")
+                        return 1
             return 0
         except KeyboardInterrupt:
             return 130
@@ -618,6 +644,7 @@ async def run_bot(
                     pass
 
     return 0
+
 
 
 
