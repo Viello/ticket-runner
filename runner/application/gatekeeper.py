@@ -19,7 +19,6 @@ import time
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
-from runner.adapters.discord import DiscordAdapter
 from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
@@ -734,7 +733,6 @@ class VerificationLoop:
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
         failure_analyser: Callable[..., FailureDiagnostic] | None = None,
-        discord_adapter: Any | None = None,
         runtime_paths: RuntimePaths | None = None,
         token_budget: int | TokenBudgetConfig | None = None,
         status_publisher: StatusPublisher | None = None,
@@ -760,7 +758,6 @@ class VerificationLoop:
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
         self._failure_analyser = failure_analyser or analyse
-        self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
         self._runtime_paths = runtime_paths or RuntimePaths()
         self._status_publisher = status_publisher
         self._git_operations = git_operations
@@ -1108,27 +1105,6 @@ class VerificationLoop:
                         # 3. Append to per-spec-slug smoke log (durable record)
                         self._append_smoke_log(ready_signal, self._ticket)
 
-                        # 4. Discord notification (fire-and-forget, names-only summary with tags)
-                        if self._discord_adapter is not None and hasattr(
-                            self._discord_adapter, "send"
-                        ):
-                            bullets = "\n".join(
-                                f"• {_scenario_label(s)}"
-                                for s in ready_signal.manual_verification
-                                if s.get("name")
-                            )
-                            discord_msg = (
-                                f"✅ Gatekeeper passed — manual verification required:\n{bullets}"
-                            )
-                            try:
-                                res = self._discord_adapter.send(discord_msg)
-                                if inspect.iscoroutine(res):
-                                    await res
-                            except Exception as exc:
-                                logger.warning("Discord send failed: %s", exc)
-                        else:
-                            logger.warning("Discord adapter not provided to VerificationLoop")
-
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
                         report=report,
@@ -1301,20 +1277,6 @@ class VerificationLoop:
             attempt=current_attempt,
             last_step_summary=f"Escalation emitted: {diagnostic.label}",
         )
-
-        # Discord notification (fire-and-forget, never raises)
-        if self._discord_adapter is not None and hasattr(self._discord_adapter, "send"):
-            try:
-                discord_msg = (
-                    report_text
-                    if len(report_text) <= 2000
-                    else report_text[:1990] + "\n..."
-                )
-                res = self._discord_adapter.send(discord_msg)
-                if inspect.iscoroutine(res):
-                    await res
-            except Exception as exc:
-                logger.warning("Discord send failed: %s", exc)
 
         # Terminal prompt via InterventionGateway
         if self._state_coordinator is not None:

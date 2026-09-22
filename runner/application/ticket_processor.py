@@ -64,7 +64,6 @@ class GatekeeperTicketProcessor:
         printer: Callable[[str], None] | None = _DEFAULT_PRINTER,
         notify: Callable[[str], None] | None = None,
         state_coordinator: StateCoordinator | None = None,
-        discord_adapter: Any | None = None,
         runtime_paths: RuntimePaths | None = None,
         token_budget: Any | None = None,
         status_publisher: StatusPublisher | None = None,
@@ -73,7 +72,6 @@ class GatekeeperTicketProcessor:
         self._coordinator = coordinator
         self._notify_sink = notify
         self._state_coordinator = state_coordinator
-        self._discord_adapter = discord_adapter
         self._runtime_paths = runtime_paths
         self._token_budget = token_budget
         self._status_publisher = status_publisher
@@ -271,10 +269,6 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["state_coordinator"] = self._state_coordinator
-            if "discord_adapter" in sig.parameters or any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            ):
-                loop_kwargs["discord_adapter"] = self._discord_adapter
             if "runtime_paths" in sig.parameters or any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
