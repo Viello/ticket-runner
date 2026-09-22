@@ -1,5 +1,6 @@
 # T078 — Smoke log path domain helper and Gatekeeper verification tests
-Status: pending
+Status: completed
+Completed: 2026-09-22T06:49:00Z
 Spec: docs/specs/07-smoke-verification-protocol.md
 Blocked by: None
 Security: required

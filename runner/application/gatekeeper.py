@@ -904,8 +904,7 @@ class VerificationLoop:
 
         paths = runtime_paths or self._runtime_paths
         spec_slug = ready_signal.scope if ready_signal.scope else ticket.id
-        safe_slug = re.sub(r"[^\w\-]", "_", spec_slug)
-        log_path = paths.root_dir / f"smoke_log_{safe_slug}.md"
+        log_path = paths.smoke_log_path(spec_slug)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         lines: list[str] = []

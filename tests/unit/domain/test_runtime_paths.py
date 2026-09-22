@@ -210,3 +210,33 @@ def test_safe_session_paths() -> None:
     assert paths.safe_session_paths("../escape", "ses_valid123") is None
     assert paths.safe_session_paths("T019/nested", "ses_valid123") is None
 
+
+def test_smoke_log_path_standard_and_sanitization() -> None:
+    paths = RuntimePaths()
+    assert paths.smoke_log_path("07-smoke-verification") == Path(".agent/smoke_log_07-smoke-verification.md")
+
+    custom = RuntimePaths(root_dir=Path("custom/agent"))
+    assert custom.smoke_log_path("07-smoke-verification") == Path("custom/agent/smoke_log_07-smoke-verification.md")
+
+    # Character sanitization: non-alphanumeric, non-hyphen replaced with underscores
+    assert paths.smoke_log_path("spec name with spaces/and:colons\\and.dots") == Path(
+        ".agent/smoke_log_spec_name_with_spaces_and_colons_and_dots.md"
+    )
+
+    empty_paths = RuntimePaths(root_dir=Path(""))
+    assert empty_paths.smoke_log_path("07-smoke-verification") == Path("smoke_log_07-smoke-verification.md")
+
+
+def test_smoke_log_path_containment_security(tmp_path: Path) -> None:
+    paths = RuntimePaths()
+    traversal_path = paths.smoke_log_path("../../evil")
+    assert traversal_path == Path(".agent/smoke_log_______evil.md")
+    assert traversal_path.resolve().is_relative_to(paths.root_dir.resolve())
+
+    # With absolute temporary root_dir
+    abs_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    abs_traversal = abs_paths.smoke_log_path("../../evil")
+    assert abs_traversal == (tmp_path / ".agent" / "smoke_log_______evil.md")
+    assert abs_traversal.resolve().is_relative_to(abs_paths.root_dir.resolve())
+
+
