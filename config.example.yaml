@@ -73,6 +73,10 @@ discord:
   token_env: "DISCORD_BOT_TOKEN"
   # Discord channel ID where ticket threads will be created
   channel_id: ""
+  # Optional Discord guild ID for slash command sync (auto-detected if empty)
+  guild_id: ""
+  # Optional Discord user ID authorized to answer prompts in threads
+  notify_user_id: ""
 
 lifecycle:
   # Behavior when all pending tickets are complete:

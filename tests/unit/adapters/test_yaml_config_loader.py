@@ -408,6 +408,74 @@ def test_load_discord_numeric_channel_id_as_int() -> None:
     assert config.discord.channel_id == "123456789012345678"
 
 
+def test_load_discord_snowflakes_valid() -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["guild_id"] = "123456789012345678"
+    data["discord"]["notify_user_id"] = "987654321098765432"
+
+    config = loader.load_from_dict(data)
+    assert config.discord.guild_id == "123456789012345678"
+    assert config.discord.notify_user_id == "987654321098765432"
+
+
+def test_load_discord_snowflakes_numeric_as_int() -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["guild_id"] = 123456789012345678
+    data["discord"]["notify_user_id"] = 987654321098765432
+
+    config = loader.load_from_dict(data)
+    assert config.discord.guild_id == "123456789012345678"
+    assert config.discord.notify_user_id == "987654321098765432"
+
+
+def test_load_discord_invalid_guild_id() -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["guild_id"] = "not-a-snowflake"
+
+    with pytest.raises(ConfigError, match="guild_id"):
+        loader.load_from_dict(data)
+
+
+def test_load_discord_invalid_notify_user_id() -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["notify_user_id"] = "bad!"
+
+    with pytest.raises(ConfigError, match="notify_user_id"):
+        loader.load_from_dict(data)
+
+
+def test_discord_snowflakes_round_trip() -> None:
+    loader = YamlConfigLoader()
+    yaml_text = VALID_CONFIG_YAML + """
+discord:
+  enabled: true
+  token_env: "DISCORD_BOT_TOKEN"
+  channel_id: "987654321"
+  guild_id: "123456789012345678"
+  notify_user_id: "987654321098765432"
+"""
+    # Note: yaml safe_load with duplicate key 'discord' will take the last one or load_from_dict
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["discord"]["guild_id"] = "123456789012345678"
+    data["discord"]["notify_user_id"] = "987654321098765432"
+    config1 = loader.load_from_dict(data)
+    dumped = loader.dump(config1)
+    config2 = loader.load_from_string(dumped)
+
+    assert config2.discord.guild_id == "123456789012345678"
+    assert config2.discord.notify_user_id == "987654321098765432"
+    assert config1 == config2
+
+
 def test_load_config_without_model_section_defaults() -> None:
     loader = YamlConfigLoader()
     config = loader.load_from_string(VALID_CONFIG_YAML)

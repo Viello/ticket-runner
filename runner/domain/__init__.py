@@ -28,6 +28,7 @@ from runner.domain.exceptions import (
     TicketFormatError,
     TicketRunnerError,
     UserAbortError,
+    DiscordGatewayError,
 )
 from runner.domain.failure_analyser import (
     FAILURE_LABELS,
@@ -76,6 +77,7 @@ __all__ = [
     "CommandNotFoundError",
     "ConfigError",
     "DiscordConfig",
+    "DiscordGatewayError",
     "DoctorError",
     "FAILURE_LABELS",
     "FailureDiagnostic",

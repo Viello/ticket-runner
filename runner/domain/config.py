@@ -128,6 +128,8 @@ class DiscordConfig:
     enabled: bool = True
     token_env: str = "DISCORD_BOT_TOKEN"
     channel_id: str = ""
+    guild_id: str = ""
+    notify_user_id: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -140,6 +142,18 @@ class DiscordConfig:
             )
         if not isinstance(self.channel_id, str):
             raise ConfigError("Discord channel_id must be a string")
+        if not isinstance(self.guild_id, str):
+            raise ConfigError("Discord guild_id must be a string")
+        if self.guild_id and not self.guild_id.isdigit():
+            raise ConfigError(
+                f"Discord guild_id must be a numeric snowflake ID (all digits), got: '{self.guild_id}'"
+            )
+        if not isinstance(self.notify_user_id, str):
+            raise ConfigError("Discord notify_user_id must be a string")
+        if self.notify_user_id and not self.notify_user_id.isdigit():
+            raise ConfigError(
+                f"Discord notify_user_id must be a numeric snowflake ID (all digits), got: '{self.notify_user_id}'"
+            )
 
 
 @dataclass(frozen=True)

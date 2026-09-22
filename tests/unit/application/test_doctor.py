@@ -341,6 +341,61 @@ async def test_check_config_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_check_config_with_discord_snowflakes_success(tmp_path: Path) -> None:
+    """Verify check_config passes when discord snowflake fields are specified."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    config_file = tmp_path / "config.yaml"
+    valid_yaml = (
+        "project:\n  name: test\n  branch: agent/ticket-runner\n  base_branch: main\n"
+        "worker:\n  execution_skill: .agents/skills/implement/SKILL.md\n"
+        "verification:\n  test_cmd: pytest\n"
+        "tokens:\n  warn: 120000\n  handoff: 135000\n  ceiling: 150000\n"
+        "presence:\n  default_mode: nearby\n"
+        "discord:\n  token_env: DISCORD_BOT_TOKEN\n  guild_id: '123456789012345678'\n  notify_user_id: '987654321098765432'\n"
+        "lifecycle:\n  queue_completion: standby\n"
+        "git:\n  commit_prefix: feat\n"
+    )
+    config_file.write_text(valid_yaml, encoding="utf-8")
+
+    doctor = Doctor(config_loader=YamlConfigLoader(), config_path=config_file)
+    result = await doctor.check_config()
+
+    assert result.passed is True
+    assert result.name == CHECK_CONFIG
+    assert doctor.loaded_config is not None
+    assert doctor.loaded_config.discord.guild_id == "123456789012345678"
+    assert doctor.loaded_config.discord.notify_user_id == "987654321098765432"
+
+
+@pytest.mark.anyio
+async def test_check_config_with_discord_invalid_snowflake_failure(tmp_path: Path) -> None:
+    """Verify check_config fails when discord guild_id is not a snowflake."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    config_file = tmp_path / "config.yaml"
+    invalid_yaml = (
+        "project:\n  name: test\n  branch: agent/ticket-runner\n  base_branch: main\n"
+        "worker:\n  execution_skill: .agents/skills/implement/SKILL.md\n"
+        "verification:\n  test_cmd: pytest\n"
+        "tokens:\n  warn: 120000\n  handoff: 135000\n  ceiling: 150000\n"
+        "presence:\n  default_mode: nearby\n"
+        "discord:\n  token_env: DISCORD_BOT_TOKEN\n  guild_id: 'not-a-snowflake'\n"
+        "lifecycle:\n  queue_completion: standby\n"
+        "git:\n  commit_prefix: feat\n"
+    )
+    config_file.write_text(invalid_yaml, encoding="utf-8")
+
+    doctor = Doctor(config_loader=YamlConfigLoader(), config_path=config_file)
+    result = await doctor.check_config()
+
+    assert result.passed is False
+    assert result.name == CHECK_CONFIG
+    assert "guild_id" in result.message
+    assert "snowflake" in result.message.lower()
+
+
+@pytest.mark.anyio
 async def test_check_config_missing_file_remediation(tmp_path: Path) -> None:
     """Verify check_config provides explicit copy template remediation when file is missing."""
     doctor = Doctor(config_path=tmp_path / "non_existent_config.yaml")
