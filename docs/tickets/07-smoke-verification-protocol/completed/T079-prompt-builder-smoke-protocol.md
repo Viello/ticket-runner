@@ -1,5 +1,6 @@
 # T079 — Worker PromptBuilder smoke protocol and completeness contract
-Status: pending
+Status: completed
+Completed: 2026-09-22T07:01:00Z
 Spec: docs/specs/07-smoke-verification-protocol.md
 Blocked by: T078
 
@@ -27,7 +28,7 @@ Blocked by: T078
 ### Smoke Scenarios
 **Scenario: Verify worker prompt contains Smoke Scenario protocol**
 - Setup: None
-- Steps: Run `python -c "from runner.application.prompt_builder import PromptBuilder; from runner.domain.ticket import Ticket; p = PromptBuilder.build(Ticket(id='T999', title='Sample', spec_path='x', body='### Smoke Scenarios\nfoo'), 'excerpt'); assert 'auto_covered' in p and 'update_notes' in p; print('Prompt verified')"`
+- Steps: Run `python -c "from runner.application.prompt_builder import PromptBuilder; from runner.domain.ticket import Ticket; p = PromptBuilder.build(Ticket(id='T999', title='Sample', status='pending', spec_path='x', requirements=(), acceptance_criteria=(), gotchas=(), path='x'), 'excerpt'); assert 'auto_covered' in p and 'update_notes' in p; print('Prompt verified')"`
 - Expected: Prints `Prompt verified` with exit code 0.
 
 ### Gotchas
