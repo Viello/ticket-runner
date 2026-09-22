@@ -1,5 +1,6 @@
 # T085 — Idle escalation timer and presence auto-reset
-Status: pending
+Status: completed
+Completed: 2026-09-22T17:07:00Z
 Spec: docs/specs/05-presence-mode-and-discord.md
 Blocked by: T084
 Security: required
@@ -23,22 +24,22 @@ Security: required
 - Security verification: confirm `notify_user_id` is interpolated into Discord message content only (not echoed to terminal, not persisted).
 
 ### Smoke Scenarios
-**Scenario: Escalation fires after idle timeout**
+**Scenario: Escalation fires after idle timeout** [also auto-covered]
 - Setup: Stub timer to fire after 1ms (inject a factory that creates immediate tasks). `FakeDiscordGateway`. Set `presence_mode = "nearby"`.
 - Steps: 1. Call `schedule_escalation("T042", "thread-99", discord_logger)`. 2. Await event loop for 10ms.
 - Expected: `presence_mode` is now `"away"`. `FakeDiscordGateway` records: (1) `post_message` with `<@{notify_user_id}>`, then (2) `post_message` with yellow embed (colour `0xFEE75C`), title `❓ Worker Question`.
 
-**Scenario: Escalation cancelled on local answer**
+**Scenario: Escalation cancelled on local answer** [also auto-covered]
 - Setup: Same stub timer. `FakeDiscordGateway`. `presence_mode = "nearby"`.
 - Steps: 1. Call `schedule_escalation("T042", "thread-99", discord_logger)`. 2. Immediately call `cancel_escalation()`. 3. Await event loop for 10ms.
 - Expected: `presence_mode` remains `"nearby"`. Zero `post_message` calls on `FakeDiscordGateway`.
 
-**Scenario: Second `schedule_escalation` replaces the first**
+**Scenario: Second `schedule_escalation` replaces the first** [also auto-covered]
 - Setup: Stub immediate-fire timer. `FakeDiscordGateway`.
 - Steps: 1. Call `schedule_escalation("T042", "thread-99", discord_logger)`. 2. Immediately call `schedule_escalation("T042", "thread-99", discord_logger)` again. 3. Await.
 - Expected: Exactly 2 total Discord `post_message` calls (one mention + one embed) — not 4.
 
-**Scenario: Discord answer resets presence to nearby**
+**Scenario: Discord answer resets presence to nearby** [also auto-covered]
 - Setup: `FakeDiscordGateway`. `presence_mode = "away"`. Fake message object from the configured channel, thread named `T042-some-slug`, sent by `notify_user_id`.
 - Steps: 1. Call `process_thread_reply(message, signal_repository, config, presence_coordinator=presence_coordinator)`. 2. Check `presence_coordinator.current_mode`.
 - Expected: `signal_repository.write_answer("T042", content)` called. `presence_coordinator.current_mode == "nearby"`.

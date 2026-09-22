@@ -322,10 +322,12 @@ async def run_start(
         if tui_coord is None:
             tui_coord = getattr(container, "tui_coordinator", None)
 
+    idle_esc_min = getattr(getattr(config, "presence", None), "idle_escalation_minutes", 3)
     resolved_presence = presence_coordinator or PresenceCoordinator(
         state_coordinator=state_coordinator,
         terminal_display=terminal_display,
         ui_event_sink=ui_event_sink,
+        idle_escalation_minutes=idle_esc_min,
     )
 
     if stop_event is None:

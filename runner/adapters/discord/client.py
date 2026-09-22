@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -16,6 +16,9 @@ from runner.domain.config import DiscordConfig, RunnerConfig
 from runner.domain.exceptions import DiscordGatewayError
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.state_store import StateStore
+
+if TYPE_CHECKING:
+    from runner.application.presence_coordinator import PresenceCoordinator
 
 
 class DiscordClient:
@@ -28,6 +31,7 @@ class DiscordClient:
         tree: app_commands.CommandTree | None = None,
         state_store: StateStore | None = None,
         signal_repository: SignalRepository | None = None,
+        presence_coordinator: PresenceCoordinator | None = None,
     ) -> None:
         if config is not None:
             self.config: DiscordConfig = (
@@ -46,6 +50,7 @@ class DiscordClient:
         self.tree = tree if tree is not None else app_commands.CommandTree(self.client)
         self.state_store = state_store
         self.signal_repository = signal_repository
+        self.presence_coordinator = presence_coordinator
         self.ready_event = asyncio.Event()
         self.ready_error: Exception | None = None
 
@@ -79,7 +84,10 @@ class DiscordClient:
                 sig_repo = None
 
         if sig_repo is not None:
-            await process_thread_reply(message, sig_repo, self.config)
+            await process_thread_reply(
+                message, sig_repo, self.config,
+                presence_coordinator=self.presence_coordinator,
+            )
 
     async def on_ready(self) -> None:
         """Handle Discord gateway on_ready event.
@@ -203,6 +211,7 @@ def init_client(
     tree: app_commands.CommandTree | None = None,
     state_store: StateStore | None = None,
     signal_repository: SignalRepository | None = None,
+    presence_coordinator: PresenceCoordinator | None = None,
 ) -> DiscordClient:
     """Initialize and set the global default DiscordClient instance."""
     global _default_client
@@ -212,6 +221,7 @@ def init_client(
         tree=tree,
         state_store=state_store,
         signal_repository=signal_repository,
+        presence_coordinator=presence_coordinator,
     )
     return _default_client
 

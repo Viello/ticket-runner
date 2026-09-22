@@ -303,10 +303,12 @@ def build_container(
         clock=clock,
     )
 
+    idle_esc_min = getattr(getattr(resolved_config, "presence", None), "idle_escalation_minutes", 3)
     resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
         state_coordinator=resolved_state_coordinator,
         terminal_display=resolved_terminal_display,
         ui_event_sink=resolved_event_sink,
+        idle_escalation_minutes=idle_esc_min,
     )
 
     resolved_tui_launcher = tui_launcher or TuiLauncher(

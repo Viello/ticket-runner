@@ -350,6 +350,7 @@ async def test_on_message_delegates_to_process_thread_reply(
     await dc.on_message(fake_message)
 
     mock_process.assert_awaited_once_with(
-        fake_message, mock_repo, sample_discord_config
+        fake_message, mock_repo, sample_discord_config,
+        presence_coordinator=None,
     )
 
