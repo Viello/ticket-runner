@@ -38,7 +38,7 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges**: the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
-For each ticket, draft its **Smoke Scenarios**: the named, human-executable scripts the operator runs after the Gatekeeper passes to confirm the feature works at the surface. Derive scenarios from Requirements and Acceptance Criteria, targeting what automated tests cannot reach — observable UX, terminal output, interactive prompts, multi-process timing, and file side-effects a human must inspect. For each scenario, capture the synthetic conditions needed (config tweaks, fake input, environment state) so the operator can manufacture them without guessing.
+For each ticket, draft its **Smoke Scenarios**: the named, human-executable verification scripts the operator runs to confirm the feature works at the surface. Derive scenarios from Requirements and Acceptance Criteria, targeting observable UX, CLI behavior, interactive prompts, and visible side-effects. At ticket breakdown time, draft high-level scenario intent: establish the prerequisites, a plain-English explanation of what is being tested and why, and initial verification steps. (The implementer will later refine these into concrete, copy-pasteable commands once code exists.)
 
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
 
@@ -94,12 +94,12 @@ Reasoning: medium  # optional: low | medium | high | max (provider-specific; omi
 
 ### Smoke Scenarios
 **Scenario: <name>**
-- Setup: <config values, env vars, or synthetic conditions the operator must put in place>
-- Steps: <numbered human actions — what to run, type, or observe>
-- Expected: <the exact output, file content, or UX state that confirms it worked>
+- Setup: <config values, env vars, or synthetic conditions the operator must put in place, or "None (runs from repo root)">
+- Why: <1-2 sentences in simple plain English: what this feature does and why we are checking it, explained so anyone can understand>
+- Steps: <numbered human actions — initial high-level actions/checks to verify the feature; refined with exact commands during implementation>
+- Expected: <the exact output, file content, or UX state that confirms it worked, plus failure signs>
 
-<!-- For tickets where automated tests cover all criteria, replace the block above with:
-All scenarios are covered by automated tests. No manual steps required. -->
+<!-- Every ticket must define at least one human-verifiable smoke scenario. Automated test coverage is additive metadata and never replaces human eyes. -->
 
 ### Gotchas
 - <Ticket-specific quirks, edge cases, or pitfalls discovered during breakdown>
