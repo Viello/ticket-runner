@@ -3,6 +3,7 @@
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.config_loader import ConfigLoader
 from runner.ports.discord_gateway import DiscordGateway, DiscordGatewayError
+from runner.ports.discord_logger import DiscordLogger
 from runner.ports.intervention import InterventionAction, InterventionDecision, InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.state_store import StateStore
@@ -15,6 +16,7 @@ __all__ = [
     "ConfigLoader",
     "DiscordGateway",
     "DiscordGatewayError",
+    "DiscordLogger",
     "InterventionAction",
     "InterventionDecision",
     "InterventionGateway",

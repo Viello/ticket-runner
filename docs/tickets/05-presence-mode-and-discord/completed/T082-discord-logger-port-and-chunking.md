@@ -1,5 +1,6 @@
 # T082 — DiscordLogger port and chunking engine
-Status: pending
+Status: completed
+Completed: 2026-09-22T16:01:30Z
 Spec: docs/specs/05-presence-mode-and-discord.md
 Blocked by: None
 
