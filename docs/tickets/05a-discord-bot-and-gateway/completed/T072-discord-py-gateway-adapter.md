@@ -1,5 +1,6 @@
-﻿# T072 — Real discord.py gateway adapter and stub removal
-Status: pending
+# T072 — Real discord.py gateway adapter and stub removal
+Status: completed
+Completed: 2026-09-22T07:55:30Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T071
 Security: required

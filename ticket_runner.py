@@ -5,12 +5,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Sequence
+import os
 from pathlib import Path
 import signal
 import sys
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.discord.gateway import DiscordPyGateway
+from runner.adapters.discord.smoke import (
+    REQUIRED_DISCORD_PERMISSIONS,
+    run_smoke,
+    verify_channel_permissions,
+)
 from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.ui.keyboard import KeyboardPoller
 from runner.adapters.ui.model_prompt import ModelPrompt
@@ -22,9 +29,10 @@ from runner.application.presence_coordinator import PresenceCoordinator
 from runner.application.queue_orchestrator import QueueOrchestrator
 from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
-from runner.container import RunnerContainer, build_container
+from runner.container import BotContainer, RunnerContainer, build_bot_container, build_container
 from runner.domain.exceptions import NonInteractiveError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
+from runner.ports.discord_gateway import DiscordGateway
 from runner.ports.state_store import StateStore
 
 
@@ -69,6 +77,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Bypass Discord bot verification and notifications.",
     )
     doctor_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Perform live gateway connection and channel permission checks for Discord.",
+    )
+    doctor_parser.add_argument(
         "--config",
         type=Path,
         default=Path("config.yaml"),
@@ -98,6 +111,29 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="OpenCode model identifier to use for session runs.",
+    )
+
+    # bot command
+    bot_parser = subparsers.add_parser(
+        "bot",
+        help="Manage standalone Discord bot operations (smoke test or run).",
+    )
+    bot_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.yaml"),
+        help="Path to configuration YAML file (default: config.yaml).",
+    )
+    bot_group = bot_parser.add_mutually_exclusive_group(required=True)
+    bot_group.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run self-cleaning Discord bot verification sequence.",
+    )
+    bot_group.add_argument(
+        "--run",
+        action="store_true",
+        help="Start the Discord bot client loop in interactive standalone mode.",
     )
 
     # placeholders for future subcommands
@@ -136,12 +172,16 @@ async def run_doctor(
     local_only: bool,
     doctor_instance: Doctor | None = None,
     terminal_detector: Any | None = None,
+    live: bool = False,
 ) -> int:
     """Execute Doctor pre-flight checks and display formatted results."""
     pass_mark, fail_mark = _configure_console_encoding()
     print("[Doctor] Verifying environment...")
     doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
-    report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True)
+    try:
+        report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True, live=live)
+    except TypeError:
+        report = await doctor.run(local_only=local_only, halt_on_failure=True)
 
     for check in report.checks:
         if check.passed:
@@ -421,6 +461,202 @@ async def run_start(
             orchestrator.release_lock()
 
 
+async def run_bot(
+    config_path: Path | None = None,
+    smoke: bool = False,
+    run: bool = False,
+    container_instance: BotContainer | None = None,
+    gateway: DiscordGateway | None = None,
+    permission_checker: Callable[[Any, Any], Awaitable[list[str]]] | None = None,
+    stderr: Any | None = None,
+    stop_event: asyncio.Event | None = None,
+) -> int:
+    """Execute standalone Discord bot subcommand (--smoke or --run)."""
+    err_stream = stderr or sys.stderr
+    container = container_instance or build_bot_container(config_path=config_path)
+    config = container.config
+
+    if not config.discord.enabled:
+        err_stream.write("Error: Discord is disabled in configuration (discord.enabled is false).\n")
+        return 1
+
+    if not config.discord.channel_id:
+        err_stream.write("Error: Missing discord.channel_id in configuration.\n")
+        return 1
+
+    token_env = config.discord.token_env
+    token_val = os.environ.get(token_env, "").strip()
+    if not token_val:
+        err_stream.write(
+            f"Authentication failed: Missing or empty bot token in environment variable '{token_env}'.\n"
+        )
+        return 1
+
+    client = container.discord_client
+
+    if smoke:
+        start_task = asyncio.create_task(client.start())
+        ready_task = asyncio.create_task(client.ready_event.wait())
+        try:
+            done, pending = await asyncio.wait(
+                [start_task, ready_task],
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=30.0,
+            )
+            if ready_task not in done:
+                if start_task in done:
+                    exc = start_task.exception()
+                    err_stream.write(f"Authentication failed: {exc}\n")
+                else:
+                    err_stream.write("Authentication failed: Connection timed out connecting to Discord.\n")
+                for p in pending:
+                    p.cancel()
+                await client.close()
+                return 1
+
+            if getattr(client, "ready_error", None) is not None:
+                err_stream.write(f"Discord connection error: {client.ready_error}\n")
+                for p in pending:
+                    p.cancel()
+                await client.close()
+                return 1
+        except Exception as exc:
+            err_stream.write(f"Authentication failed: {exc}\n")
+            await client.close()
+            return 1
+
+        channel_id = config.discord.channel_id
+        channel: Any = None
+        try:
+            chan_int = int(channel_id)
+            if hasattr(client.client, "get_channel"):
+                channel = client.client.get_channel(chan_int)
+            if channel is None and hasattr(client.client, "fetch_channel"):
+                channel = await client.client.fetch_channel(chan_int)
+        except Exception as exc:
+            err_stream.write(f"Failed to fetch channel {channel_id}: {exc}\n")
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+            return 1
+
+        if channel is None:
+            err_stream.write(f"Channel {channel_id} not found.\n")
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+            return 1
+
+        try:
+            if permission_checker is not None:
+                missing = await permission_checker(channel, client.client)
+            else:
+                missing = await verify_channel_permissions(channel, client.client)
+        except Exception as exc:
+            err_stream.write(f"Permission verification failed: {exc}\n")
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+            return 1
+
+        if missing:
+            err_stream.write(
+                f"Missing required permission(s): {', '.join(missing)}\n"
+            )
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+            return 1
+
+        try:
+            gw = gateway or DiscordPyGateway(client.client)
+            await run_smoke(gw, channel_id)
+        except Exception as exc:
+            err_stream.write(f"Smoke test failed: {exc}\n")
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+            return 1
+
+        await client.close()
+        if not start_task.done():
+            start_task.cancel()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        return 0
+
+    if run:
+        loop = asyncio.get_running_loop()
+        effective_stop_event = stop_event or asyncio.Event()
+
+        def _sigint_handler(signum: int, frame: Any) -> None:
+            loop.call_soon_threadsafe(effective_stop_event.set)
+
+        old_sigint = None
+        try:
+            old_sigint = signal.signal(signal.SIGINT, _sigint_handler)
+        except (ValueError, AttributeError):
+            pass
+
+        start_task = asyncio.create_task(client.start())
+        try:
+            ready_task = asyncio.create_task(client.ready_event.wait())
+            wait_task = asyncio.create_task(effective_stop_event.wait())
+            done, pending = await asyncio.wait(
+                [start_task, ready_task, wait_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if effective_stop_event.is_set():
+                return 130
+            if start_task in done:
+                exc = start_task.exception()
+                if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                    return 130
+                if exc is not None:
+                    err_stream.write(f"Bot error: {exc}\n")
+                    return 1
+            if getattr(client, "ready_error", None) is not None:
+                err_stream.write(f"Discord connection error: {client.ready_error}\n")
+                return 1
+            if ready_task in done and not effective_stop_event.is_set():
+                print("[Bot] Connected to Discord and slash commands synced. Ready.")
+                done2, pending2 = await asyncio.wait(
+                    [start_task, wait_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if effective_stop_event.is_set():
+                    return 130
+                if start_task in done2:
+                    exc = start_task.exception()
+                    if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                        return 130
+                    if exc is not None:
+                        err_stream.write(f"Bot error: {exc}\n")
+                        return 1
+            return 0
+        except KeyboardInterrupt:
+            return 130
+        finally:
+            await client.close()
+            if not start_task.done():
+                start_task.cancel()
+                try:
+                    await start_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if old_sigint is not None:
+                try:
+                    signal.signal(signal.SIGINT, old_sigint)
+                except (ValueError, AttributeError):
+                    pass
+
+    return 0
+
+
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point returning status exit code."""
     parser = create_parser()
@@ -435,13 +671,27 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.command == "doctor":
-            return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
+            return asyncio.run(
+                run_doctor(
+                    config_path=config_path,
+                    local_only=local_only,
+                    live=getattr(args, "live", False),
+                )
+            )
         elif args.command == "start":
             return asyncio.run(
                 run_start(
                     config_path=config_path,
                     local_only=local_only,
                     model_id=getattr(args, "model", None),
+                )
+            )
+        elif args.command == "bot":
+            return asyncio.run(
+                run_bot(
+                    config_path=config_path,
+                    smoke=getattr(args, "smoke", False),
+                    run=getattr(args, "run", False),
                 )
             )
         elif args.command in ("pause", "status"):

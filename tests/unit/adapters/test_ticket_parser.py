@@ -276,3 +276,36 @@ def test_parse_ticket_without_reasoning_yields_empty_string(tmp_path: Path) -> N
     ticket = TicketMarkdownParser().parse(path)
     assert ticket.reasoning == ""
 
+
+def test_smoke_fail_recovery_skill_ticket_runner_template_is_valid(tmp_path: Path) -> None:
+    import re
+
+    skill_path = Path(".agents/skills/smoke-fail/SKILL.md")
+    content = skill_path.read_text(encoding="utf-8")
+    match = re.search(r"<ticket-runner-template>\s*([\s\S]*?)\s*</ticket-runner-template>", content)
+    assert match is not None
+    sample = (
+        match.group(1)
+        .replace("<spec-slug>", "07-smoke-verification-protocol")
+        .replace("<slug>", "sample")
+        .replace("<NNN>", "999")
+        .replace("<Scenario Title>", "Test")
+        .replace("<originating_id>", "T042")
+        .replace("<observed_output>", "Crash")
+        .replace("<expected_output>", "Redirect")
+        .replace("<files_to_touch>", "runner/foo.py")
+        .replace("<seams_or_modules>", "domain")
+        .replace("<verification_command>", "pytest")
+        .replace("<setup_steps>", "None")
+        .replace("<test_steps>", "Run check")
+        .replace("<Triage insights or quirks noted during failure capture>", "None")
+    )
+    ticket_file = tmp_path / "T999-smoke-regression-sample.md"
+    ticket_file.write_text(sample, encoding="utf-8")
+    ticket = TicketMarkdownParser().parse(ticket_file)
+    assert ticket.id == "T999"
+    assert ticket.status is TicketStatus.PENDING
+    assert ticket.title == "Smoke regression: Test"
+    assert "Fix regression identified during smoke verification of T042:" in ticket.requirements[0]
+
+

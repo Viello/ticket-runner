@@ -200,6 +200,36 @@ def test_discord_config_invalid_token_env(token_env: str) -> None:
         DiscordConfig(enabled=True, token_env=token_env, channel_id="")
 
 
+def test_discord_config_with_snowflakes_valid() -> None:
+    cfg = DiscordConfig(guild_id="12345", notify_user_id="67890")
+    assert cfg.guild_id == "12345"
+    assert cfg.notify_user_id == "67890"
+
+
+def test_discord_config_empty_snowflakes_accepted() -> None:
+    cfg = DiscordConfig(guild_id="", notify_user_id="")
+    assert cfg.guild_id == ""
+    assert cfg.notify_user_id == ""
+
+
+def test_discord_config_invalid_guild_id() -> None:
+    with pytest.raises(ConfigError, match="guild_id"):
+        DiscordConfig(guild_id="not-a-snowflake")
+
+
+def test_discord_config_invalid_notify_user_id() -> None:
+    with pytest.raises(ConfigError, match="notify_user_id"):
+        DiscordConfig(notify_user_id="bad!")
+
+
+def test_discord_gateway_error_inheritance() -> None:
+    from runner.domain import DiscordGatewayError as DomainDiscordGatewayError
+    from runner.domain.exceptions import DiscordGatewayError, TicketRunnerError
+
+    assert issubclass(DiscordGatewayError, TicketRunnerError)
+    assert DomainDiscordGatewayError is DiscordGatewayError
+
+
 def test_immutability_frozen_dataclass() -> None:
     budget = TokenBudgetConfig(warn=120000, handoff=135000, ceiling=150000)
     with pytest.raises(FrozenInstanceError):

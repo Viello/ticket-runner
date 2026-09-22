@@ -87,16 +87,6 @@ class _StubExecutor:
         return self._reports.pop(0)
 
 
-class _SpyDiscordAdapter:
-    def __init__(self, should_raise: bool = False) -> None:
-        self.sent_messages: list[str] = []
-        self._should_raise = should_raise
-
-    def send(self, message: str) -> None:
-        if self._should_raise:
-            raise RuntimeError("Discord network error")
-        self.sent_messages.append(message)
-
 
 def _make_failed_report(tail: str = "FAILED test_fail.py::test_one") -> VerificationReport:
     outcome = CommandOutcome(
@@ -123,7 +113,6 @@ async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
     signal_repo = _StubSignalRepo([_make_ready_signal(ticket.id)])
     executor = _StubExecutor([_make_failed_report()])
     intervention_gateway = FakeInterventionGateway(escalation_answers=[True])
-    discord_adapter = _SpyDiscordAdapter()
 
     custom_diag = FailureDiagnostic(
         label=LABEL_HANG,
@@ -142,7 +131,6 @@ async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
         intervention_gateway=intervention_gateway,
         verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1),
         failure_analyser=lambda **kwargs: custom_diag,
-        discord_adapter=discord_adapter,
         token_budget=150000,
     )
 
@@ -157,11 +145,7 @@ async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
     assert result.attempts == 0
     assert loop.attempts == 0
 
-    # 3. Discord send was called
-    assert len(discord_adapter.sent_messages) == 1
-    assert "⚠ HANG detected — test_fail.py::test_one" in discord_adapter.sent_messages[0]
-
-    # 4. Terminal prompt received the report
+    # 3. Terminal prompt received the report
     assert len(intervention_gateway.escalation_records) == 1
     prompted_ticket, report = intervention_gateway.escalation_records[0]
     assert prompted_ticket == ticket
@@ -344,25 +328,3 @@ async def test_escalation_at_zero_never_escalates() -> None:
     assert len(intervention_gateway.escalation_records) == 0
 
 
-@pytest.mark.anyio
-async def test_discord_adapter_exception_never_raises() -> None:
-    ticket = _make_ticket()
-    cycle_runner = _StubCycleRunner([WorkerRunResult(status=SingleCycleStatus.READY)])
-    signal_repo = _StubSignalRepo([_make_ready_signal(ticket.id)])
-    executor = _StubExecutor([_make_failed_report()])
-    intervention_gateway = FakeInterventionGateway(escalation_answers=[True])
-    raising_discord = _SpyDiscordAdapter(should_raise=True)
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=cycle_runner,
-        signal_repository=signal_repo,
-        executor=executor,
-        intervention_gateway=intervention_gateway,
-        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1),
-        discord_adapter=raising_discord,
-    )
-
-    # Must not raise an exception despite Discord failure
-    result = await loop.run()
-    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED

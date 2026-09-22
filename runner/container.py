@@ -11,6 +11,7 @@ from typing import Any
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+from runner.adapters.discord.client import DiscordClient
 from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.json_status_publisher import JsonFileStatusPublisher
@@ -366,4 +367,64 @@ def build_container(
         tui_launcher=resolved_tui_launcher,
         tui_coordinator=resolved_tui_coordinator,
     )
+
+
+@dataclass(frozen=True)
+class BotContainer:
+    """Minimal container for Discord bot standalone execution (T075)."""
+
+    config: RunnerConfig
+    runtime_paths: RuntimePaths
+    signal_repository: SignalRepository
+    discord_client: DiscordClient
+    state_store: StateStore | None = None
+
+
+def build_bot_container(
+    config: RunnerConfig | None = None,
+    *,
+    config_path: Path | str | None = None,
+    runtime_paths: RuntimePaths | None = None,
+    signal_repository: SignalRepository | None = None,
+    state_store: StateStore | None = None,
+    discord_client: DiscordClient | None = None,
+    cwd: Path | None = None,
+) -> BotContainer:
+    """Build and wire a minimal container for standalone bot operations (T075)."""
+    resolved_config: RunnerConfig
+    if config is not None:
+        resolved_config = config
+    else:
+        path = Path(config_path) if config_path else ((cwd / "config.yaml") if cwd else Path("config.yaml"))
+        if path.is_file():
+            resolved_config = YamlConfigLoader().load(path)
+        else:
+            resolved_config = _default_config()
+
+    resolved_runtime_paths = runtime_paths or (
+        RuntimePaths(root_dir=cwd / ".agent") if cwd else RuntimePaths()
+    )
+
+    resolved_signal_repo = signal_repository or FilesystemSignalRepository(
+        runtime_paths=resolved_runtime_paths
+    )
+
+    resolved_state_store = state_store or JsonStateStore(
+        path=resolved_runtime_paths.state_path
+    )
+
+    resolved_discord_client = discord_client or DiscordClient(
+        config=resolved_config,
+        state_store=resolved_state_store,
+        signal_repository=resolved_signal_repo,
+    )
+
+    return BotContainer(
+        config=resolved_config,
+        runtime_paths=resolved_runtime_paths,
+        signal_repository=resolved_signal_repo,
+        discord_client=resolved_discord_client,
+        state_store=resolved_state_store,
+    )
+
 

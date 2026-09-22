@@ -180,35 +180,57 @@ def _validate_answer(
 def _validate_manual_verification(value: object, label: str) -> tuple[dict, ...]:
     """Validate and coerce the manual_verification field.
 
-    Each entry must be a dict where all values are strings.
+    Each entry must be a dict. The four core string fields (name, setup, steps, expected)
+    are validated as strings. Two optional extension fields are also accepted:
+    - ``auto_covered`` (bool, defaults to False): whether the automated test suite also
+      exercises this scenario end-to-end.
+    - ``update_notes`` (str, defaults to ""): free-text note when this scenario supersedes
+      a prior ticket's smoke log entry.
     Returns a tuple of dicts, or raises SignalFormatError.
     Accepts _MISSING_SENTINEL to represent "field absent from payload".
     """
+    _STRING_FIELDS = frozenset({"name", "setup", "steps", "expected", "update_notes"})
+
     if value is _MISSING_SENTINEL or value is None:
         return ()
     if not isinstance(value, (list, tuple)):
         raise SignalFormatError(
             f"{label} field 'manual_verification' must be an array of dicts, got: {_preview(value)}"
         )
-    result: list[dict[str, str]] = []
+    result: list[dict] = []
     for i, entry in enumerate(value):
         if not isinstance(entry, dict):
             raise SignalFormatError(
                 f"{label} field 'manual_verification[{i}]' must be a dict, got: {_preview(entry)}"
             )
-        # Validate all values are strings
-        sanitized: dict[str, str] = {}
+        sanitized: dict = {}
         for k, v in entry.items():
-            if not isinstance(v, str):
-                raise SignalFormatError(
-                    f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
-                )
-            # Strip ANSI escape sequences
-            s = re.sub(r"\x1b\[[0-9;]*m", "", v)
-            if k == "name":
-                # Sanitize scenario name: strip carriage returns and newlines to prevent git header injection
-                s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-            sanitized[k] = s
+            if k == "auto_covered":
+                # Accept bool or bool-coercible int; normalise to Python bool
+                if not isinstance(v, (bool, int)) or isinstance(v, float):
+                    raise SignalFormatError(
+                        f"{label} field 'manual_verification[{i}][auto_covered]' must be a boolean,"
+                        f" got: {_preview(v)}"
+                    )
+                sanitized[k] = bool(v)
+            elif k in _STRING_FIELDS:
+                if not isinstance(v, str):
+                    raise SignalFormatError(
+                        f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
+                    )
+                # Strip ANSI escape sequences
+                s = re.sub(r"\x1b\[[0-9;]*m", "", v)
+                if k == "name":
+                    # Sanitize scenario name: strip carriage returns and newlines to prevent git header injection
+                    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                sanitized[k] = s
+            else:
+                # Unknown keys: validate as string and pass through for forward compatibility
+                if not isinstance(v, str):
+                    raise SignalFormatError(
+                        f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
+                    )
+                sanitized[k] = re.sub(r"\x1b\[[0-9;]*m", "", v)
         result.append(sanitized)
     return tuple(result)
 

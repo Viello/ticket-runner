@@ -19,7 +19,6 @@ import time
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
-from runner.adapters.discord import DiscordAdapter
 from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
@@ -734,7 +733,6 @@ class VerificationLoop:
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
         failure_analyser: Callable[..., FailureDiagnostic] | None = None,
-        discord_adapter: Any | None = None,
         runtime_paths: RuntimePaths | None = None,
         token_budget: int | TokenBudgetConfig | None = None,
         status_publisher: StatusPublisher | None = None,
@@ -760,7 +758,6 @@ class VerificationLoop:
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
         self._failure_analyser = failure_analyser or analyse
-        self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
         self._runtime_paths = runtime_paths or RuntimePaths()
         self._status_publisher = status_publisher
         self._git_operations = git_operations
@@ -883,6 +880,73 @@ class VerificationLoop:
         if hasattr(self._signal_repository, "clean_question"):
             self._signal_repository.clean_question(ticket_id)
 
+    def _append_smoke_log(
+        self,
+        ready_signal: ReadySignal,
+        ticket: Ticket,
+        runtime_paths: RuntimePaths | None = None,
+    ) -> None:
+        """Append smoke scenario entries to the per-spec-slug smoke log file.
+
+        The log lives at ``.agent/smoke_log_{spec_slug}.md`` and is append-only.
+        Each passing verification cycle contributes a dated section. The human
+        reviews the log after all tickets for a spec are complete.
+
+        Args:
+            ready_signal: The passing ready signal carrying manual_verification entries.
+            ticket: The active ticket.
+            runtime_paths: RuntimePaths instance; defaults to self._runtime_paths.
+        """
+        from datetime import datetime, timezone
+
+        paths = runtime_paths or self._runtime_paths
+        spec_slug = ready_signal.scope if ready_signal.scope else ticket.id
+        log_path = paths.smoke_log_path(spec_slug)
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        lines: list[str] = []
+        lines.append(f"## {ticket.id} — {ticket.title}")
+        lines.append(f"_Appended: {timestamp}_")
+        lines.append("")
+
+        for scenario in ready_signal.manual_verification:
+            name = scenario.get("name", "")
+            setup = scenario.get("setup", "")
+            steps = scenario.get("steps", "")
+            expected = scenario.get("expected", "")
+            auto_covered = bool(scenario.get("auto_covered", False))
+            update_notes = scenario.get("update_notes", "")
+
+            auto_tag = " [also auto-covered]" if auto_covered else ""
+            lines.append(f"### {name}{auto_tag}")
+            lines.append("")
+            if setup:
+                lines.append(f"**Setup**: {setup}")
+            if steps:
+                lines.append(f"**Steps**: {steps}")
+            if expected:
+                lines.append(f"**Expected**: {expected}")
+            if update_notes:
+                lines.append("")
+                lines.append(f"> {update_notes}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+        block = "\n".join(lines)
+
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            if not log_path.exists():
+                header = f"# Smoke Log — {spec_slug}\n\n"
+                atomic_write_text(log_path, header + block)
+            else:
+                existing = log_path.read_text(encoding="utf-8")
+                atomic_write_text(log_path, existing + block)
+        except Exception as exc:
+            logger.warning("Failed to append smoke log %s: %s", log_path, exc)
+
     async def run(
         self,
         *,
@@ -977,28 +1041,26 @@ class VerificationLoop:
                         last_step_summary="Verification passed",
                     )
 
-                    # --- Manual verification handling (T069) ---
+                    # --- Manual verification handling ---
                     if ready_signal.manual_verification_is_default:
                         # manual_verification was absent from the payload => backward-compatible, do not emit
                         pass
                     elif not ready_signal.manual_verification:
-                        # manual_verification was present but empty => emit all covered notice
-                        all_covered_msg = (
-                            "All Smoke Scenarios covered by automated tests — no manual steps required."
+                        # manual_verification present but empty => ticket defined no smoke scenarios
+                        logger.warning(
+                            "[%s] manual_verification is empty — ticket must define at least one smoke scenario.",
+                            self._ticket.id,
                         )
-                        if self._notify is not None:
-                            try:
-                                self._notify(all_covered_msg)
-                            except Exception:
-                                print(all_covered_msg)
-                        else:
-                            print(all_covered_msg)
                     else:
+                        def _scenario_label(s: dict) -> str:
+                            tag = " [also auto-covered]" if s.get("auto_covered") else ""
+                            return f"{s.get('name', '')}{tag}"
+
                         # 1. Commit body injection if GitOperations is available
                         if self._git_operations is not None:
                             changes = [f"Update {p}" for p in ready_signal.modified_files] + [
                                 "Manual verification required:",
-                                *(f"- {s.get('name', '')}" for s in ready_signal.manual_verification),
+                                *(f"- {_scenario_label(s)}" for s in ready_signal.manual_verification),
                             ]
                             try:
                                 commit_res = self._git_operations.commit_ticket(
@@ -1022,7 +1084,9 @@ class VerificationLoop:
                             setup = scenario.get("setup", "")
                             steps = scenario.get("steps", "")
                             expected = scenario.get("expected", "")
-                            scenario_lines.append(f"Scenario: {name}")
+                            auto_covered = bool(scenario.get("auto_covered", False))
+                            auto_tag = " [also auto-covered]" if auto_covered else ""
+                            scenario_lines.append(f"Scenario: {name}{auto_tag}")
                             if setup:
                                 scenario_lines.append(f"Setup: {setup}")
                             if steps:
@@ -1038,27 +1102,8 @@ class VerificationLoop:
                         else:
                             print(scenario_text)
 
-                        # 3. Discord notification (fire-and-forget, names-only summary)
-                        if self._discord_adapter is not None and hasattr(
-                            self._discord_adapter, "send"
-                        ):
-                            names = [
-                                s.get("name", "")
-                                for s in ready_signal.manual_verification
-                                if s.get("name")
-                            ]
-                            bullets = "\n".join(f"• {n}" for n in names)
-                            discord_msg = (
-                                f"✅ Gatekeeper passed — manual verification required:\n{bullets}"
-                            )
-                            try:
-                                res = self._discord_adapter.send(discord_msg)
-                                if inspect.iscoroutine(res):
-                                    await res
-                            except Exception as exc:
-                                logger.warning("Discord send failed: %s", exc)
-                        else:
-                            logger.warning("Discord adapter not provided to VerificationLoop")
+                        # 3. Append to per-spec-slug smoke log (durable record)
+                        self._append_smoke_log(ready_signal, self._ticket)
 
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
@@ -1232,20 +1277,6 @@ class VerificationLoop:
             attempt=current_attempt,
             last_step_summary=f"Escalation emitted: {diagnostic.label}",
         )
-
-        # Discord notification (fire-and-forget, never raises)
-        if self._discord_adapter is not None and hasattr(self._discord_adapter, "send"):
-            try:
-                discord_msg = (
-                    report_text
-                    if len(report_text) <= 2000
-                    else report_text[:1990] + "\n..."
-                )
-                res = self._discord_adapter.send(discord_msg)
-                if inspect.iscoroutine(res):
-                    await res
-            except Exception as exc:
-                logger.warning("Discord send failed: %s", exc)
 
         # Terminal prompt via InterventionGateway
         if self._state_coordinator is not None:

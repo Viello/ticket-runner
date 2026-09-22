@@ -1,5 +1,6 @@
-﻿# T070 — DiscordConfig extension and DiscordGatewayError domain exception
-Status: pending
+# T070 — DiscordConfig extension and DiscordGatewayError domain exception
+Status: completed
+Completed: 2026-09-22T05:53:20Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: None
 

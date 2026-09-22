@@ -329,8 +329,8 @@ def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() ->
     )
     cmd = build_opencode_run_command(prompt)
     total_length = sum(len(arg) for arg in cmd) + len(cmd) - 1
-    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 6,000 chars
-    assert total_length < 7000
+    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 9,000 chars
+    assert total_length < 9000
     assert total_length < 32767
 
 
@@ -417,5 +417,41 @@ def test_prompt_resilient_invariants_fallback_when_agents_md_missing_or_corrupt(
         agents_path=missing_path,
     )
     assert "## Invariants" in prompt
+
+
+def test_prompt_documents_manual_verification_schema_with_auto_covered_and_update_notes() -> None:
+    ticket = _make_ticket(ticket_id="T079")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert "`manual_verification`" in prompt
+    assert "auto_covered" in prompt
+    assert "update_notes" in prompt
+    assert "empty array `[]` if all are automated" not in prompt
+    assert "`name`" in prompt
+    assert "`setup`" in prompt
+    assert "`steps`" in prompt
+    assert "`expected`" in prompt
+
+
+def test_prompt_documents_smoke_scenario_completeness_invariant() -> None:
+    ticket = _make_ticket(ticket_id="T079")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    prompt_lower = prompt.lower()
+    assert "smoke scenarios" in prompt_lower
+    assert "incomplete" in prompt_lower
+    assert "must not emit a ready signal" in prompt_lower
+    assert "additive" in prompt_lower
+
 
 

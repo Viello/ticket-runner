@@ -69,3 +69,8 @@ class UserAbortError(TicketRunnerError):
     """Raised when an operator aborts execution via the intervention menu."""
     pass
 
+
+class DiscordGatewayError(TicketRunnerError):
+    """Raised when a Discord gateway operation fails."""
+    pass
+

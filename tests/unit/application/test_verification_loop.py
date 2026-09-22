@@ -22,6 +22,7 @@ from runner.application.handoff_coordinator import (
 )
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import SignalFormatError
+from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_intervention import FakeInterventionGateway
@@ -107,6 +108,28 @@ def sample_scenarios() -> tuple[dict[str, str], ...]:
     )
 
 
+@pytest.fixture
+def mixed_scenarios() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "name": "Auto-covered scenario",
+            "setup": "Auto-covered setup",
+            "steps": "1. Run auto test",
+            "expected": "Auto test passes",
+            "auto_covered": True,
+            "update_notes": "Updates: T001 — Old scenario name",
+        },
+        {
+            "name": "Manual-only scenario",
+            "setup": "Manual setup",
+            "steps": "1. Verify manually",
+            "expected": "Manual verification passes",
+            "auto_covered": False,
+            "update_notes": "",
+        },
+    )
+
+
 def test_absent_manual_verification_backward_compatible():
     """A ReadySignal payload without manual_verification parses with () and emits nothing."""
     ticket = _make_ticket()
@@ -129,7 +152,6 @@ def test_absent_manual_verification_backward_compatible():
         resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
     )
     notified: list[str] = []
-    mock_discord = MagicMock()
 
     loop = VerificationLoop(
         ticket=ticket,
@@ -138,18 +160,16 @@ def test_absent_manual_verification_backward_compatible():
         executor=_StubExecutor(_passing_report()),
         intervention_gateway=FakeInterventionGateway(),
         notify=notified.append,
-        discord_adapter=mock_discord,
     )
 
     res = asyncio.run(loop.run())
     assert res.is_passed
     # Nothing emitted for absent manual_verification
     assert not notified
-    mock_discord.send.assert_not_called()
 
 
-def test_empty_manual_verification_emits_all_covered_line():
-    """When manual_verification is present but empty, emit all-covered notice and no Discord send."""
+def test_empty_manual_verification_logs_warning():
+    """When manual_verification is present but empty, emit a warning log and no user notification."""
     ticket = _make_ticket()
     ready = ReadySignal(
         ticket_id=ticket.id,
@@ -179,14 +199,12 @@ def test_empty_manual_verification_emits_all_covered_line():
         executor=_StubExecutor(_passing_report()),
         intervention_gateway=FakeInterventionGateway(),
         notify=notified.append,
-        discord_adapter=mock_discord,
     )
 
     res = asyncio.run(loop.run())
     assert res.is_passed
-    assert len(notified) == 1
-    assert "All Smoke Scenarios covered by automated tests — no manual steps required." in notified[0]
-    mock_discord.send.assert_not_called()
+    # Empty manual_verification => warning only, no user-visible notification
+    assert len(notified) == 0
 
 
 def test_populated_manual_verification_terminal_output(sample_scenarios):
@@ -231,47 +249,6 @@ def test_populated_manual_verification_terminal_output(sample_scenarios):
         assert f"Expected: {s['expected']}" in combined_output
 
 
-def test_populated_manual_verification_discord_summary(sample_scenarios):
-    """Discord receives names-only summary in the specified bullet format."""
-    ticket = _make_ticket()
-    ready = ReadySignal(
-        ticket_id=ticket.id,
-        status=SignalStatus.READY_FOR_VERIFICATION,
-        modified_files=("runner/application/gatekeeper.py",),
-        self_review_notes="Done",
-        new_gotchas=(),
-        timestamp=datetime.now(timezone.utc),
-        manual_verification=sample_scenarios,
-        _manual_verification_was_present=True,
-    )
-
-    cycle_result = WorkerRunResult(
-        status=SingleCycleStatus.READY,
-        occupancy=1000,
-        session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
-    )
-    mock_discord = MagicMock()
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=_StubCycleRunner(cycle_result),
-        signal_repository=_StubSignalRepo(ready),
-        executor=_StubExecutor(_passing_report()),
-        intervention_gateway=FakeInterventionGateway(),
-        discord_adapter=mock_discord,
-    )
-
-    res = asyncio.run(loop.run())
-    assert res.is_passed
-
-    mock_discord.send.assert_called_once()
-    discord_msg = mock_discord.send.call_args[0][0]
-    assert "✅ Gatekeeper passed — manual verification required:" in discord_msg
-    assert "• Full terminal checklist verification" in discord_msg
-    assert "• Discord summary verification" in discord_msg
-    # No Setup/Steps/Expected details in Discord summary
-    assert "Start terminal UI in test harness" not in discord_msg
 
 
 def test_populated_manual_verification_commit_body_injection(sample_scenarios):
@@ -353,43 +330,6 @@ def test_missing_git_operations_logs_warning_and_does_not_block_pass(sample_scen
     assert any("GitOperations not provided to VerificationLoop" in r.message for r in caplog.records)
 
 
-def test_missing_or_failing_discord_adapter_never_raises(sample_scenarios):
-    """Missing or failing Discord adapter logs a warning and does not raise."""
-    ticket = _make_ticket()
-    ready = ReadySignal(
-        ticket_id=ticket.id,
-        status=SignalStatus.READY_FOR_VERIFICATION,
-        modified_files=("runner/application/gatekeeper.py",),
-        self_review_notes="Done",
-        new_gotchas=(),
-        timestamp=datetime.now(timezone.utc),
-        manual_verification=sample_scenarios,
-        _manual_verification_was_present=True,
-    )
-
-    cycle_result = WorkerRunResult(
-        status=SingleCycleStatus.READY,
-        occupancy=1000,
-        session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
-    )
-
-    # Failing discord adapter
-    failing_discord = MagicMock()
-    failing_discord.send.side_effect = RuntimeError("Discord connection refused")
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=_StubCycleRunner(cycle_result),
-        signal_repository=_StubSignalRepo(ready),
-        executor=_StubExecutor(_passing_report()),
-        intervention_gateway=FakeInterventionGateway(),
-        discord_adapter=failing_discord,
-    )
-
-    # Should not raise
-    res = asyncio.run(loop.run())
-    assert res.is_passed
 
 
 def test_signal_format_error_on_malformed_manual_verification():
@@ -443,3 +383,92 @@ def test_manual_verification_sanitization():
     assert "\n" not in entry["name"]
     assert "\x1b" not in entry["name"]
     assert "Scenario NameRed" in entry["name"]
+
+
+def test_auto_covered_tag_in_terminal_output(mixed_scenarios: tuple[dict[str, Any], ...]) -> None:
+    """Assert terminal output contains 'Auto-covered scenario [also auto-covered]' while manual-only line has no tag."""
+    ticket = _make_ticket()
+    ready = ReadySignal(
+        ticket_id=ticket.id,
+        status=SignalStatus.READY_FOR_VERIFICATION,
+        modified_files=("runner/application/gatekeeper.py",),
+        self_review_notes="Done",
+        new_gotchas=(),
+        timestamp=datetime.now(timezone.utc),
+        manual_verification=mixed_scenarios,
+        _manual_verification_was_present=True,
+    )
+    cycle_result = WorkerRunResult(
+        status=SingleCycleStatus.READY,
+        occupancy=1000,
+        session_id="ses_123",
+        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+    )
+    notified: list[str] = []
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_StubCycleRunner(cycle_result),
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+        notify=notified.append,
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+
+    combined_output = "\n".join(notified)
+    assert "Scenario: Auto-covered scenario [also auto-covered]" in combined_output
+    assert "Scenario: Manual-only scenario" in combined_output
+    assert "Manual-only scenario [also auto-covered]" not in combined_output
+
+
+def test_smoke_log_appended_after_pass(
+    mixed_scenarios: tuple[dict[str, Any], ...],
+    tmp_path: Path,
+) -> None:
+    """Verify .agent/smoke_log_test-spec.md is created with header, auto-covered scenario, and update notes."""
+    ticket = _make_ticket("T078")
+    ready = ReadySignal(
+        ticket_id=ticket.id,
+        status=SignalStatus.READY_FOR_VERIFICATION,
+        modified_files=("runner/application/gatekeeper.py",),
+        self_review_notes="Done",
+        new_gotchas=(),
+        timestamp=datetime.now(timezone.utc),
+        scope="test-spec",
+        manual_verification=mixed_scenarios,
+        _manual_verification_was_present=True,
+    )
+    cycle_result = WorkerRunResult(
+        status=SingleCycleStatus.READY,
+        occupancy=1000,
+        session_id="ses_123",
+        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+    )
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_StubCycleRunner(cycle_result),
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+        runtime_paths=runtime_paths,
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+
+    log_path = runtime_paths.smoke_log_path("test-spec")
+    assert log_path == tmp_path / ".agent" / "smoke_log_test-spec.md"
+    assert log_path.exists()
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "# Smoke Log — test-spec" in content
+    assert "### Auto-covered scenario [also auto-covered]" in content
+    assert "> Updates: T001 — Old scenario name" in content
+    assert "### Manual-only scenario" in content
+    assert "Manual-only scenario [also auto-covered]" not in content
+

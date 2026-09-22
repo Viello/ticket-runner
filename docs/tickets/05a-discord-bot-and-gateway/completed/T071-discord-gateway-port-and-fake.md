@@ -1,5 +1,6 @@
-﻿# T071 — DiscordGateway port and FakeDiscordGateway test double
-Status: pending
+# T071 — DiscordGateway port and FakeDiscordGateway test double
+Status: completed
+Completed: 2026-09-22T07:38:30Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T070
 
@@ -19,7 +20,10 @@ Blocked by: T070
 - `pytest tests/` passes with no regressions.
 
 ### Smoke Scenarios
-All scenarios are covered by automated tests. No manual steps required.
+**Scenario: Verify DiscordGateway protocol conformance and fake gateway call recording**
+- Setup: None
+- Steps: Run `python -c "import asyncio; from runner.ports import DiscordGateway, DiscordGatewayError; from tests.fakes import FakeDiscordGateway; fake = FakeDiscordGateway(); assert isinstance(fake, DiscordGateway); asyncio.run(fake.post_message('chan-1', 'hello')); assert len(fake.calls) == 1 and fake.calls[0].method == 'post_message'; print('DiscordGateway port and fake verified')"`
+- Expected: Prints `DiscordGateway port and fake verified` with exit code 0.
 
 ### Gotchas
 - `runtime_checkable` Protocols only check for method presence, not signatures — the fake's async signatures must exactly match the Protocol or structural subtyping checks will pass incorrectly for the wrong reasons.

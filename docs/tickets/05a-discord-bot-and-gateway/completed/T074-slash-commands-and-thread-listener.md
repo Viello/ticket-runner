@@ -1,5 +1,6 @@
-﻿# T074 — Slash commands (/status, /pause, /mode) and thread reply listener
-Status: pending
+# T074 — Slash commands (/status, /pause, /mode) and thread reply listener
+Status: completed
+Completed: 2026-09-22T14:03:00Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T073
 

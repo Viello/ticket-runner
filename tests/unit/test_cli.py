@@ -1107,5 +1107,57 @@ def test_run_start_starts_and_stops_terminal_display(tmp_path: Path) -> None:
     assert stopped is True
 
 
+# ==============================================================================
+# T076: CLI doctor --live flag tests
+# ==============================================================================
+
+def test_cli_parser_doctor_live_flag() -> None:
+    """CLI parser sets live=True for doctor --live and False by default."""
+    parser = ticket_runner.create_parser()
+
+    args_default = parser.parse_args(["doctor"])
+    assert args_default.command == "doctor"
+    assert args_default.live is False
+
+    args_live = parser.parse_args(["doctor", "--live"])
+    assert args_live.command == "doctor"
+    assert args_live.live is True
+
+
+def test_cli_main_doctor_live_forwards_to_run_doctor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ticket_runner.main(['doctor', '--live']) calls run_doctor with live=True."""
+    captured_args: dict[str, Any] = {}
+
+    async def fake_run_doctor(config_path: Path, local_only: bool, live: bool = False, **kwargs: Any) -> int:
+        captured_args["config_path"] = config_path
+        captured_args["local_only"] = local_only
+        captured_args["live"] = live
+        return 0
+
+    monkeypatch.setattr(ticket_runner, "run_doctor", fake_run_doctor)
+
+    code = ticket_runner.main(["doctor", "--live"])
+    assert code == 0
+    assert captured_args["live"] is True
+    assert captured_args["local_only"] is False
+
+
+def test_run_doctor_passes_live_to_doctor_instance() -> None:
+    """run_doctor passes live=True to doctor_instance.run."""
+    class FakeDoc(Doctor):
+        def __init__(self) -> None:
+            self.passed_live: bool | None = None
+
+        async def run(self, local_only: bool = False, halt_on_failure: bool = False, live: bool = False) -> DoctorReport:
+            self.passed_live = live
+            return DoctorReport(passed=True, checks=[CheckResult(name="d", passed=True, message="ok")])
+
+    doc = FakeDoc()
+    code = asyncio.run(ticket_runner.run_doctor(config_path=Path("config.yaml"), local_only=False, doctor_instance=doc, live=True))
+    assert code == 0
+    assert doc.passed_live is True
+
+
+
 
 

@@ -205,10 +205,18 @@ class YamlConfigLoader(ConfigLoader):
                 f"got: {channel_id_raw!r}"
             )
 
+        guild_id_raw = discord_dict.get("guild_id", "")
+        guild_id_val = str(guild_id_raw).strip() if guild_id_raw is not None else ""
+
+        notify_user_id_raw = discord_dict.get("notify_user_id", "")
+        notify_user_id_val = str(notify_user_id_raw).strip() if notify_user_id_raw is not None else ""
+
         discord = DiscordConfig(
             enabled=discord_dict.get("enabled", True),
             token_env=token_env_val,
             channel_id=channel_id_val,
+            guild_id=guild_id_val,
+            notify_user_id=notify_user_id_val,
         )
 
         # 7. Lifecycle section
@@ -343,6 +351,8 @@ class YamlConfigLoader(ConfigLoader):
                 "enabled": config.discord.enabled,
                 "token_env": config.discord.token_env,
                 "channel_id": config.discord.channel_id,
+                "guild_id": config.discord.guild_id,
+                "notify_user_id": config.discord.notify_user_id,
             },
             "lifecycle": {
                 "queue_completion": config.lifecycle.queue_completion,

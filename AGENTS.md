@@ -27,6 +27,8 @@ Specs 01–03 (Doctor, Queue, Worker) are implemented and tested. Spec 04 (Signa
 - Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (`Status: completed`); never record commit SHA in ticket frontmatter (ADR 0012).
 - Source of truth: Working code, unit tests, and CLI interfaces are authoritative over markdown documentation. Specifications and tickets are ephemeral scaffolding; never modify root living documents (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) without explicit user approval.
 - `.agent/` is untracked runtime state; git-ignore it when implementing.
+- Every ticket must define at least one `### Smoke Scenarios` entry; a ticket with no smoke scenarios is incomplete and the Worker must not emit a ready signal.
+- Every LLM-generated smoke scenario always requires human verification; automated test coverage is recorded as `[also auto-covered]` metadata only, never a substitute for human eyes. The Gatekeeper appends all scenarios to `.agent/smoke_log_<spec-slug>.md` after each passing cycle.
 
 ## Environment
 - Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
@@ -55,6 +57,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 - **Security review**: When explicitly flagged by ticket requirements/frontmatter (`Security: required`) or the user, invoke `/security-review` before committing or emitting `{ticket_id}_ready.json`.
 - **Root-cause debugging**: Build a tight, red-capable feedback loop when diagnosing hard failures: `/diagnosing-bugs`.
 - **Stuck-suite triage**: When the verification suite hangs or cascades, classify the failure and isolate the first failing test before retrying or escalating — `/diagnosing-bugs` § Stuck-Test-Suite Protocol.
+- **Smoke log review**: After all tickets for a spec complete, open `.agent/smoke_log_<spec-slug>.md` and verify each scenario manually. Debug failures interactively with the agent using `/diagnosing-bugs`. File regression tickets manually or use `/smoke-fail` to auto-create one.
 - **Context preservation**: Checkpoint progress to `.agent/checkpoints/{ticket_id}/handoff.md` at 135k tokens: `/handoff`.
 
 ## Agent skills
