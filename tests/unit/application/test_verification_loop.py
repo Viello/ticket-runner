@@ -148,8 +148,8 @@ def test_absent_manual_verification_backward_compatible():
     mock_discord.send.assert_not_called()
 
 
-def test_empty_manual_verification_emits_all_covered_line():
-    """When manual_verification is present but empty, emit all-covered notice and no Discord send."""
+def test_empty_manual_verification_logs_warning():
+    """When manual_verification is present but empty, emit a warning log and no user notification."""
     ticket = _make_ticket()
     ready = ReadySignal(
         ticket_id=ticket.id,
@@ -184,8 +184,8 @@ def test_empty_manual_verification_emits_all_covered_line():
 
     res = asyncio.run(loop.run())
     assert res.is_passed
-    assert len(notified) == 1
-    assert "All Smoke Scenarios covered by automated tests — no manual steps required." in notified[0]
+    # Empty manual_verification => warning only, no user-visible notification
+    assert len(notified) == 0
     mock_discord.send.assert_not_called()
 
 
