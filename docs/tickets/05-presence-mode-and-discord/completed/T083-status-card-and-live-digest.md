@@ -1,5 +1,6 @@
 # T083 — Status Card and Live Digest
-Status: pending
+Status: completed
+Completed: 2026-09-22T16:16:00Z
 Spec: docs/specs/05-presence-mode-and-discord.md
 Blocked by: T082
 
