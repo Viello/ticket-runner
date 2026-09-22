@@ -1,5 +1,6 @@
 # T084 — Discord thread manager (thread-per-ticket lifecycle)
-Status: pending
+Status: completed
+Completed: 2026-09-22T16:32:00Z
 Spec: docs/specs/05-presence-mode-and-discord.md
 Blocked by: T083
 

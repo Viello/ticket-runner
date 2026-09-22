@@ -104,6 +104,8 @@ class FakeDiscordGateway:
         self,
         permissions: list[str] | None = None,
         raise_on_get_permissions: Exception | None = None,
+        create_thread_return: tuple[str, str] | None = None,
+        raise_on_archive_thread: Exception | None = None,
     ) -> None:
         self.calls: list[DiscordCall] = []
         self.messages: dict[str, dict[str, Any]] = {}
@@ -111,6 +113,8 @@ class FakeDiscordGateway:
         self.pinned_messages: list[str] = []
         self.pending_replies: list[str] = []
         self._next_id: int = 1
+        self.create_thread_return: tuple[str, str] | None = create_thread_return
+        self.raise_on_archive_thread: Exception | None = raise_on_archive_thread
         self.permissions: list[str] = (
             list(permissions)
             if permissions is not None
@@ -221,8 +225,11 @@ class FakeDiscordGateway:
         embed: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         """Create thread and starter message in in-memory store and record call."""
-        thread_id = self._generate_id()
-        starter_message_id = self._generate_id()
+        if self.create_thread_return is not None:
+            thread_id, starter_message_id = self.create_thread_return
+        else:
+            thread_id = self._generate_id()
+            starter_message_id = self._generate_id()
 
         self.calls.append(
             DiscordCall(
@@ -284,6 +291,8 @@ class FakeDiscordGateway:
                 kwargs={},
             )
         )
+        if self.raise_on_archive_thread is not None:
+            raise self.raise_on_archive_thread
         thread = self.threads.setdefault(
             thread_id,
             {
