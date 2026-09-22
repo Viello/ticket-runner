@@ -1,68 +1,70 @@
 ---
 name: smoke-fail
-description: "Create a regression ticket from a failed smoke scenario across Ticket Runner, issue trackers, or local scratch files, then initiate diagnosis."
+description: "Triage a failed smoke scenario and resolve it in the current session: diagnose the root cause, fix it, and land the change as a single squash-or-new commit."
 disable-model-invocation: true
 ---
 
 # Smoke Fail Recovery
 
-Triage failed smoke scenarios and generate reproducible regression tickets across any project or tracking system, ensuring human verification scenarios persist through fixes.
+Human-in-the-loop skill. Run when a manual smoke scenario fails. Diagnose and fix in the same session, landing the change in a single commit.
 
-## When to use
+Two paths:
 
-Run `/smoke-fail` whenever a manual check, batch smoke review, PR verification, or ad-hoc smoke test fails.
+- **Squash path** — the latest commit introduced the failing scenario. Amend it: fix folded in, one clean commit.
+- **New-commit path** — intervening commits make amend unsafe. Write a regression ticket, fix it, commit normally.
 
 ---
 
-## Step 1: Detect destination tracker and workspace context
+## Step 1: Git probe — determine squash or new-commit path
 
-Inspect the workspace to determine the primary ticket destination, then confirm with the operator:
+Run `git log --oneline -5`. Check whether the most recent commit references the originating ticket ID, scenario slug, or feature area the failing scenario belongs to.
 
-1. **Ticket Runner directory queue**: detected when `docs/tickets/` exists or `AGENTS.md` defines Ticket Runner architecture.
-   - Target path: `docs/tickets/<spec-slug>/T<NNN>-smoke-regression-<scenario-slug>.md`
-   - Identifier: dynamically inspect `docs/tickets/` across all spec subdirectories (active and `completed/`) to determine the highest existing `T<NNN>` and increment by 1.
-2. **Issue tracker (GitHub, Linear)**: detected when `.github/` exists or git remote points to a hosted repository and tracking CLI (`gh`) is present.
-   - Command: `gh issue create` with labels `bug`, `regression`, `ready-for-agent`.
-3. **Local scratch files**: fallback or lightweight mode.
-   - Target path: `.scratch/<feature-slug>/issues/<NN>-smoke-regression-<scenario-slug>.md`
+When squash-eligible, surface the finding:
 
-Prompt the operator to confirm the detected destination or select an alternative before drafting.
+> *"Latest commit is `<hash> <message>`. Squash the fix into it (amend)?"*
 
-**Completion criterion**: Destination tracker confirmed and target directory or tracker access validated.
+Wait for operator confirmation.
+
+- **Confirmed squash** → go to Step 2 (skip Step 2b tracker detection).
+- **Declined or intervening commits present** → proceed to Step 2b (new-commit path).
+
+**Completion criterion**: Path determined and confirmed by operator.
 
 ---
 
 ## Step 2: Ingest the failed scenario details
 
-Extract failure information using smart intake with manual fallback:
+Extract failure details from durable sources first, interactive intake as fallback:
 
-1. **Inspect durable smoke logs**:
-   - Check `.agent/smoke_log_<spec-slug>.md` if present.
-   - Match the scenario by originating ticket ID or scenario title.
-   - Extract `Setup`, `Steps`, and `Expected` verbatim from the log entry.
-   - Ask the operator for the `Observed` behavior: terminal error, stack trace, unexpected output, or UI divergence.
-2. **Interactive intake (when no smoke log exists)**:
-   - Ask the operator for:
-     - **Originating context**: ticket ID, PR number, commit SHA, or feature area.
-     - **Scenario title**: concise descriptive name.
-     - **Setup**: synthetic configuration, environment variables, or fixtures required.
-     - **Steps**: sequence of human actions executed.
-     - **Observed**: actual behavior observed.
-     - **Expected**: desired behavior expected from the requirement.
+1. **Durable smoke log** (`smoke_log_<spec-slug>.md` or equivalent in the repo): locate entry by ticket ID or scenario title. Extract `Setup`, `Steps`, and `Expected` verbatim. Ask the operator for `Observed`.
+2. **Originating ticket** (`docs/tickets/<spec-slug>/completed/<T-NNN>-<slug>.md` or equivalent): read the `### Smoke Scenarios` section.
+3. **Interactive intake** (when no durable source exists): ask the operator for originating context (ticket ID, PR, SHA, or feature area), scenario title, setup, steps, observed, and expected.
 
-**Completion criterion**: Originating context, scenario name, setup, steps, observed outcome, and expected outcome are fully captured.
+**Completion criterion**: Originating context, scenario title, setup, steps, observed, and expected are fully captured.
+
+---
+
+## Step 2b: Tracker detection *(new-commit path only)*
+
+Detect the primary ticket destination:
+
+1. **Ticket Runner queue** — `docs/tickets/` exists. Target: `docs/tickets/<spec-slug>/T<NNN>-smoke-regression-<scenario-slug>.md`. Determine `<NNN>` by scanning all subdirectories (active and `completed/`) for the highest existing ticket number and incrementing by 1.
+2. **Issue tracker (GitHub / Linear)** — `.github/` exists or `gh` CLI is available. Command: `gh issue create --label bug,regression`.
+3. **Local scratch** — fallback. Target: `.scratch/<feature-slug>/issues/<NN>-smoke-regression-<scenario-slug>.md`.
+
+Confirm with the operator before drafting.
+
+**Completion criterion**: Destination confirmed and path or tracker access validated.
 
 ---
 
 ## Step 3: Draft the regression ticket
 
-Draft the ticket using the template matching the confirmed destination tracker:
+Use as the working spec for diagnosis. On the squash path this draft is in-session only — not written to disk.
 
-### Destination: Ticket Runner Queue
+### Ticket Runner / local scratch template
 
-Adheres strictly to the domain entity parser in `runner.domain.ticket.Ticket.parse`:
-
-<ticket-runner-template>
+```
 # T<NNN> — Smoke regression: <Scenario Title>
 Status: pending
 Spec: docs/specs/<spec-slug>.md
@@ -89,40 +91,11 @@ Blocked by: None
 
 ### Gotchas
 - <Triage insights or quirks noted during failure capture>
-</ticket-runner-template>
+```
 
-### Destination: Local Scratch File
+### GitHub / Linear template
 
-<local-ticket-template>
-# <NN>: Smoke regression: <Scenario Title>
-
-**Originating Context:** <originating_id_or_feature>
-
-**Observed vs Expected:**
-- Observed: <observed_output>
-- Expected: <expected_output>
-
-**Jump-start:**
-- Files to touch: <files_to_touch>
-- Verification command: <verification_command>
-
-**Status:** ready-for-agent
-
-### Acceptance criteria
-- [ ] Reproduce failure with automated test
-- [ ] Fix root defect
-- [ ] Confirm smoke scenario passes
-
-### Smoke Scenarios
-**Scenario: <Scenario Title>**
-- Setup: <setup_steps>
-- Steps: <test_steps>
-- Expected: <expected_output>
-</local-ticket-template>
-
-### Destination: Issue Tracker (GitHub / Linear)
-
-<issue-template>
+```
 ## Originating Context
 Regression observed during smoke testing of <originating_id_or_feature>.
 
@@ -145,33 +118,74 @@ Regression observed during smoke testing of <originating_id_or_feature>.
 ## Jump-start
 - Files to inspect: <files_to_touch>
 - Verification: <verification_command>
-</issue-template>
+```
 
-**Completion criterion**: Regression ticket text completely filled out with concrete paths, observed/expected behaviors, and embedded smoke scenario.
+**New-commit path only**: present the draft to the operator, confirm accuracy, then persist to disk or publish via `gh issue create`. Report the file path or issue URL before proceeding.
 
----
-
-## Step 4: Confirm and persist
-
-1. Present the draft ticket to the operator for review.
-2. Ask: *"Does this accurately capture the failure and reproduction steps?"*
-3. Save or publish upon confirmation:
-   - For file-based destinations (Ticket Runner or local scratch): write the file to the target path and confirm file creation.
-   - For issue trackers: run CLI command (e.g. `gh issue create --title "..." --body "..." --label bug,regression`) and report the created issue URL.
-
-**Completion criterion**: Ticket persisted to disk or published to tracker, and file path or issue URL reported to operator.
+**Completion criterion**: Ticket drafted with concrete paths, observed/expected behaviors, and embedded smoke scenario. (New-commit path: also persisted and confirmed.)
 
 ---
 
-## Step 5: Transition to diagnosis
+## Step 4: Diagnose
 
-Immediately following ticket persistence, prompt the operator to begin diagnosis:
+Load `/diagnosing-bugs`. Anchor the diagnosis loop on the reproduction steps and observed failure from Step 2. Build a tight, red-capable feedback loop before touching any implementation code.
 
-> *"Regression ticket persisted: `<path_or_url>`. Would you like to begin root-cause diagnosis now using `/diagnosing-bugs` to build an isolated red feedback loop?"*
+**Completion criterion**: Feedback loop exists, has gone red at least once on this exact failure.
 
-When accepted:
-1. Load `/diagnosing-bugs`.
-2. Anchor the diagnosis loop on the reproduction steps and observed failure recorded in the regression ticket.
-3. Build the tight automated test or harness before modifying implementation code.
+---
 
-**Completion criterion**: Operator transitioned to diagnosis session or session closed upon operator request.
+## Step 5: Fix and commit
+
+Apply the fix. Run the feedback loop green. Then commit:
+
+### Squash path
+
+1. Append a new entry to the repo's runtime-lessons log (`docs/tickets/gotchas.md` or equivalent):
+
+   ```
+   ### <Scenario Title> — smoke regression (<ISO date>)
+   - Problem: <observed failure, one sentence>
+   - Fix: <what changed and why>
+   - Verification: <command that goes green>
+   ```
+
+2. Stage fix code, regression test, and updated gotchas log.
+
+3. Amend the previous commit:
+   - Keep the original `<type>(<scope>): <Title>` line unchanged.
+   - Append a new imperative bullet to the commit body describing the fix.
+   - Update the `Manual verification required:` trailing section — mark the scenario `[fixed in this amend]`.
+   - Run `git commit --amend`.
+
+4. Report the amended commit hash and updated message to the operator.
+
+**Completion criterion**: `git log -1` shows one commit with the fix folded in and the amended message includes `[fixed in this amend]`.
+
+---
+
+### New-commit path
+
+1. Move the regression ticket to `completed/` and set `Status: completed` with `Completed: <ISO-8601-UTC>`.
+
+2. Append the same gotchas entry as the squash path.
+
+3. Stage fix code, regression test, relocated ticket file, and updated gotchas log.
+
+4. Commit following repo convention (`<type>(<scope>): <Title>`, bulleted imperative body). Include a `Manual verification required:` trailing section listing the smoke scenario, tagged `[also auto-covered]` where the regression test exercises it end-to-end.
+
+5. Report the commit hash and message to the operator.
+
+**Completion criterion**: Ticket in `completed/`, commit recorded, operator confirmed.
+
+---
+
+## Step 6: Verify smoke scenario
+
+Walk the operator through the `### Smoke Scenarios` steps from the ticket draft. Human eyes required regardless of automated coverage.
+
+Append a passing entry to the smoke log if the repo maintains one.
+
+If the scenario still fails, re-enter Step 4.
+
+**Completion criterion**: Operator confirms the smoke scenario passes.
+
