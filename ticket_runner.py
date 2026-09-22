@@ -288,12 +288,6 @@ async def run_start(
         ui_event_sink=ui_event_sink,
     )
 
-    if crash_recovery is not None:
-        try:
-            await crash_recovery.recover()
-        except Exception as exc:
-            print(f"\n[Runner] Error during crash recovery: {exc}")
-
     if stop_event is None:
         stop_event = asyncio.Event()
 
@@ -357,6 +351,15 @@ async def run_start(
 
     draining = False
     try:
+        if crash_recovery is not None:
+            try:
+                await crash_recovery.recover()
+            except Exception as exc:
+                print(f"\n[Runner] Error during crash recovery: {exc}")
+
+        if shutting_down:
+            return 130
+
         exit_code = await orchestrator.run_lifecycle(
             lifecycle=config.lifecycle,
             poll_interval=effective_poll_interval,

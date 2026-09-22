@@ -138,3 +138,41 @@ def test_select_host_interactive_os_error_falls_back_to_highest_priority() -> No
     )
     selected = prompt.select_host(["pwsh.exe", "cmd.exe"])
     assert selected == "pwsh.exe"
+
+
+def test_terminal_intervention_gateway_prompt_escalation_yes() -> None:
+    from pathlib import Path
+    from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
+    from runner.domain.exceptions import NonInteractiveError
+    from runner.domain.ticket import Ticket, TicketStatus
+
+    ticket = Ticket(
+        id="T066",
+        title="Test Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/10.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path("docs/tickets/10/T066.md"),
+    )
+
+    # Operator inputs "y"
+    gateway = TerminalInterventionGateway(input_fn=lambda prompt: "y")
+    assert gateway.prompt_escalation(ticket, "report content") is True
+
+    # Operator hits Enter (empty string)
+    gateway_enter = TerminalInterventionGateway(input_fn=lambda prompt: "")
+    assert gateway_enter.prompt_escalation(ticket, "report content") is True
+
+    # Operator inputs "n"
+    gateway_no = TerminalInterventionGateway(input_fn=lambda prompt: "n")
+    assert gateway_no.prompt_escalation(ticket, "report content") is False
+
+    # Non-interactive stdin raises NonInteractiveError
+    def raise_eof(p: str) -> str:
+        raise EOFError()
+
+    gateway_non_interactive = TerminalInterventionGateway(input_fn=raise_eof)
+    with pytest.raises(NonInteractiveError):
+        gateway_non_interactive.prompt_escalation(ticket, "report content")

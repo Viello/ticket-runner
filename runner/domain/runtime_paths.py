@@ -57,6 +57,11 @@ class RuntimePaths:
         """Path to the runner state file (.agent/state.json)."""
         return self.root_dir / "state.json"
 
+    @property
+    def status_file(self) -> Path:
+        """Path to the runner status file (.agent/status.json)."""
+        return self.root_dir / "status.json"
+
     def ready_signal_path(self, ticket_id: str) -> Path:
         """Path to a ticket's ready signal file (.agent/signals/{ticket_id}_ready.json)."""
         return self.signals_dir / f"{ticket_id}_ready.json"
@@ -92,6 +97,10 @@ class RuntimePaths:
     def session_stderr_log_path(self, ticket_id: str, session_id: str) -> Path:
         """Alias to session_stderr_path for caller convenience."""
         return self.session_stderr_path(ticket_id, session_id)
+
+    def diagnostic_log_path(self, ticket_id: str) -> Path:
+        """Path to a ticket's diagnostic report log (.agent/logs/{ticket_id}_diagnostic.md)."""
+        return self.logs_dir / f"{ticket_id}_diagnostic.md"
 
     def safe_session_paths(
         self, ticket_id: str, session_id: str

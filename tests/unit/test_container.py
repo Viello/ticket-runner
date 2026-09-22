@@ -106,3 +106,26 @@ def test_build_container_auto_session_terminal_fallback_when_unresolved(tmp_path
     assert container.tui_coordinator.terminal_host == "wt.exe"
 
 
+def test_build_container_wires_default_status_publisher(tmp_path: Path) -> None:
+    config = _make_config()
+    container = build_container(config=config, cwd=tmp_path)
+
+    from runner.adapters.json_status_publisher import JsonFileStatusPublisher
+    assert isinstance(container.status_publisher, JsonFileStatusPublisher)
+    assert container.status_publisher.path == (tmp_path / ".agent" / "status.json")
+
+
+def test_build_container_allows_status_publisher_override(tmp_path: Path) -> None:
+    config = _make_config()
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+    fake_publisher = FakeStatusPublisher()
+
+    container = build_container(
+        config=config,
+        cwd=tmp_path,
+        status_publisher=fake_publisher,
+    )
+
+    assert container.status_publisher is fake_publisher
+
+

@@ -173,6 +173,47 @@ class DirectoryTicketStore(TicketRepository):
         pending = self.list_pending(spec_slug=spec_slug)
         return pending[0] if pending else None
 
+    def is_completed(self, ticket_id: str) -> bool:
+        """Check whether a ticket is already completed or located in completed/."""
+        if not self.exists():
+            return False
+
+        ticket_str = ticket_id.strip()
+        for spec_dir in self._get_spec_directories():
+            completed_dir = spec_dir / ARCHIVED_DIRECTORY_NAME
+            if completed_dir.is_dir():
+                for file_path in completed_dir.iterdir():
+                    if not self._is_valid_ticket_file(file_path):
+                        continue
+                    if (
+                        file_path.stem == ticket_str
+                        or file_path.stem.startswith(f"{ticket_str}-")
+                        or file_path.stem.startswith(f"{ticket_str}_")
+                        or file_path.name.startswith(ticket_str)
+                    ):
+                        return True
+                    try:
+                        parsed = self._parser.parse(file_path)
+                        if parsed.id == ticket_str:
+                            return True
+                    except Exception:
+                        pass
+
+            for file_path in spec_dir.iterdir():
+                if not self._is_valid_ticket_file(file_path):
+                    continue
+                try:
+                    parsed = self._parser.parse(file_path)
+                    if parsed.id == ticket_str and parsed.status in (
+                        TicketStatus.COMPLETED,
+                        TicketStatus.SKIPPED,
+                    ):
+                        return True
+                except Exception:
+                    pass
+
+        return False
+
     def _resolve_ticket_path(self, ticket: Ticket | Path | str) -> Path:
         """Resolve a ticket argument to an existing ticket file Path."""
         if isinstance(ticket, Ticket):

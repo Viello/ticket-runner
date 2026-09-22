@@ -14,6 +14,7 @@ from runner.application.gatekeeper import (
     CommandOutcome,
     GatekeeperCommandExecutor,
     VerificationReport,
+    inject_test_timeout,
     resolve_shell,
 )
 from runner.domain.config import VerificationConfig
@@ -488,3 +489,210 @@ def test_only_leading_token_is_resolved_never_full_command() -> None:
     assert resolved_tokens == ["python"]
     assert fake_runner.spawns == [_windows_argv("python -m pytest -q")]
     assert report.passed is True
+
+
+# --- T064: Silence Window, HANG Classification, and Per-Test Timeout Injection ---
+
+
+def test_silence_window_kills_hanging_process_and_surfaces_hang() -> None:
+    """A subprocess that emits one line then goes silent for > silence_window_seconds is killed with HANG reason."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        _windows_argv(TEST_CMD),
+        stdout_lines=["line 1", "line 2"],
+        line_delays=[0.0, 0.2],
+    )
+
+    executor = _make_executor(fake_runner, platform="win32")
+
+    async def _run() -> CommandOutcome:
+        return await executor._execute(
+            "test", TEST_CMD, timeout_seconds=5, silence_window_seconds=0.05
+        )
+
+    outcome = asyncio.run(_run())
+
+    assert handle.terminated is True
+    assert outcome.timed_out is True
+    assert outcome.termination_reason == "HANG"
+    assert outcome.passed is False
+    assert "line 1" in outcome.tail
+    assert "line 2" not in outcome.tail
+
+
+def test_silence_window_resets_on_each_received_line() -> None:
+    """The silence window timer resets on each received line, not just process start."""
+    fake_runner = FakeCommandRunner()
+    # 3 lines with 0.03s delay between them.
+    # Total duration = 0.09s > silence_window of 0.06s.
+    # Because each gap is 0.03s < 0.06s, it must NOT be killed!
+    handle = fake_runner.register_spawn(
+        _windows_argv(TEST_CMD),
+        stdout_lines=["line 1", "line 2", "line 3"],
+        line_delays=[0.03, 0.03, 0.03],
+    )
+
+    executor = _make_executor(fake_runner, platform="win32")
+
+    async def _run() -> CommandOutcome:
+        return await executor._execute(
+            "test", TEST_CMD, timeout_seconds=5, silence_window_seconds=0.06
+        )
+
+    outcome = asyncio.run(_run())
+
+    assert handle.terminated is False
+    assert outcome.timed_out is False
+    assert outcome.termination_reason is None
+    assert outcome.exit_code == 0
+    assert outcome.passed is True
+    assert "line 1\nline 2\nline 3" in outcome.tail
+
+
+def test_normal_completion_before_silence_window_returns_exit_0() -> None:
+    """A subprocess that completes normally in < silence_window_seconds returns exit code 0."""
+    fake_runner = FakeCommandRunner()
+    handle = fake_runner.register_spawn(
+        _windows_argv(TEST_CMD),
+        stdout_lines=["all good"],
+    )
+
+    executor = _make_executor(fake_runner, platform="win32")
+    config = VerificationConfig(test_cmd=TEST_CMD, silence_window_seconds=10)
+    report = _verify(executor, config)
+
+    assert handle.terminated is False
+    assert report.passed is True
+    assert report.results[0].exit_code == 0
+    assert report.results[0].termination_reason is None
+
+
+def test_verify_injects_pytest_timeout_flag() -> None:
+    """When per_test_timeout_seconds > 0 and test_cmd contains pytest, --timeout=N is injected."""
+    fake_runner = FakeCommandRunner()
+    expected_cmd = "pytest --timeout=10 -q"
+    fake_runner.register_spawn(
+        _windows_argv(expected_cmd),
+        stdout_lines=["1 passed in 0.5s"],
+    )
+
+    executor = _make_executor(fake_runner, platform="win32")
+    config = VerificationConfig(
+        test_cmd="pytest -q",
+        per_test_timeout_seconds=10,
+    )
+    report = _verify(executor, config)
+
+    assert report.passed is True
+    assert len(fake_runner.spawns) == 1
+    _assert_windows_shell_call(fake_runner.spawns[0], expected_cmd)
+
+
+def test_verify_cargo_test_has_no_flag_injected() -> None:
+    """When test_cmd contains cargo test, no extra flag is injected regardless of per_test_timeout_seconds."""
+    fake_runner = FakeCommandRunner()
+    expected_cmd = "cargo test"
+    fake_runner.register_spawn(
+        _windows_argv(expected_cmd),
+        stdout_lines=["test result: ok"],
+    )
+
+    executor = _make_executor(fake_runner, platform="win32")
+    config = VerificationConfig(
+        test_cmd="cargo test",
+        per_test_timeout_seconds=15,
+    )
+    report = _verify(executor, config)
+
+    assert report.passed is True
+    assert len(fake_runner.spawns) == 1
+    _assert_windows_shell_call(fake_runner.spawns[0], expected_cmd)
+
+
+def test_inject_test_timeout_frameworks() -> None:
+    """Test framework detection and flag injection across all supported and unsupported frameworks."""
+    # pytest
+    assert inject_test_timeout("pytest", 5) == "pytest --timeout=5"
+    assert inject_test_timeout("pytest -v", 5) == "pytest --timeout=5 -v"
+    assert inject_test_timeout("python -m pytest tests/", 5) == "python -m pytest --timeout=5 tests/"
+
+    # jest / vitest
+    assert inject_test_timeout("jest", 3) == "jest --testTimeout=3000"
+    assert inject_test_timeout("npx jest --bail", 3) == "npx jest --testTimeout=3000 --bail"
+    assert inject_test_timeout("vitest run", 4) == "vitest --testTimeout=4000 run"
+
+    # go test
+    assert inject_test_timeout("go test ./...", 30) == "go test -timeout 30s ./..."
+
+    # unsupported: cargo test, dotnet test, unknown
+    assert inject_test_timeout("cargo test", 10) == "cargo test"
+    assert inject_test_timeout("dotnet test", 10) == "dotnet test"
+    assert inject_test_timeout("make test", 10) == "make test"
+
+    # disabled (<= 0)
+    assert inject_test_timeout("pytest -q", 0) == "pytest -q"
+    assert inject_test_timeout("pytest -q", -5) == "pytest -q"
+
+
+def test_inject_test_timeout_security_safeguards() -> None:
+    """Verify timeout flag injection safely constructs commands without shell evaluation or argument injection."""
+    # Boolean or non-integer per_test_timeout_seconds is ignored
+    assert inject_test_timeout("pytest", True) == "pytest"  # type: ignore[arg-type]
+    assert inject_test_timeout("pytest", "10; rm -rf /") == "pytest"  # type: ignore[arg-type]
+
+    # Malicious shell characters in test_cmd are not evaluated
+    res = inject_test_timeout("pytest `whoami` $(id)", 10)
+    assert res == "pytest --timeout=10 `whoami` $(id)"
+
+    # Flag is never placed at index 0 where it would shadow executable
+    injected = inject_test_timeout("pytest -q", 10)
+    from runner.application.gatekeeper import leading_command_token
+
+    assert leading_command_token(injected) == "pytest"
+
+
+def test_process_tree_termination_handles_already_exited_process_cleanly() -> None:
+    """Process tree termination cleanly handles already-exited processes without unhandled exceptions."""
+    fake_runner = FakeCommandRunner()
+
+    class ExitedHandle(FakeProcessHandle):
+        def __init__(self) -> None:
+            super().__init__(wait_delay=5.0)
+
+        async def terminate(self) -> None:
+            self.terminated = True
+            raise ProcessLookupError("process already exited")
+
+    handle = ExitedHandle()
+    fake_runner.register_spawn_handle(_windows_argv(TEST_CMD), handle)
+
+    executor = _make_executor(fake_runner, platform="win32")
+
+    async def _run() -> CommandOutcome:
+        return await executor._execute(
+            "test", TEST_CMD, timeout_seconds=1, silence_window_seconds=0.01
+        )
+
+    # Must complete cleanly without raising ProcessLookupError
+    outcome = asyncio.run(_run())
+    assert outcome.termination_reason == "HANG"
+    assert outcome.timed_out is True
+
+
+def test_format_diagnostic_hang_rendering() -> None:
+    """_format_diagnostic renders hung status when termination_reason is HANG."""
+    from runner.application.gatekeeper import _format_diagnostic
+
+    outcome = CommandOutcome(
+        label="test",
+        command="pytest -q",
+        exit_code=None,
+        timed_out=True,
+        tail="some test output",
+        termination_reason="HANG",
+    )
+    diagnostic = _format_diagnostic(outcome, timeout_seconds=300, silence_window_seconds=60)
+    assert "$ pytest -q" in diagnostic
+    assert "hung (silence window of 60s exceeded)" in diagnostic
+    assert "some test output" in diagnostic
+

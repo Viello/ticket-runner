@@ -15,6 +15,7 @@ from runner.application.gatekeeper import (
     VerificationReport,
     WorkerCycleRunner,
     build_verification_failure_prompt,
+    inject_test_timeout,
 )
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import (
@@ -83,5 +84,6 @@ __all__ = [
     "build_verification_failure_prompt",
     "default_recovery_confirmation",
     "extract_invariants",
+    "inject_test_timeout",
 ]
 

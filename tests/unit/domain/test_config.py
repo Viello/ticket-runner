@@ -51,34 +51,57 @@ def test_verification_config_valid() -> None:
         build_cmd="npm run build",
         max_attempts=3,
         timeout_seconds=300,
+        silence_window_seconds=60,
+        per_test_timeout_seconds=0,
+        isolation_cmd="",
+        bug_escalation_at=1,
     )
     assert cfg.test_cmd == "pytest"
     assert cfg.build_cmd == "npm run build"
     assert cfg.max_attempts == 3
     assert cfg.timeout_seconds == 300
+    assert cfg.silence_window_seconds == 60
+    assert cfg.per_test_timeout_seconds == 0
+    assert cfg.isolation_cmd == ""
+    assert cfg.bug_escalation_at == 1
+
+
+def test_verification_config_defaults() -> None:
+    cfg = VerificationConfig(test_cmd="pytest")
+    assert cfg.build_cmd == ""
+    assert cfg.max_attempts == 3
+    assert cfg.timeout_seconds == 300
+    assert cfg.silence_window_seconds == 60
+    assert cfg.per_test_timeout_seconds == 0
+    assert cfg.isolation_cmd == ""
+    assert cfg.bug_escalation_at == 1
 
 
 @pytest.mark.parametrize(
-    ("test_cmd", "max_attempts", "timeout_seconds"),
+    ("kwargs", "match"),
     [
-        ("", 3, 300),        # empty test_cmd
-        ("   ", 3, 300),     # whitespace test_cmd
-        ("pytest", 0, 300),  # zero max_attempts
-        ("pytest", -1, 300), # negative max_attempts
-        ("pytest", 3, 0),    # zero timeout
-        ("pytest", 3, -10),  # negative timeout
+        ({"test_cmd": ""}, "test_cmd"),
+        ({"test_cmd": "   "}, "test_cmd"),
+        ({"build_cmd": 123}, "build_cmd"),
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"max_attempts": -1}, "max_attempts"),
+        ({"timeout_seconds": 0}, "timeout_seconds"),
+        ({"timeout_seconds": -10}, "timeout_seconds"),
+        ({"silence_window_seconds": 0}, "silence_window_seconds"),
+        ({"silence_window_seconds": -1}, "silence_window_seconds"),
+        ({"silence_window_seconds": True}, "silence_window_seconds"),
+        ({"per_test_timeout_seconds": -1}, "per_test_timeout_seconds"),
+        ({"per_test_timeout_seconds": True}, "per_test_timeout_seconds"),
+        ({"isolation_cmd": 123}, "isolation_cmd"),
+        ({"bug_escalation_at": -2}, "bug_escalation_at"),
+        ({"bug_escalation_at": True}, "bug_escalation_at"),
     ],
 )
-def test_verification_config_invalid(
-    test_cmd: str, max_attempts: int, timeout_seconds: int
-) -> None:
-    with pytest.raises(ConfigError):
-        VerificationConfig(
-            test_cmd=test_cmd,
-            build_cmd="",
-            max_attempts=max_attempts,
-            timeout_seconds=timeout_seconds,
-        )
+def test_verification_config_invalid(kwargs: dict[str, object], match: str) -> None:
+    params: dict[str, object] = {"test_cmd": "pytest"}
+    params.update(kwargs)
+    with pytest.raises(ConfigError, match=match):
+        VerificationConfig(**params)  # type: ignore[arg-type]
 
 
 def test_presence_config_valid() -> None:

@@ -31,6 +31,7 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor as TicketProcessorProtocol,
 )
+from runner.application.git_operations import GitOperations
 from runner.domain.config import VerificationConfig, WorkerConfig
 from runner.domain.exceptions import SignalFormatError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
@@ -38,6 +39,7 @@ from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.status_publisher import StatusPublisher
 
 _DEFAULT_PRINTER: Callable[[str], None] = print
 
@@ -62,10 +64,27 @@ class GatekeeperTicketProcessor:
         printer: Callable[[str], None] | None = _DEFAULT_PRINTER,
         notify: Callable[[str], None] | None = None,
         state_coordinator: StateCoordinator | None = None,
+        discord_adapter: Any | None = None,
+        runtime_paths: RuntimePaths | None = None,
+        token_budget: Any | None = None,
+        status_publisher: StatusPublisher | None = None,
+        git_operations: GitOperations | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
         self._state_coordinator = state_coordinator
+        self._discord_adapter = discord_adapter
+        self._runtime_paths = runtime_paths
+        self._token_budget = token_budget
+        self._status_publisher = status_publisher
+        if git_operations is not None:
+            self._git_operations = git_operations
+        elif coordinator is not None and getattr(coordinator, "git_operations", None) is not None:
+            self._git_operations = coordinator.git_operations
+        elif coordinator is not None and getattr(coordinator, "_git_operations", None) is not None:
+            self._git_operations = coordinator._git_operations
+        else:
+            self._git_operations = None
         if self._notify_sink is None and coordinator is not None and getattr(coordinator, "_notify", None) is not None:
             self._notify_sink = coordinator._notify
 
@@ -247,11 +266,31 @@ class GatekeeperTicketProcessor:
             if "notify" in sig.parameters or any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
-                loop_kwargs["notify"] = self._notify
+                loop_kwargs["notify"] = self._notify_sink
             if "state_coordinator" in sig.parameters or any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["state_coordinator"] = self._state_coordinator
+            if "discord_adapter" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["discord_adapter"] = self._discord_adapter
+            if "runtime_paths" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["runtime_paths"] = self._runtime_paths
+            if "token_budget" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["token_budget"] = self._token_budget
+            if "status_publisher" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["status_publisher"] = self._status_publisher
+            if "git_operations" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["git_operations"] = self._git_operations
         except (ValueError, TypeError):
             pass
 
@@ -268,7 +307,12 @@ class GatekeeperTicketProcessor:
             if result.is_passed:
                 ready_signal = result.ready_signal
                 if ready_signal is not None:
-                    changes = tuple(f"Update {p}" for p in ready_signal.modified_files)
+                    changes_list = [f"Update {p}" for p in ready_signal.modified_files]
+                    if ready_signal.manual_verification:
+                        changes_list.append("Manual verification required:")
+                        for s in ready_signal.manual_verification:
+                            changes_list.append(f"- {s.get('name', '')}")
+                    changes = tuple(changes_list)
                     new_gotchas = ready_signal.new_gotchas
                     scope = ready_signal.scope
                     if ready_signal.self_review_notes and self._printer is not None:
@@ -287,6 +331,13 @@ class GatekeeperTicketProcessor:
             if result.is_skipped:
                 diagnostics = result.diagnostics or loop.last_diagnostics or ""
                 return TicketOutcome.skipped(details=diagnostics)
+
+            if result.is_intervention_requested:
+                diagnostics = result.diagnostics or loop.last_diagnostics or ""
+                return TicketOutcome.intervention_requested(
+                    diagnostic=result.failure_diagnostic,
+                    details=diagnostics,
+                )
 
             if result.is_question_pending:
                 # Precedence: check if a valid ready signal exists (ready wins)

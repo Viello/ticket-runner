@@ -29,12 +29,16 @@ class FakeProcessHandle:
         exit_code: int = 0,
         pid: int = 12345,
         delay: float = 0.0,
+        line_delays: list[float] | None = None,
+        wait_delay: float = 0.0,
     ) -> None:
         self._raw_lines = list(stdout_lines or [])
         self._stderr = stderr
         self._exit_code = exit_code
         self._pid = pid
         self._delay = delay
+        self._line_delays = list(line_delays) if line_delays is not None else None
+        self._wait_delay = wait_delay
         self.terminated = False
         self.closed = False
 
@@ -50,11 +54,18 @@ class FakeProcessHandle:
 
     async def stdout_lines(self) -> AsyncIterator[str]:
         """Yield scripted stdout lines with line endings stripped."""
-        for line in self._raw_lines:
-            if self.terminated or self.closed:
+        for idx, line in enumerate(self._raw_lines):
+            if self.terminated:
                 break
-            if self._delay > 0:
-                await asyncio.sleep(self._delay)
+            current_delay = (
+                self._line_delays[idx]
+                if self._line_delays is not None and idx < len(self._line_delays)
+                else self._delay
+            )
+            if current_delay > 0:
+                await asyncio.sleep(current_delay)
+            if self.terminated:
+                break
             yield line.rstrip("\r\n")
 
     def __aiter__(self) -> AsyncIterator[str]:
@@ -63,6 +74,12 @@ class FakeProcessHandle:
 
     async def wait(self) -> int:
         """Return scripted exit code and close handle."""
+        if self._wait_delay > 0:
+            await asyncio.sleep(self._wait_delay)
+        elif self._line_delays:
+            await asyncio.sleep(sum(self._line_delays))
+        elif self._delay > 0 and self._raw_lines:
+            await asyncio.sleep(self._delay * len(self._raw_lines))
         self.closed = True
         return self._exit_code
 
@@ -143,6 +160,7 @@ class FakeCommandRunner:
         exit_code: int = 0,
         pid: int = 12345,
         delay: float = 0.0,
+        line_delays: list[float] | None = None,
     ) -> FakeProcessHandle:
         """Register scripted spawn outputs for a command."""
         key = self._normalize_key(cmd)
@@ -152,6 +170,7 @@ class FakeCommandRunner:
             exit_code=exit_code,
             pid=pid,
             delay=delay,
+            line_delays=line_delays,
         )
         self._spawn_registrations[key] = handle
         self._spawn_sequences.setdefault(key, []).append(handle)

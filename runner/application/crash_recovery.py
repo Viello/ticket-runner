@@ -297,6 +297,29 @@ class CrashRecoveryCoordinator:
 
         ticket_id = runner_state.active_ticket_id
 
+        # Check if the active ticket is already completed
+        if self._ticket_store is not None:
+            try:
+                if self._ticket_store.is_completed(ticket_id):
+                    msg = (
+                        f"[Runner] Active ticket '{ticket_id}' from state is already completed. "
+                        "Resetting state to idle."
+                    )
+                    logger.info(msg)
+                    self._log_or_print(msg)
+                    clean_state = RunnerState.idle(
+                        branch=runner_state.branch or "agent/ticket-runner",
+                        selected_model=runner_state.selected_model,
+                        presence_mode=runner_state.presence_mode,
+                    )
+                    if self._state_coordinator is not None:
+                        self._state_coordinator.save_state(clean_state)
+                    else:
+                        self._state_store.write(clean_state.to_dict())
+                    return RecoveryResult(action="none", recovered=False)
+            except Exception as exc:
+                logger.warning(f"Failed to check completion status for ticket '{ticket_id}': {exc}")
+
         # 3. Inspect working tree status
         try:
             status_output = await self._git_operations.status_porcelain()
@@ -330,22 +353,42 @@ class CrashRecoveryCoordinator:
         resumption_failed = False
         resumed_run: SessionRunResult | None = None
 
+        # Check if the recorded session is known to be dead/stalled
         if runner_state.opencode_session_id is not None:
-            try:
-                resumed_run = await self._worker_supervisor.run(
-                    ticket=self._resolve_ticket(ticket_id),
-                    prompt=reconnect_prompt,
-                    session_id=runner_state.opencode_session_id,
+            diag_file = self._runtime_paths.diagnostic_log_path(ticket_id)
+            is_stalled = False
+            if diag_file.is_file():
+                try:
+                    content = diag_file.read_text(encoding="utf-8", errors="ignore")
+                    if "NO_SIGNAL_AFTER_NUDGE" in content or "STALL" in content:
+                        is_stalled = True
+                except Exception:
+                    pass
+
+            if is_stalled:
+                msg = (
+                    f"[Runner] Session '{runner_state.opencode_session_id}' for ticket '{ticket_id}' "
+                    "previously stalled. Bypassing dead session to start clean recovery."
                 )
-                if (
-                    resumed_run.is_crash
-                    or resumed_run.exit_code != 0
-                    or resumed_run.reason in (RunTerminationReason.DROPPED, RunTerminationReason.STALLED)
-                ):
-                    resumption_failed = True
-            except Exception as exc:
-                logger.warning(f"Session resumption failed with exception: {exc}")
+                logger.info(msg)
+                self._log_or_print(msg)
                 resumption_failed = True
+            else:
+                try:
+                    resumed_run = await self._worker_supervisor.run(
+                        ticket=self._resolve_ticket(ticket_id),
+                        prompt=reconnect_prompt,
+                        session_id=runner_state.opencode_session_id,
+                    )
+                    if (
+                        resumed_run.is_crash
+                        or resumed_run.exit_code != 0
+                        or resumed_run.reason in (RunTerminationReason.DROPPED, RunTerminationReason.STALLED)
+                    ):
+                        resumption_failed = True
+                except Exception as exc:
+                    logger.warning(f"Session resumption failed with exception: {exc}")
+                    resumption_failed = True
         else:
             resumption_failed = True
 

@@ -136,3 +136,62 @@ Required before declaring done:
 - [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
 - [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
 - [ ] The hypothesis that turned out correct is stated in the commit / PR message, so the next debugger learns
+
+---
+
+## Stuck-Test-Suite Protocol
+
+*Enter this protocol when the test suite itself is the obstacle — not the bug inside it. Symptoms: the suite hangs without printing a result, or a cascade of 10+ failures drowns any signal. The regular phases assume a feedback loop exists; this protocol builds one when the loop is broken.*
+
+### Phase A: Observe
+
+Before doing anything else, describe what you are actually seeing:
+
+- Is the test process **still running** or did it exit?
+- Is there **any output at all**, or did it go silent partway through?
+- Did output stop after a specific test name, a specific module import, or immediately at start?
+
+You cannot classify the failure until you can answer these. If the process is still running and silent, it is almost certainly blocked — on I/O, a lock, an event, or an infinite loop. Do not wait for it: kill it, note the last line emitted, and proceed.
+
+Capture the exact last line(s) of output before silence or exit. That line is your first clue.
+
+### Phase B: Classify
+
+Assign one of four labels based on what you observed. The label determines what you fix first:
+
+- **HANG** — the process was running but emitted no output for an extended period (30+ seconds for a fast machine, 60–120 s for a slow one). Root cause is almost always blocking I/O: a test waiting on stdin, a TTY interaction, an asyncio event that never fires, or a thread deadlock. The fix is in the code that blocks, not in the test harness.
+
+- **CASCADE** — many tests failed (typically 5 or more) and the same error class, module, or import appears in most of them. One broken thing is killing everything downstream. The fix is the root import or initialization, not each individual test.
+
+- **ENV** — the failure happens before a single test runs: a missing module, a wrong working directory, a missing binary, an incompatible dependency version. The suite is fine; the environment is wrong. Fix the environment, then re-run.
+
+- **FLAKY** — exit is non-zero but nothing above fits: a small number of failures, no obvious pattern, no silence. Could be timing, ordering, or external state. Proceed to Phase C to isolate before guessing.
+
+If you are unsure between HANG and CASCADE: HANG takes priority. A suite can produce many failures *before* going silent. Classify as HANG if there was a silence period, even if failures preceded it.
+
+### Phase C: Isolate
+
+The goal of isolation is a single-failure trace — the smallest invocation that reproduces the problem cleanly. Once you have it, the regular phases (Phase 1 onwards) become applicable again.
+
+Run the **first failing test alone**. Use whatever invocation your test runner supports for single-test selection. Do not run the full suite again yet.
+
+- If the isolated run **also fails**: you have a clean, minimal repro. The failure is in that test or what it imports. Now go to Phase 1 and build a tight loop around this single test.
+- If the isolated run **passes**: the failure depends on test-ordering or shared state. The root cause is a side effect leaking between tests. Look for shared global state, module-level initialization, or database fixtures that are not reset between tests.
+- If the isolated run **also hangs**: the HANG is reproducible in isolation. That specific test is blocking. Instrument it: add a print before every I/O call, every lock acquire, every `await`. The last print before silence is the site.
+
+For a CASCADE, after running the first failing test in isolation, also check whether the top-repeating error class appears on its own (e.g. import the affected module directly in a REPL or scratch script). A module-level `ImportError` will reproduce instantly without running any test.
+
+For an ENV failure, check the environment directly: verify the missing dependency is installed, the working directory is correct, and the binary is on PATH.
+
+### Phase D: Escalate
+
+If isolation did not produce a reproducible single-failure in one or two attempts, stop and escalate rather than guessing:
+
+1. **State your classification** (HANG / CASCADE / ENV / FLAKY) and what evidence led to it.
+2. **Report the last line before silence** (for HANG) or the **top repeating error** (for CASCADE).
+3. **Report what isolation produced**: did the first test pass alone? Did it also hang?
+4. **Ask**: should we apply the `/diagnosing-bugs` skill from Phase 1 against this specific isolated case? If yes, re-enter the skill with the isolated single-test loop as the feedback loop.
+
+Do not burn more retries on the full suite until the isolated case is understood. A fresh attempt against an undiagnosed suite will produce identical output and identical failure.
+
+If you are the orchestrator (Ticket Runner), emit a ready signal only after the isolated case passes or the escalation is documented. Never emit a ready signal while the test suite is still in a stuck state.

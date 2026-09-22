@@ -29,11 +29,14 @@ class FakeInterventionGateway:
         self,
         answers: list[str] | None = None,
         decisions: list[InterventionDecision | str] | None = None,
+        escalation_answers: list[bool | Exception] | None = None,
     ) -> None:
         self._answers = list(answers or [])
         self._decisions = [self._coerce(decision) for decision in (decisions or [])]
+        self._escalation_answers = list(escalation_answers or [])
         self.question_prompts: list[QuestionSignal] = []
         self.request_records: list[InterventionRecord] = []
+        self.escalation_records: list[tuple[Ticket, str]] = []
 
     @staticmethod
     def _coerce(decision: InterventionDecision | str) -> InterventionDecision:
@@ -64,3 +67,14 @@ class FakeInterventionGateway:
                 "scripted decisions remaining"
             )
         return self._decisions.pop(0)
+
+    def prompt_escalation(self, ticket: Ticket, report: str) -> bool:
+        """Record escalation prompt and return queued answer (defaults to False if unscripted)."""
+        self.escalation_records.append((ticket, report))
+        if not self._escalation_answers:
+            return False
+        ans = self._escalation_answers.pop(0)
+        if isinstance(ans, Exception):
+            raise ans
+        return bool(ans)
+

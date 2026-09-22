@@ -31,8 +31,26 @@ verification:
   build_cmd: ""
   # Total Verification Attempts before the Circuit Breaker trips
   max_attempts: 3
-  # Maximum execution time in seconds for verification commands
+  # Maximum execution time in seconds for the full verification run
   timeout_seconds: 300
+  # Kill the verification subprocess if no stdout/stderr arrives for this many seconds.
+  # NOTE: this guards the *test process*, not the Worker session (which has its own stall timeout).
+  # Raise this value on slow hardware to avoid false-alarm kills during long test setup.
+  silence_window_seconds: 60
+  # When > 0, inject a runner-native per-test timeout flag (e.g. --timeout=N for pytest,
+  # --testTimeout=N*1000 for jest/vitest, -timeout Ns for go test). 0 = disabled.
+  # Runners without native support (cargo, dotnet) are unaffected; silence_window_seconds
+  # remains their only guard.
+  per_test_timeout_seconds: 0
+  # Optional override for single-test isolation rerun. Use {test_id} as the placeholder.
+  # Example: "pytest {test_id} -x"  or  "go test -run {test_name} ./..."
+  # Leave empty to use the built-in runner heuristic.
+  isolation_cmd: ""
+  # Escalate the structured diagnostic report after this attempt number.
+  #   -1 = only when the Circuit Breaker trips (all attempts exhausted)
+  #    0 = never escalate automatically
+  #    N = escalate after the Nth attempt (and always at Circuit Breaker)
+  bug_escalation_at: 1
 
 tokens:
   # Token threshold to emit a warning to terminal / Discord

@@ -12,16 +12,27 @@ import inspect
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
+import time
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.discord import DiscordAdapter
+from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
-from runner.domain.config import VerificationConfig
-from runner.domain.exceptions import SignalFormatError, UserAbortError
+from runner.domain.config import TokenBudgetConfig, VerificationConfig
+from runner.domain.exceptions import NonInteractiveError, SignalFormatError, UserAbortError
+from runner.domain.failure_analyser import (
+    FailureDiagnostic,
+    analyse,
+    render_diagnostic_report,
+)
+from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
+from runner.domain.status_event import RunState, StatusEvent
 from runner.domain.ticket import Ticket
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import (
@@ -30,7 +41,9 @@ from runner.ports.intervention import (
     InterventionGateway,
 )
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import UiEventSink
+from runner.application.git_operations import GitOperations
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +172,61 @@ def build_shell_argv(command: str, platform: str | None = None) -> list[str]:
     return [shell, "-c", command]
 
 
+def inject_test_timeout(test_cmd: str, per_test_timeout_seconds: int) -> str:
+    """Inject test framework native per-test timeout flag when supported and enabled.
+
+    Args:
+        test_cmd: Configured test command string.
+        per_test_timeout_seconds: Timeout in seconds per test; 0 disables injection.
+
+    Returns:
+        Command string with native timeout flag prepended to framework arguments,
+        or unchanged command string if unsupported or disabled.
+    """
+    if (
+        isinstance(per_test_timeout_seconds, bool)
+        or not isinstance(per_test_timeout_seconds, int)
+        or per_test_timeout_seconds <= 0
+    ):
+        return test_cmd
+
+    # Cargo test, dotnet test, and unknown test runners are explicitly unflagged
+    if re.search(r"\b(cargo\s+test|dotnet\s+test)\b", test_cmd, re.IGNORECASE):
+        return test_cmd
+
+    timeout_s = int(per_test_timeout_seconds)
+
+    # 1. go test -> -timeout Ns
+    if re.search(r"\bgo\s+test\b", test_cmd):
+        return re.sub(
+            r"(\bgo\s+test\b)",
+            rf"\1 -timeout {timeout_s}s",
+            test_cmd,
+            count=1,
+        )
+
+    # 2. pytest -> --timeout=N
+    if re.search(r"\bpytest\b", test_cmd):
+        return re.sub(
+            r"(\bpytest\b)",
+            rf"\1 --timeout={timeout_s}",
+            test_cmd,
+            count=1,
+        )
+
+    # 3. jest / vitest -> --testTimeout=N000 (milliseconds)
+    if re.search(r"\b(jest|vitest)\b", test_cmd):
+        timeout_ms = timeout_s * 1000
+        return re.sub(
+            r"(\b(jest|vitest)\b)",
+            rf"\1 --testTimeout={timeout_ms}",
+            test_cmd,
+            count=1,
+        )
+
+    return test_cmd
+
+
 @dataclass(frozen=True)
 class CommandOutcome:
     """Outcome of a single Gatekeeper verification command.
@@ -173,6 +241,7 @@ class CommandOutcome:
             available on the command runner port, so ordering is normalized.
         not_found: The leading executable token that could not be resolved on
             PATH, causing the command to be rejected before spawning.
+        termination_reason: Specific reason for process termination ("HANG", None).
     """
 
     label: str
@@ -181,11 +250,17 @@ class CommandOutcome:
     timed_out: bool
     tail: str
     not_found: str | None = None
+    termination_reason: str | None = None
 
     @property
     def passed(self) -> bool:
         """A command passes only when it exited with code 0 and never timed out."""
-        return not self.timed_out and self.exit_code == 0 and self.not_found is None
+        return (
+            not self.timed_out
+            and self.exit_code == 0
+            and self.not_found is None
+            and self.termination_reason is None
+        )
 
 
 @dataclass(frozen=True)
@@ -205,10 +280,19 @@ class VerificationReport:
     skipped_commands: tuple[str, ...]
 
 
-def _format_diagnostic(outcome: CommandOutcome, timeout_seconds: int) -> str:
+def _format_diagnostic(
+    outcome: CommandOutcome,
+    timeout_seconds: int,
+    silence_window_seconds: int | None = None,
+) -> str:
     """Render one failed command block: header, status line, then the output tail."""
     if outcome.not_found is not None:
         status = f"command not found: '{outcome.not_found}'"
+    elif outcome.termination_reason == "HANG":
+        if silence_window_seconds is not None:
+            status = f"hung (silence window of {silence_window_seconds}s exceeded)"
+        else:
+            status = "hung (silence window exceeded)"
     elif outcome.timed_out:
         status = f"timed out after {timeout_seconds}s"
     else:
@@ -229,12 +313,14 @@ class GatekeeperCommandExecutor:
         platform: str | None = None,
         path_resolver: Callable[[str], str | None] | None = None,
         ui_event_sink: UiEventSink | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._command_runner = command_runner or SubprocessRunner()
         self._cwd = cwd
         self._platform = platform if platform is not None else sys.platform
         self._path_resolver = path_resolver or shutil.which
         self._ui_event_sink = ui_event_sink
+        self._clock = clock or time.monotonic
 
     @property
     def ui_event_sink(self) -> UiEventSink | None:
@@ -257,12 +343,19 @@ class GatekeeperCommandExecutor:
 
         if config.build_cmd.strip():
             build_outcome = await self._execute(
-                BUILD_LABEL, config.build_cmd, config.timeout_seconds
+                BUILD_LABEL,
+                config.build_cmd,
+                config.timeout_seconds,
+                silence_window_seconds=config.silence_window_seconds,
             )
             results.append(build_outcome)
             if not build_outcome.passed:
                 diagnostics.append(
-                    _format_diagnostic(build_outcome, config.timeout_seconds)
+                    _format_diagnostic(
+                        build_outcome,
+                        config.timeout_seconds,
+                        silence_window_seconds=config.silence_window_seconds,
+                    )
                 )
                 skipped.append(config.test_cmd)
                 return VerificationReport(
@@ -272,12 +365,24 @@ class GatekeeperCommandExecutor:
                     skipped_commands=tuple(skipped),
                 )
 
+        effective_test_cmd = inject_test_timeout(
+            config.test_cmd, config.per_test_timeout_seconds
+        )
         test_outcome = await self._execute(
-            TEST_LABEL, config.test_cmd, config.timeout_seconds
+            TEST_LABEL,
+            effective_test_cmd,
+            config.timeout_seconds,
+            silence_window_seconds=config.silence_window_seconds,
         )
         results.append(test_outcome)
         if not test_outcome.passed:
-            diagnostics.append(_format_diagnostic(test_outcome, config.timeout_seconds))
+            diagnostics.append(
+                _format_diagnostic(
+                    test_outcome,
+                    config.timeout_seconds,
+                    silence_window_seconds=config.silence_window_seconds,
+                )
+            )
 
         return VerificationReport(
             passed=all(outcome.passed for outcome in results),
@@ -287,7 +392,11 @@ class GatekeeperCommandExecutor:
         )
 
     async def _execute(
-        self, label: str, command: str, timeout_seconds: int
+        self,
+        label: str,
+        command: str,
+        timeout_seconds: int,
+        silence_window_seconds: int | float | None = None,
     ) -> CommandOutcome:
         """Spawn one shell command and wait for output and exit under its timeout bound."""
         token = leading_command_token(command)
@@ -311,23 +420,75 @@ class GatekeeperCommandExecutor:
         handle = await self._command_runner.spawn(argv, cwd=self._cwd)
 
         stdout_lines: deque[str] = deque(maxlen=TAIL_LINE_LIMIT)
+        exit_code: int | None = None
+        timed_out = False
+        termination_reason: str | None = None
+
+        start_time = self._clock()
+        last_activity_time = start_time
+        silence_window = (
+            float(silence_window_seconds)
+            if silence_window_seconds is not None and silence_window_seconds > 0
+            else float(timeout_seconds)
+        )
+        total_timeout = float(timeout_seconds)
+
+        activity_event = asyncio.Event()
 
         async def _consume_stdout() -> None:
+            nonlocal last_activity_time
             async for line in handle.stdout_lines():
                 stdout_lines.append(line.rstrip("\r\n"))
+                last_activity_time = self._clock()
+                activity_event.set()
 
         stdout_task = asyncio.ensure_future(_consume_stdout())
         wait_task = asyncio.ensure_future(handle.wait())
-        exit_code: int | None = None
-        timed_out = False
+        last_stderr_len = len(handle.stderr)
 
-        _, pending = await asyncio.wait(
-            {stdout_task, wait_task},
-            timeout=float(timeout_seconds),
-            return_when=asyncio.ALL_COMPLETED,
-        )
-        if pending:
-            timed_out = True
+        while True:
+            if stdout_task.done() and wait_task.done():
+                break
+
+            current_stderr_len = len(handle.stderr)
+            if current_stderr_len > last_stderr_len:
+                last_stderr_len = current_stderr_len
+                last_activity_time = self._clock()
+
+            if activity_event.is_set():
+                activity_event.clear()
+                last_activity_time = self._clock()
+
+            now = self._clock()
+            elapsed_total = now - start_time
+            if elapsed_total >= total_timeout:
+                timed_out = True
+                break
+
+            elapsed_silence = now - last_activity_time
+            if elapsed_silence >= silence_window:
+                timed_out = True
+                termination_reason = "HANG"
+                break
+
+            remaining_total = max(0.001, total_timeout - elapsed_total)
+            remaining_silence = max(0.001, silence_window - elapsed_silence)
+            step_timeout = min(remaining_total, remaining_silence)
+
+            event_task = asyncio.ensure_future(activity_event.wait())
+            try:
+                await asyncio.wait(
+                    {stdout_task, wait_task, event_task},
+                    timeout=step_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                if not event_task.done():
+                    event_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await event_task
+
+        if timed_out:
             with suppress(Exception):
                 await handle.terminate()
             _, pending = await asyncio.wait(
@@ -344,7 +505,8 @@ class GatekeeperCommandExecutor:
 
         if not timed_out:
             exit_code = wait_task.result()
-            stdout_task.result()
+            with suppress(Exception):
+                stdout_task.result()
 
         tail_source = list(stdout_lines)
         tail_source.extend(handle.stderr.splitlines()[-TAIL_LINE_LIMIT:])
@@ -355,6 +517,7 @@ class GatekeeperCommandExecutor:
             exit_code=exit_code,
             timed_out=timed_out,
             tail="\n".join(tail_source[-TAIL_LINE_LIMIT:]),
+            termination_reason=termination_reason,
         )
 
         if self._ui_event_sink is not None:
@@ -432,6 +595,7 @@ class VerificationLoopStatus(str, Enum):
     PASSED = "passed"
     SKIPPED = "skipped"
     QUESTION_PENDING = "question_pending"
+    INTERVENTION_REQUESTED = "intervention_requested"
 
 
 @dataclass(frozen=True)
@@ -445,6 +609,7 @@ class VerificationLoopResult:
     session_id: str | None = None
     attempts: int = 0
     resources_accessed: frozenset[str] = frozenset()
+    failure_diagnostic: FailureDiagnostic | None = None
 
     @property
     def is_passed(self) -> bool:
@@ -460,6 +625,11 @@ class VerificationLoopResult:
     def is_question_pending(self) -> bool:
         """True when a Worker question interrupted verification."""
         return self.status == VerificationLoopStatus.QUESTION_PENDING
+
+    @property
+    def is_intervention_requested(self) -> bool:
+        """True when operator requested intervention after failure diagnostic."""
+        return self.status == VerificationLoopStatus.INTERVENTION_REQUESTED
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, (str, VerificationLoopStatus)):
@@ -513,6 +683,24 @@ class VerificationLoopResult:
             attempts=attempts,
         )
 
+    @classmethod
+    def intervention_requested(
+        cls,
+        failure_diagnostic: FailureDiagnostic,
+        attempts: int,
+        session_id: str | None = None,
+        diagnostics: str | None = None,
+        resources_accessed: frozenset[str] = frozenset(),
+    ) -> VerificationLoopResult:
+        return cls(
+            status=VerificationLoopStatus.INTERVENTION_REQUESTED,
+            failure_diagnostic=failure_diagnostic,
+            attempts=attempts,
+            session_id=session_id,
+            diagnostics=diagnostics,
+            resources_accessed=resources_accessed,
+        )
+
 
 @runtime_checkable
 class WorkerCycleRunner(Protocol):
@@ -545,6 +733,12 @@ class VerificationLoop:
         notify: Callable[[str], None] | None = None,
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
+        failure_analyser: Callable[..., FailureDiagnostic] | None = None,
+        discord_adapter: Any | None = None,
+        runtime_paths: RuntimePaths | None = None,
+        token_budget: int | TokenBudgetConfig | None = None,
+        status_publisher: StatusPublisher | None = None,
+        git_operations: GitOperations | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -565,8 +759,48 @@ class VerificationLoop:
         self._accumulated_resources: set[str] = set()
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
+        self._failure_analyser = failure_analyser or analyse
+        self._discord_adapter = discord_adapter if discord_adapter is not None else DiscordAdapter()
+        self._runtime_paths = runtime_paths or RuntimePaths()
+        self._status_publisher = status_publisher
+        self._git_operations = git_operations
+        if isinstance(token_budget, TokenBudgetConfig):
+            self._effective_token_budget = token_budget.ceiling
+        elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
+            self._effective_token_budget = token_budget
+        else:
+            self._effective_token_budget = 150000
+        self._last_token_count: int = 0
         if ui_event_sink is not None and getattr(self._executor, "ui_event_sink", None) is None:
             self._executor.ui_event_sink = ui_event_sink
+
+    def _publish_status(
+        self,
+        event_name: str,
+        run_state: RunState,
+        attempt: int | None = None,
+        last_step_summary: str | None = None,
+    ) -> None:
+        """Publish a status event if a status publisher is configured."""
+        if self._status_publisher is None:
+            return
+        from datetime import datetime, timezone
+
+        event = StatusEvent(
+            ticket_id=self._ticket.id,
+            run_state=run_state,
+            attempt=attempt if attempt is not None else self._attempts,
+            max_attempts=self._max_attempts,
+            token_count=self._last_token_count,
+            token_budget=self._effective_token_budget,
+            last_step_summary=last_step_summary,
+            last_step_at=datetime.now(timezone.utc).isoformat(),
+            last_event=event_name,
+        )
+        try:
+            self._status_publisher.publish(event)
+        except Exception as exc:
+            logger.warning("Failed to publish status event %s: %s", event_name, exc)
 
     @property
     def ui_event_sink(self) -> UiEventSink | None:
@@ -700,6 +934,9 @@ class VerificationLoop:
                     if hasattr(sr, "resources_accessed"):
                         self._accumulated_resources.update(sr.resources_accessed)
 
+            if hasattr(run_result, "occupancy") and run_result.occupancy:
+                self._last_token_count = run_result.occupancy
+
             # Reset pending prompt since it has been consumed
             self._pending_prompt = None
 
@@ -725,9 +962,104 @@ class VerificationLoop:
                     )
 
                 # Execute Gatekeeper independent verification commands
+                self._publish_status(
+                    event_name="ATTEMPT_STARTED",
+                    run_state=RunState.VERIFYING,
+                    attempt=self._attempts + 1,
+                )
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
                     self._attempts += 1
+                    self._publish_status(
+                        event_name="ATTEMPT_ENDED",
+                        run_state=RunState.DONE,
+                        attempt=self._attempts,
+                        last_step_summary="Verification passed",
+                    )
+
+                    # --- Manual verification handling (T069) ---
+                    if ready_signal.manual_verification_is_default:
+                        # manual_verification was absent from the payload => backward-compatible, do not emit
+                        pass
+                    elif not ready_signal.manual_verification:
+                        # manual_verification was present but empty => emit all covered notice
+                        all_covered_msg = (
+                            "All Smoke Scenarios covered by automated tests — no manual steps required."
+                        )
+                        if self._notify is not None:
+                            try:
+                                self._notify(all_covered_msg)
+                            except Exception:
+                                print(all_covered_msg)
+                        else:
+                            print(all_covered_msg)
+                    else:
+                        # 1. Commit body injection if GitOperations is available
+                        if self._git_operations is not None:
+                            changes = [f"Update {p}" for p in ready_signal.modified_files] + [
+                                "Manual verification required:",
+                                *(f"- {s.get('name', '')}" for s in ready_signal.manual_verification),
+                            ]
+                            try:
+                                commit_res = self._git_operations.commit_ticket(
+                                    scope=ready_signal.scope or "adapters",
+                                    title=self._ticket.title,
+                                    changes=changes,
+                                )
+                                if inspect.iscoroutine(commit_res):
+                                    await commit_res
+                            except Exception as exc:
+                                logger.warning("GitOperations commit_ticket failed: %s", exc)
+                        else:
+                            logger.warning(
+                                "GitOperations not provided to VerificationLoop; skipping commit-body injection"
+                            )
+
+                        # 2. Emit full human-action checklist to terminal
+                        scenario_lines: list[str] = []
+                        for scenario in ready_signal.manual_verification:
+                            name = scenario.get("name", "")
+                            setup = scenario.get("setup", "")
+                            steps = scenario.get("steps", "")
+                            expected = scenario.get("expected", "")
+                            scenario_lines.append(f"Scenario: {name}")
+                            if setup:
+                                scenario_lines.append(f"Setup: {setup}")
+                            if steps:
+                                scenario_lines.append(f"Steps: {steps}")
+                            if expected:
+                                scenario_lines.append(f"Expected: {expected}")
+                        scenario_text = "\n".join(scenario_lines)
+                        if self._notify is not None:
+                            try:
+                                self._notify(scenario_text)
+                            except Exception:
+                                print(scenario_text)
+                        else:
+                            print(scenario_text)
+
+                        # 3. Discord notification (fire-and-forget, names-only summary)
+                        if self._discord_adapter is not None and hasattr(
+                            self._discord_adapter, "send"
+                        ):
+                            names = [
+                                s.get("name", "")
+                                for s in ready_signal.manual_verification
+                                if s.get("name")
+                            ]
+                            bullets = "\n".join(f"• {n}" for n in names)
+                            discord_msg = (
+                                f"✅ Gatekeeper passed — manual verification required:\n{bullets}"
+                            )
+                            try:
+                                res = self._discord_adapter.send(discord_msg)
+                                if inspect.iscoroutine(res):
+                                    await res
+                            except Exception as exc:
+                                logger.warning("Discord send failed: %s", exc)
+                        else:
+                            logger.warning("Discord adapter not provided to VerificationLoop")
+
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
                         report=report,
@@ -737,7 +1069,20 @@ class VerificationLoop:
                     )
 
                 # Verification failed
+                self._publish_status(
+                    event_name="ATTEMPT_ENDED",
+                    run_state=RunState.RUNNING,
+                    attempt=self._attempts + 1,
+                    last_step_summary="Verification failed",
+                )
                 diagnostics = "\n\n".join(report.diagnostics)
+                failed_outcome = next((r for r in report.results if not r.passed), None)
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics, outcome=failed_outcome
+                )
+                if escalation_result is not None:
+                    return escalation_result
+
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -763,6 +1108,9 @@ class VerificationLoop:
                 # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
                 self._clean_question(self._ticket.id)
                 diagnostics = str(exc)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -788,6 +1136,9 @@ class VerificationLoop:
                     or (run_result.escalation.reason if run_result.escalation else run_result.status.value)
                 )
                 self._signal_repository.consume_ready(self._ticket.id)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -803,6 +1154,9 @@ class VerificationLoop:
             if ready_format_error is not None:
                 self._signal_repository.consume_ready(self._ticket.id)
                 diagnostics = str(ready_format_error)
+                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if escalation_result is not None:
+                    return escalation_result
                 self._attempts += 1
                 self._last_diagnostics = diagnostics
                 action = await self._handle_failure(diagnostics)
@@ -817,6 +1171,9 @@ class VerificationLoop:
             diagnostics = (
                 f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
             )
+            escalation_result = await self._check_escalation(diagnostics=diagnostics)
+            if escalation_result is not None:
+                return escalation_result
             self._attempts += 1
             self._last_diagnostics = diagnostics
             action = await self._handle_failure(diagnostics)
@@ -828,9 +1185,113 @@ class VerificationLoop:
                 )
             continue
 
+    async def _check_escalation(
+        self,
+        diagnostics: str,
+        outcome: CommandOutcome | None = None,
+    ) -> VerificationLoopResult | None:
+        """Check escalation policy and prompt operator if threshold met (T066)."""
+        current_attempt = self._attempts + 1
+        policy = self._verification_config.bug_escalation_at
+
+        should_escalate = False
+        if policy == 0:
+            should_escalate = False
+        elif policy == -1:
+            should_escalate = current_attempt >= self._max_attempts
+        elif policy >= 1:
+            should_escalate = (
+                current_attempt >= policy
+                or current_attempt >= self._max_attempts
+            )
+
+        if not should_escalate:
+            return None
+
+        output_lines = outcome.tail if outcome and outcome.tail else diagnostics
+        exit_code = outcome.exit_code if outcome else 1
+        termination_reason = outcome.termination_reason if outcome else None
+
+        diagnostic = self._failure_analyser(
+            output_lines=output_lines,
+            exit_code=exit_code,
+            termination_reason=termination_reason,
+            config=self._verification_config,
+        )
+
+        report_text = render_diagnostic_report(
+            diagnostic=diagnostic,
+            token_count=self._last_token_count,
+            token_budget=self._effective_token_budget,
+            prompt_question=True,
+        )
+
+        self._publish_status(
+            event_name="ESCALATION_EMITTED",
+            run_state=RunState.ESCALATING,
+            attempt=current_attempt,
+            last_step_summary=f"Escalation emitted: {diagnostic.label}",
+        )
+
+        # Discord notification (fire-and-forget, never raises)
+        if self._discord_adapter is not None and hasattr(self._discord_adapter, "send"):
+            try:
+                discord_msg = (
+                    report_text
+                    if len(report_text) <= 2000
+                    else report_text[:1990] + "\n..."
+                )
+                res = self._discord_adapter.send(discord_msg)
+                if inspect.iscoroutine(res):
+                    await res
+            except Exception as exc:
+                logger.warning("Discord send failed: %s", exc)
+
+        # Terminal prompt via InterventionGateway
+        if self._state_coordinator is not None:
+            self._state_coordinator.transition_to_waiting_for_user()
+
+        answered_yes = False
+        try:
+            decision = self._intervention_gateway.prompt_escalation(
+                ticket=self._ticket,
+                report=report_text,
+            )
+            if inspect.iscoroutine(decision):
+                decision = await decision
+            answered_yes = bool(decision)
+        except (NonInteractiveError, EOFError, OSError):
+            answered_yes = False
+
+        if answered_yes:
+            return VerificationLoopResult.intervention_requested(
+                failure_diagnostic=diagnostic,
+                attempts=self._attempts,
+                session_id=self._active_session_id,
+                diagnostics=diagnostics,
+                resources_accessed=frozenset(self._accumulated_resources),
+            )
+
+        # Operator declined or non-interactive: log diagnostic to .agent/logs/<ticket_id>_diagnostic.md
+        try:
+            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
+            diag_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(diag_path, report_text)
+        except Exception as exc:
+            logger.warning("Failed to write diagnostic log: %s", exc)
+
+        return None
+
+
     async def _handle_failure(self, diagnostics: str) -> InterventionAction | None:
         """Handle attempt failure, evaluating budget exhaustion and intervention menu."""
         if self._attempts >= self._max_attempts:
+            self._publish_status(
+                event_name="CIRCUIT_BREAKER_TRIPPED",
+                run_state=RunState.IDLE,
+                attempt=self._attempts,
+                last_step_summary="Circuit breaker tripped",
+            )
             if self._state_coordinator is not None:
                 self._state_coordinator.transition_to_waiting_for_user()
             decision = self._intervention_gateway.request_intervention(

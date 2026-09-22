@@ -438,3 +438,23 @@ def test_finalize_invalid_completed_at_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(TicketFormatError, match="timestamp"):
         store.finalize_completed(ticket_file, completed_at="not-a-timestamp")
+
+
+def test_is_completed_detects_completed_and_pending_tickets(tmp_path: Path) -> None:
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    assert not store.is_completed("T001")
+
+    spec_dir = tmp_path / "01-sample"
+    spec_dir.mkdir(parents=True)
+    _write_ticket(spec_dir, "T001-pending.md", "T001", status="pending")
+    assert not store.is_completed("T001")
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    _write_ticket(completed_dir, "T002-done.md", "T002", status="completed")
+    assert store.is_completed("T002")
+
+    _write_ticket(spec_dir, "T003-marked.md", "T003", status="completed")
+    assert store.is_completed("T003")
+
+    assert not store.is_completed("T999")
