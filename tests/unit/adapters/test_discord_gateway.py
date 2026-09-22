@@ -300,3 +300,33 @@ async def test_security_token_never_in_exception_or_repr(mock_client: MagicMock)
     assert fake_token not in error_msg
     assert fake_token not in repr(gateway)
 
+
+@pytest.mark.anyio
+async def test_delete_message(mock_client: MagicMock) -> None:
+    """delete_message resolves channel and message, and calls message.delete()."""
+    mock_channel = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.delete = AsyncMock()
+    mock_channel.fetch_message = AsyncMock(return_value=mock_msg)
+    mock_client.get_channel.return_value = mock_channel
+
+    gateway = DiscordPyGateway(mock_client)
+    await gateway.delete_message("1234567890", "9876543210")
+
+    mock_msg.delete.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_delete_message_error(mock_client: MagicMock) -> None:
+    """delete_message raises DiscordGatewayError on DiscordException."""
+    mock_channel = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.delete = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "Forbidden"))
+    mock_channel.fetch_message = AsyncMock(return_value=mock_msg)
+    mock_client.get_channel.return_value = mock_channel
+
+    gateway = DiscordPyGateway(mock_client)
+    with pytest.raises(DiscordGatewayError, match="Failed to delete message"):
+        await gateway.delete_message("1234567890", "9876543210")
+
+

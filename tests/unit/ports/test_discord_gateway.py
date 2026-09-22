@@ -48,6 +48,10 @@ class _ConformingAdapterShell:
     async def archive_thread(self, thread_id: str) -> None:
         pass
 
+    async def delete_message(self, channel_or_thread_id: str, message_id: str) -> None:
+        pass
+
+
 
 class _MissingMethodAdapterShell:
     """Non-conforming shell missing archive_thread."""
@@ -95,6 +99,8 @@ def test_ports_reexports() -> None:
     assert hasattr(DiscordGateway, "create_thread")
     assert hasattr(DiscordGateway, "edit_thread")
     assert hasattr(DiscordGateway, "archive_thread")
+    assert hasattr(DiscordGateway, "delete_message")
+
 
 
 def test_protocol_conformance_checks() -> None:
@@ -247,8 +253,30 @@ async def test_fake_gateway_archive_thread_equivalent_to_edit_thread() -> None:
 
 
 @pytest.mark.anyio
-async def test_all_six_call_types_produce_correct_discord_calls() -> None:
-    """Verifies all six call types append distinct, well-formed DiscordCall instances."""
+async def test_fake_gateway_delete_message() -> None:
+    """delete_message records DiscordCall and removes message from in-memory store."""
+    fake = FakeDiscordGateway()
+    msg_id = await fake.post_message("chan-1", "To be deleted")
+    await fake.pin_message("chan-1", msg_id)
+
+    assert msg_id in fake.messages
+    assert msg_id in fake.pinned_messages
+
+    await fake.delete_message("chan-1", msg_id)
+
+    assert len(fake.calls) == 3
+    call = fake.calls[-1]
+    assert call.method == "delete_message"
+    assert call.channel_or_thread_id == "chan-1"
+    assert call.message_id == msg_id
+
+    assert msg_id not in fake.messages
+    assert msg_id not in fake.pinned_messages
+
+
+@pytest.mark.anyio
+async def test_all_seven_call_types_produce_correct_discord_calls() -> None:
+    """Verifies all seven call types append distinct, well-formed DiscordCall instances."""
     fake = FakeDiscordGateway()
 
     m_id = await fake.post_message("chan-1", "hello")
@@ -257,8 +285,9 @@ async def test_all_six_call_types_produce_correct_discord_calls() -> None:
     t_id, _ = await fake.create_thread("chan-1", "thread", "starter")
     await fake.edit_thread(t_id, archived=False, locked=True)
     await fake.archive_thread(t_id)
+    await fake.delete_message("chan-1", m_id)
 
-    assert len(fake.calls) == 6
+    assert len(fake.calls) == 7
     methods = [call.method for call in fake.calls]
     assert methods == [
         "post_message",
@@ -267,7 +296,9 @@ async def test_all_six_call_types_produce_correct_discord_calls() -> None:
         "create_thread",
         "edit_thread",
         "archive_thread",
+        "delete_message",
     ]
+
 
 
 def test_pending_replies_list() -> None:

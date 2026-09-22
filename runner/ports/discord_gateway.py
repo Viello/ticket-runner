@@ -128,3 +128,20 @@ class DiscordGateway(Protocol):
             DiscordGatewayError: If the remote operation fails.
         """
         ...
+
+    async def delete_message(
+        self,
+        channel_or_thread_id: str,
+        message_id: str,
+    ) -> None:
+        """Delete a message from a channel or thread.
+
+        Args:
+            channel_or_thread_id: Snowflake ID of the containing channel or thread.
+            message_id: Snowflake ID of the message to delete.
+
+        Raises:
+            DiscordGatewayError: If the remote operation fails.
+        """
+        ...
+

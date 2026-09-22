@@ -1,5 +1,6 @@
-﻿# T075 — ticket_runner bot subcommand (--smoke and --run)
-Status: pending
+# T075 — ticket_runner bot subcommand (--smoke and --run)
+Status: completed
+Completed: 2026-09-22T14:30:00Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T074
 Security: required

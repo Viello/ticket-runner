@@ -48,7 +48,7 @@ class DiscordCall(NamedTuple):
         """Convenience accessor for message ID."""
         if "message_id" in self.kwargs:
             return self.kwargs["message_id"]
-        if self.method in ("edit_message", "pin_message") and len(self.args) > 1:
+        if self.method in ("edit_message", "pin_message", "delete_message") and len(self.args) > 1:
             return self.args[1]
         return None
 
@@ -263,3 +263,21 @@ class FakeDiscordGateway:
         )
         thread["archived"] = True
         thread["locked"] = True
+
+    async def delete_message(
+        self,
+        channel_or_thread_id: str,
+        message_id: str,
+    ) -> None:
+        """Delete message in in-memory store and record call."""
+        self.calls.append(
+            DiscordCall(
+                method="delete_message",
+                args=(channel_or_thread_id, message_id),
+                kwargs={},
+            )
+        )
+        self.messages.pop(message_id, None)
+        if message_id in self.pinned_messages:
+            self.pinned_messages.remove(message_id)
+

@@ -191,3 +191,19 @@ class DiscordPyGateway:
     ) -> None:
         """Convenience helper to archive and lock a thread in a single operation."""
         await self.edit_thread(thread_id, archived=True, locked=True)
+
+    async def delete_message(
+        self,
+        channel_or_thread_id: str,
+        message_id: str,
+    ) -> None:
+        """Delete an existing message from a channel or thread."""
+        channel = await self._resolve_channel(channel_or_thread_id)
+        message = await self._resolve_message(channel, message_id)
+        try:
+            await message.delete()
+        except discord.DiscordException as exc:
+            raise DiscordGatewayError(f"Failed to delete message {message_id}: {exc}") from exc
+        except Exception as exc:
+            raise DiscordGatewayError(f"Failed to delete message {message_id}: {exc}") from exc
+
