@@ -1,5 +1,6 @@
-﻿# T076 — Doctor --live flag and live gateway permission check
-Status: pending
+# T076 — Doctor --live flag and live gateway permission check
+Status: completed
+Completed: 2026-09-22T15:07:25Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T075
 Security: required

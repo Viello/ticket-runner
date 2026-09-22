@@ -1150,3 +1150,275 @@ async def test_check_terminal_host_explicit_overrides_auto_detection() -> None:
     assert doctor.loaded_config.ui.session_terminal == "powershell.exe"
 
 
+# ==============================================================================
+# T076: Doctor --live flag and live gateway permission checks
+# ==============================================================================
+
+@pytest.mark.anyio
+async def test_check_discord_offline_unchanged_when_live_false() -> None:
+    """Offline check passes without invoking gateway when live=False."""
+    from runner.domain.config import DiscordConfig
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    fake_gateway = FakeDiscordGateway()
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=False)
+    assert result.passed is True
+    assert result.name == CHECK_DISCORD
+    assert "Discord token verified from environment variable" in result.message
+    # Gateway was not touched
+    assert len(fake_gateway.calls) == 0
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_passes_when_all_permissions_present() -> None:
+    """Doctor check_discord(live=True) passes when fake gateway returns all 7 permissions."""
+    from runner.domain.config import DiscordConfig
+    from runner.application.doctor import REQUIRED_DISCORD_PERMISSIONS
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    fake_gateway = FakeDiscordGateway()
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is True
+    assert result.name == CHECK_DISCORD
+    assert "Discord live check passed" in result.message
+    for perm in REQUIRED_DISCORD_PERMISSIONS:
+        assert perm in result.message
+    assert len(fake_gateway.calls) == 1
+    assert fake_gateway.calls[0].method == "get_permissions"
+    assert fake_gateway.calls[0].args == ("123456789",)
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_fails_when_manage_messages_revoked() -> None:
+    """Doctor check_discord(live=True) fails explicitly naming Manage Messages when revoked."""
+    from runner.domain.config import DiscordConfig
+    from runner.application.doctor import REQUIRED_DISCORD_PERMISSIONS
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    granted = [p for p in REQUIRED_DISCORD_PERMISSIONS if p != "Manage Messages"]
+    fake_gateway = FakeDiscordGateway(permissions=granted)
+
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is False
+    assert result.name == CHECK_DISCORD
+    assert "Manage Messages" in result.message
+    assert result.remediation is not None
+    assert "Manage Messages" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_fails_when_create_public_threads_revoked() -> None:
+    """Doctor check_discord(live=True) fails explicitly naming Create Public Threads when revoked."""
+    from runner.domain.config import DiscordConfig
+    from runner.application.doctor import REQUIRED_DISCORD_PERMISSIONS
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    granted = [p for p in REQUIRED_DISCORD_PERMISSIONS if p != "Create Public Threads"]
+    fake_gateway = FakeDiscordGateway(permissions=granted)
+
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is False
+    assert result.name == CHECK_DISCORD
+    assert "Create Public Threads" in result.message
+    assert result.remediation is not None
+    assert "Create Public Threads" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_fails_on_auth_error_without_logging_token() -> None:
+    """Doctor check_discord(live=True) fails with auth message without leaking secret token."""
+    from runner.domain.config import DiscordConfig
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    secret_token = "ultra-secret-bot-token-xyz-987"
+    fake_gateway = FakeDiscordGateway(
+        raise_on_get_permissions=Exception("Discord authentication failed 401 Unauthorized")
+    )
+
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": secret_token},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is False
+    assert result.name == CHECK_DISCORD
+    assert "authentication failed" in result.message.lower()
+    assert "DISCORD_BOT_TOKEN" in result.message
+    # Crucial security invariant: token value itself must NOT appear in message or remediation
+    assert secret_token not in result.message
+    assert result.remediation is not None
+    assert secret_token not in result.remediation
+    assert "DISCORD_BOT_TOKEN" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_fails_when_token_env_var_missing() -> None:
+    """Doctor check_discord(live=True) fails immediately when env var is unset."""
+    from runner.domain.config import DiscordConfig
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    fake_gateway = FakeDiscordGateway()
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is False
+    assert result.name == CHECK_DISCORD
+    assert "unset or empty" in result.message
+    assert len(fake_gateway.calls) == 0
+
+
+@pytest.mark.anyio
+async def test_check_discord_live_fails_when_channel_id_missing() -> None:
+    """Doctor check_discord(live=True) fails when channel_id is not configured."""
+    from runner.domain.config import DiscordConfig
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    fake_gateway = FakeDiscordGateway()
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id=""),
+    )
+
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+    await doctor.check_config()
+
+    result = await doctor.check_discord(live=True)
+    assert result.passed is False
+    assert result.name == CHECK_DISCORD
+    assert "channel_id is not configured" in result.message
+    assert len(fake_gateway.calls) == 0
+
+
+@pytest.mark.anyio
+async def test_doctor_run_passes_live_true_to_check_discord(tmp_path: Path) -> None:
+    """Doctor.run(live=True) passes live=True to check_discord."""
+    from runner.domain.config import DiscordConfig
+    from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    fake_gateway = FakeDiscordGateway()
+    config = _make_config()
+    import dataclasses
+    config = dataclasses.replace(
+        config,
+        discord=DiscordConfig(enabled=True, channel_id="123456789"),
+    )
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,
+        env={"DISCORD_BOT_TOKEN": "secret-token-123"},
+        gateway=fake_gateway,
+    )
+
+    report = await doctor.run(local_only=False, halt_on_failure=False, live=True)
+    assert report.passed is True
+    discord_check = [c for c in report.checks if c.name == CHECK_DISCORD][0]
+    assert discord_check.passed is True
+    assert "Discord live check passed" in discord_check.message
+    assert len(fake_gateway.calls) == 1
+
+
+

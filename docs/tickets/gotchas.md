@@ -72,5 +72,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** In `discord.py`, commands decorated with `@tree.command` register globally by default. Calling `await tree.sync(guild=guild_obj)` syncs only guild-specific commands (`tree._guild_commands[guild_id]`). Without copying global commands first, `tree.sync` uploads an empty list (`[]`) to Discord, clearing all guild slash commands and causing Discord to display no slash commands for `/status`, `/pause`, and `/mode`. Additionally, `discord.py` catches exceptions raised in event handlers like `on_ready` inside its internal event dispatcher and calls `client.on_error` instead of propagating the exception to `client.start()`. If `ready_event` is only set at the completion of `on_ready`, any exception in `on_ready` hangs the caller until the connection timeout without printing the root cause.
 - **Solution:** Always call `tree.copy_global_to(guild=guild_obj)` before calling `await tree.sync(guild=guild_obj)` when syncing global command definitions to a test or target guild. Wire an `on_error` handler on `client` to record `client.ready_error = exc` and set `client.ready_event` whenever an event error occurs before readiness, allowing CLI loops to fail fast and display the true exception to `stderr`. Ensure `client.close()` resets `ready_error = None`.
 
+---
+
+## Discord Live Pre-Flight Connection, Timeout Guards & Token Redaction
+
+- **Problem:** Running a full bot lifecycle (like `DiscordClient` with command tree sync) for a simple pre-flight permission check is slow, prone to command tree sync timeouts, and unnecessarily complex. Furthermore, `channel.permissions_for(guild.me)` requires `guild.me` to be populated in cache; if the bot connects without the `Guilds` intent or fetches the channel before cache readiness, `guild.me` is `None`. Additionally, network issues or invalid tokens can cause pre-flight checks to hang indefinitely or print raw secret token strings to terminal output and logs during authentication failures.
+- **Solution:** Use a short-lived, minimal `discord.Client(intents=discord.Intents.default())` that starts in a task, waits for readiness, and resolves permissions without syncing command trees. Wrap channel fetching in a 10-second `asyncio.wait_for` timeout guard and ensure `client.close()` and task cancellation always execute in a `finally` block. Never include the token value in `CheckResult.message` or `CheckResult.remediation`; always refer solely to the environment variable name (e.g. `DISCORD_BOT_TOKEN`).
+
+
 
 

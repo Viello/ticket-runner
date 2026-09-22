@@ -1,4 +1,4 @@
-﻿# T077 — Developer Portal onboarding guide (docs/discord-setup.md)
+# T077 — Developer Portal onboarding guide (docs/discord-setup.md)
 Status: pending
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T070

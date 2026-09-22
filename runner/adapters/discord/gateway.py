@@ -207,3 +207,15 @@ class DiscordPyGateway:
         except Exception as exc:
             raise DiscordGatewayError(f"Failed to delete message {message_id}: {exc}") from exc
 
+    async def get_permissions(self, channel_id: str) -> list[str]:
+        """Fetch granted permissions for the bot in the given channel."""
+        from runner.adapters.discord.smoke import (
+            REQUIRED_DISCORD_PERMISSIONS,
+            verify_channel_permissions,
+        )
+
+        channel = await self._resolve_channel(channel_id)
+        missing = await verify_channel_permissions(channel, self._client)
+        return [p for p in REQUIRED_DISCORD_PERMISSIONS.values() if p not in missing]
+
+

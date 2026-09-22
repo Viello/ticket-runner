@@ -48,6 +48,16 @@ REQUIRED_SKILL_PATHS = (
     ".agents/skills/code-review/SKILL.md",
     ".agents/skills/diagnosing-bugs/SKILL.md",
 )
+REQUIRED_DISCORD_PERMISSIONS = (
+    "Send Messages",
+    "Send Messages in Threads",
+    "Create Public Threads",
+    "Manage Threads",
+    "Manage Messages",
+    "Read Message History",
+    "Embed Links",
+)
+
 
 
 @dataclass(frozen=True)
@@ -101,6 +111,8 @@ class Doctor:
         terminal_prompt: TerminalHostPrompt | None = None,
         terminal_detector: Any | None = None,
         ppid_resolver: Callable[[], str | None] | None = None,
+        gateway: Any | None = None,
+        live_discord_checker: Callable[..., Any] | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -153,6 +165,8 @@ class Doctor:
         self._terminal_prompt = terminal_prompt or TerminalHostPrompt()
         self._terminal_detector = terminal_detector or TerminalHostDetector
         self._ppid_resolver = ppid_resolver
+        self._gateway = gateway
+        self._live_discord_checker = live_discord_checker
 
     @property
     def loaded_config(self) -> RunnerConfig | None:
@@ -514,8 +528,12 @@ class Doctor:
             remediation=None,
         )
 
-    async def check_discord(self, local_only: bool = False) -> CheckResult:
-        """Verify Discord bot credentials unless in local-only mode or discord is disabled."""
+    async def check_discord(
+        self,
+        local_only: bool = False,
+        live: bool = False,
+    ) -> CheckResult:
+        """Verify Discord bot credentials and optionally live gateway permissions."""
         if local_only:
             return CheckResult(
                 name=CHECK_DISCORD,
@@ -547,12 +565,166 @@ class Doctor:
                 remediation=f"Set the '{token_env_var}' environment variable with your Discord bot token, or use --local-only.",
             )
 
+        if not live:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=True,
+                message=f"Discord token verified from environment variable '{token_env_var}'.",
+                remediation=None,
+            )
+
+        # Live verification path
+        channel_id = ""
+        if self._loaded_config is not None:
+            channel_id = self._loaded_config.discord.channel_id
+        elif self._config_loader is not None:
+            try:
+                loaded = self._config_loader.load(self._config_path)
+                if loaded is not None and hasattr(loaded, "discord"):
+                    channel_id = loaded.discord.channel_id
+                    self._loaded_config = loaded
+            except Exception:
+                pass
+
+        if not channel_id:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=False,
+                message="Discord channel_id is not configured.",
+                remediation="Configure discord.channel_id in config.yaml for live permission checks.",
+            )
+
+        # 1. Injected gateway double (e.g. FakeDiscordGateway)
+        if self._gateway is not None and hasattr(self._gateway, "get_permissions"):
+            try:
+                granted = await self._gateway.get_permissions(channel_id)
+                missing = [p for p in REQUIRED_DISCORD_PERMISSIONS if p not in granted]
+                if missing:
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=False,
+                        message=f"Discord live check failed: missing required permission(s): {', '.join(missing)}.",
+                        remediation=f"Grant the missing permission(s) to the bot in Discord: {', '.join(missing)}.",
+                    )
+                return CheckResult(
+                    name=CHECK_DISCORD,
+                    passed=True,
+                    message=f"Discord live check passed. Verified all 7 permissions: {', '.join(REQUIRED_DISCORD_PERMISSIONS)}.",
+                    remediation=None,
+                )
+            except Exception as exc:
+                exc_str = str(exc)
+                if "auth" in exc_str.lower() or "login" in exc_str.lower() or "token" in exc_str.lower():
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=False,
+                        message=f"Discord authentication failed: invalid token in environment variable '{token_env_var}'.",
+                        remediation=f"Update '{token_env_var}' with a valid Discord bot token.",
+                    )
+                return CheckResult(
+                    name=CHECK_DISCORD,
+                    passed=False,
+                    message=f"Discord live check error: {exc}",
+                    remediation="Verify Discord bot configuration and channel permissions.",
+                )
+
+        # 2. Injected live checker callable
+        if self._live_discord_checker is not None:
+            outcome = await self._live_discord_checker(token_value, channel_id)
+            if hasattr(outcome, "passed"):
+                if outcome.passed:
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=True,
+                        message=f"Discord live check passed. Verified all 7 permissions: {', '.join(REQUIRED_DISCORD_PERMISSIONS)}.",
+                        remediation=None,
+                    )
+                if getattr(outcome, "is_auth_error", False):
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=False,
+                        message=f"Discord authentication failed: invalid token in environment variable '{token_env_var}'.",
+                        remediation=f"Update '{token_env_var}' with a valid Discord bot token.",
+                    )
+                if getattr(outcome, "missing_permissions", None):
+                    missing = outcome.missing_permissions
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=False,
+                        message=f"Discord live check failed: missing required permission(s): {', '.join(missing)}.",
+                        remediation=f"Grant the missing permission(s) to the bot in Discord: {', '.join(missing)}.",
+                    )
+                if getattr(outcome, "is_timeout", False):
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=False,
+                        message=f"Discord live check timed out connecting or fetching channel '{channel_id}'.",
+                        remediation="Check your internet connection and verify the bot token and channel ID.",
+                    )
+                return CheckResult(
+                    name=CHECK_DISCORD,
+                    passed=False,
+                    message=f"Discord live check failed: {outcome.error_message}",
+                    remediation="Verify Discord bot permissions and channel settings.",
+                )
+            elif isinstance(outcome, list):
+                if not outcome:
+                    return CheckResult(
+                        name=CHECK_DISCORD,
+                        passed=True,
+                        message=f"Discord live check passed. Verified all 7 permissions: {', '.join(REQUIRED_DISCORD_PERMISSIONS)}.",
+                        remediation=None,
+                    )
+                return CheckResult(
+                    name=CHECK_DISCORD,
+                    passed=False,
+                    message=f"Discord live check failed: missing required permission(s): {', '.join(outcome)}.",
+                    remediation=f"Grant the missing permission(s) to the bot in Discord: {', '.join(outcome)}.",
+                )
+
+        # 3. Default live check adapter
+        from runner.adapters.discord.live_check import check_live_discord_permissions
+
+        outcome = await check_live_discord_permissions(
+            token=token_value,
+            channel_id=channel_id,
+            timeout=10.0,
+        )
+        if outcome.passed:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=True,
+                message=f"Discord live check passed. Verified all 7 permissions: {', '.join(REQUIRED_DISCORD_PERMISSIONS)}.",
+                remediation=None,
+            )
+        if outcome.is_auth_error:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=False,
+                message=f"Discord authentication failed: invalid token in environment variable '{token_env_var}'.",
+                remediation=f"Update '{token_env_var}' with a valid Discord bot token.",
+            )
+        if outcome.missing_permissions:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=False,
+                message=f"Discord live check failed: missing required permission(s): {', '.join(outcome.missing_permissions)}.",
+                remediation=f"Grant the missing permission(s) to the bot in Discord: {', '.join(outcome.missing_permissions)}.",
+            )
+        if outcome.is_timeout:
+            return CheckResult(
+                name=CHECK_DISCORD,
+                passed=False,
+                message=f"Discord live check timed out connecting or fetching channel '{channel_id}'.",
+                remediation="Check your internet connection and verify the bot token and channel ID.",
+            )
         return CheckResult(
             name=CHECK_DISCORD,
-            passed=True,
-            message=f"Discord token verified from environment variable '{token_env_var}'.",
-            remediation=None,
+            passed=False,
+            message=f"Discord live check failed: {outcome.error_message}",
+            remediation="Verify Discord bot permissions and channel settings.",
         )
+
 
     async def check_agents_md(self) -> CheckResult:
         """Verify AGENTS.md exists and is readable at workspace root."""
@@ -633,12 +805,18 @@ class Doctor:
             remediation=None,
         )
 
-    async def run(self, local_only: bool = False, halt_on_failure: bool = True) -> DoctorReport:
+    async def run(
+        self,
+        local_only: bool = False,
+        halt_on_failure: bool = True,
+        live: bool = False,
+    ) -> DoctorReport:
         """Execute pre-flight checks in order, optionally halting on first failure.
 
         Args:
             local_only: Whether to bypass Discord connectivity checks.
             halt_on_failure: If True, halts execution on the first failing check.
+            live: If True, executes live Discord gateway permission check.
 
         Returns:
             DoctorReport containing all executed check outcomes.
@@ -654,7 +832,7 @@ class Doctor:
             self.check_hook,
             self.check_agents_md,
             self.check_skills,
-            lambda: self.check_discord(local_only=local_only),
+            lambda: self.check_discord(local_only=local_only, live=live),
         ]
 
         results: list[CheckResult] = []

@@ -100,18 +100,49 @@ class DiscordCall(NamedTuple):
 class FakeDiscordGateway:
     """In-memory test double conforming to the DiscordGateway protocol."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        permissions: list[str] | None = None,
+        raise_on_get_permissions: Exception | None = None,
+    ) -> None:
         self.calls: list[DiscordCall] = []
         self.messages: dict[str, dict[str, Any]] = {}
         self.threads: dict[str, dict[str, Any]] = {}
         self.pinned_messages: list[str] = []
         self.pending_replies: list[str] = []
         self._next_id: int = 1
+        self.permissions: list[str] = (
+            list(permissions)
+            if permissions is not None
+            else [
+                "Send Messages",
+                "Send Messages in Threads",
+                "Create Public Threads",
+                "Manage Threads",
+                "Manage Messages",
+                "Read Message History",
+                "Embed Links",
+            ]
+        )
+        self.raise_on_get_permissions: Exception | None = raise_on_get_permissions
 
     def _generate_id(self) -> str:
         new_id = str(self._next_id)
         self._next_id += 1
         return new_id
+
+    async def get_permissions(self, channel_id: str) -> list[str]:
+        """Return configured bot permissions for channel."""
+        self.calls.append(
+            DiscordCall(
+                method="get_permissions",
+                args=(channel_id,),
+                kwargs={},
+            )
+        )
+        if self.raise_on_get_permissions is not None:
+            raise self.raise_on_get_permissions
+        return list(self.permissions)
 
     async def post_message(
         self,

@@ -77,6 +77,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Bypass Discord bot verification and notifications.",
     )
     doctor_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Perform live gateway connection and channel permission checks for Discord.",
+    )
+    doctor_parser.add_argument(
         "--config",
         type=Path,
         default=Path("config.yaml"),
@@ -167,12 +172,16 @@ async def run_doctor(
     local_only: bool,
     doctor_instance: Doctor | None = None,
     terminal_detector: Any | None = None,
+    live: bool = False,
 ) -> int:
     """Execute Doctor pre-flight checks and display formatted results."""
     pass_mark, fail_mark = _configure_console_encoding()
     print("[Doctor] Verifying environment...")
     doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
-    report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True)
+    try:
+        report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True, live=live)
+    except TypeError:
+        report = await doctor.run(local_only=local_only, halt_on_failure=True)
 
     for check in report.checks:
         if check.passed:
@@ -662,7 +671,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.command == "doctor":
-            return asyncio.run(run_doctor(config_path=config_path, local_only=local_only))
+            return asyncio.run(
+                run_doctor(
+                    config_path=config_path,
+                    local_only=local_only,
+                    live=getattr(args, "live", False),
+                )
+            )
         elif args.command == "start":
             return asyncio.run(
                 run_start(

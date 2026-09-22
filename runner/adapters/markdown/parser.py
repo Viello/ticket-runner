@@ -39,7 +39,7 @@ class TicketMarkdownParser:
         """
         ticket_path = Path(path)
         try:
-            with ticket_path.open("r", encoding="utf-8", newline="") as handle:
+            with ticket_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 text = handle.read()
         except OSError as exc:
             raise TicketFormatError(f"Cannot read ticket file '{ticket_path}': {exc}") from exc
