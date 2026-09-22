@@ -1,5 +1,6 @@
-﻿# T073 — Discord client lifecycle module (connect, guild sync, teardown)
-Status: pending
+# T073 — Discord client lifecycle module (connect, guild sync, teardown)
+Status: completed
+Completed: 2026-09-22T08:21:30Z
 Spec: docs/specs/05a-discord-bot-and-gateway.md
 Blocked by: T072
 Security: required
