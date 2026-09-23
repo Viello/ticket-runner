@@ -15,8 +15,10 @@ from runner.application.doctor import (
     CHECK_OPENCODE,
     CHECK_QUEUE,
     CHECK_SKILLS,
+    CHECK_TARGET_GIT_REPO,
     CHECK_TERMINAL_HOST,
     CHECK_VERIFICATION_COMMANDS,
+    CHECK_WORKER_BINARY,
     CANDIDATE_TERMINAL_HOSTS,
     CheckResult,
     Doctor,
@@ -38,11 +40,16 @@ class FakeGitOperations:
         branch: str = "agent/ticket-runner",
         raise_status_error: bool = False,
         raise_branch_error: bool = False,
+        is_work_tree: bool = True,
     ) -> None:
         self.clean = clean
         self.branch = branch
         self.raise_status_error = raise_status_error
         self.raise_branch_error = raise_branch_error
+        self.is_work_tree = is_work_tree
+
+    async def is_inside_work_tree(self, cwd: Path | None = None) -> bool:
+        return self.is_work_tree
 
     async def check_clean_working_tree(self) -> bool:
         if self.raise_status_error:
@@ -93,6 +100,7 @@ def _make_config(
     execution_skill: str = ".agents/skills/implement/SKILL.md",
     model: ModelConfig | None = None,
     ui: UIConfig | None = None,
+    provider: str = "opencode",
 ) -> RunnerConfig:
     """Construct a minimal valid RunnerConfig with scripted verification commands."""
     from runner.domain.config import (
@@ -120,7 +128,7 @@ def _make_config(
 
     return RunnerConfig(
         project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
-        worker=WorkerConfig(execution_skill=execution_skill),
+        worker=WorkerConfig(execution_skill=execution_skill, provider=provider),
         verification=VerificationConfig(test_cmd=test_cmd, build_cmd=build_cmd),
         tokens=TokenBudgetConfig(),
         presence=PresenceConfig(),
@@ -589,9 +597,9 @@ async def test_run_halts_on_first_failure(tmp_path: Path) -> None:
     report = await doctor.run(halt_on_failure=True)
 
     assert report.passed is False
-    # Stopped after the first check (opencode)
+    # Stopped after the first check (worker_binary / opencode)
     assert len(report.checks) == 1
-    assert report.checks[0].name == CHECK_OPENCODE
+    assert report.checks[0].name in (CHECK_OPENCODE, CHECK_WORKER_BINARY)
 
 
 @pytest.mark.anyio
@@ -1419,6 +1427,209 @@ async def test_doctor_run_passes_live_true_to_check_discord(tmp_path: Path) -> N
     assert discord_check.passed is True
     assert "Discord live check passed" in discord_check.message
     assert len(fake_gateway.calls) == 1
+
+
+# ==============================================================================
+# T096: Doctor Pre-Flight Provider Binary & Target Project Git Repository Checks
+# ==============================================================================
+
+@pytest.mark.anyio
+async def test_check_worker_binary_opencode_success() -> None:
+    """Doctor check_worker_binary passes when opencode is on PATH and version succeeds."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 0.4.1\n")
+
+    config = _make_config(provider="opencode")
+    doctor = Doctor(
+        command_runner=runner,
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda cmd: r"C:\tools\opencode.cmd" if cmd == "opencode" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "0.4.1" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_opencode_missing_on_path() -> None:
+    """Doctor check_worker_binary fails with actionable remediation when opencode is missing from PATH."""
+    config = _make_config(provider="opencode")
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda cmd: None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert result.name == CHECK_WORKER_BINARY
+    assert "OpenCode CLI binary 'opencode' was not found in PATH" in result.message
+    assert result.remediation is not None
+    assert "Install OpenCode CLI" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_opencode_version_failure() -> None:
+    """Doctor check_worker_binary fails when opencode binary fails version check."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=1, stderr="binary broken")
+
+    config = _make_config(provider="opencode")
+    doctor = Doctor(
+        command_runner=runner,
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda cmd: r"C:\tools\opencode.cmd" if cmd == "opencode" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert result.name == CHECK_WORKER_BINARY
+    assert "OpenCode CLI check failed" in result.message
+    assert result.remediation is not None
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_antigravity_success() -> None:
+    """Doctor check_worker_binary passes when worker.provider is antigravity and agy is on PATH."""
+    config = _make_config(provider="antigravity")
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda cmd: r"C:\Users\AppData\Local\bin\agy.exe" if cmd == "agy" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "agy" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_antigravity_missing_on_path() -> None:
+    """Doctor check_worker_binary fails with actionable remediation when agy is missing from PATH."""
+    config = _make_config(provider="antigravity")
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        path_resolver=lambda cmd: None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert result.name == CHECK_WORKER_BINARY
+    assert "Antigravity CLI binary 'agy' was not found in PATH" in result.message
+    assert result.remediation is not None
+    assert "Install Antigravity CLI" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_doctor_which_fn_injection_parameter() -> None:
+    """Doctor accepts which_fn parameter as an injectable binary path resolver."""
+    config = _make_config(provider="antigravity")
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=config),
+        which_fn=lambda cmd: r"C:\bin\agy.exe" if cmd == "agy" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+
+
+@pytest.mark.anyio
+async def test_check_target_git_repo_directory_missing(tmp_path: Path) -> None:
+    """Doctor check_target_git_repo fails when target directory does not exist."""
+    missing_dir = tmp_path / "non_existent_project"
+    doctor = Doctor(cwd=missing_dir)
+
+    result = await doctor.check_target_git_repo()
+    assert result.passed is False
+    assert result.name == CHECK_TARGET_GIT_REPO
+    assert "does not exist" in result.message
+    assert result.remediation is not None
+    assert "Ensure the target project directory" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_target_git_repo_not_a_directory(tmp_path: Path) -> None:
+    """Doctor check_target_git_repo fails when target path points to a file."""
+    file_path = tmp_path / "not_a_dir.txt"
+    file_path.write_text("just a file\n", encoding="utf-8")
+    doctor = Doctor(cwd=file_path)
+
+    result = await doctor.check_target_git_repo()
+    assert result.passed is False
+    assert result.name == CHECK_TARGET_GIT_REPO
+    assert "not a directory" in result.message
+    assert result.remediation is not None
+
+
+@pytest.mark.anyio
+async def test_check_target_git_repo_not_a_git_repository(tmp_path: Path) -> None:
+    """Doctor check_target_git_repo fails when target directory is not inside a git work tree."""
+    empty_dir = tmp_path / "plain_dir"
+    empty_dir.mkdir(parents=True, exist_ok=True)
+
+    git_ops = FakeGitOperations(is_work_tree=False)
+    doctor = Doctor(cwd=empty_dir, git_operations=git_ops)
+
+    result = await doctor.check_target_git_repo()
+    assert result.passed is False
+    assert result.name == CHECK_TARGET_GIT_REPO
+    assert "not a valid git repository" in result.message
+    assert result.remediation is not None
+    assert "git init" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_target_git_repo_valid(tmp_path: Path) -> None:
+    """Doctor check_target_git_repo passes when target directory is a valid git work tree."""
+    repo_dir = tmp_path / "valid_repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+
+    git_ops = FakeGitOperations(is_work_tree=True)
+    doctor = Doctor(cwd=repo_dir, git_operations=git_ops)
+
+    result = await doctor.check_target_git_repo()
+    assert result.passed is True
+    assert result.name == CHECK_TARGET_GIT_REPO
+    assert "valid git repository" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_git_halts_early_on_invalid_target_git_repo(tmp_path: Path) -> None:
+    """check_git fails immediately with target repo message when directory is not a git repo."""
+    plain_dir = tmp_path / "non_git"
+    plain_dir.mkdir(parents=True, exist_ok=True)
+
+    git_ops = FakeGitOperations(is_work_tree=False)
+    doctor = Doctor(cwd=plain_dir, git_operations=git_ops)
+
+    result = await doctor.check_git()
+    assert result.passed is False
+    assert result.name == CHECK_GIT
+    assert "not a valid git repository" in result.message
+    assert result.remediation is not None
+
+
+@pytest.mark.anyio
+async def test_doctor_run_with_antigravity_halts_on_missing_binary(tmp_path: Path) -> None:
+    """Doctor.run() halts on first failure when worker.provider is antigravity and agy is missing."""
+    config = _make_config(provider="antigravity")
+    doctor = Doctor(
+        cwd=tmp_path,
+        config_loader=FakeConfigLoader(config=config),
+        which_fn=lambda cmd: None,
+    )
+    report = await doctor.run(local_only=True, halt_on_failure=True)
+
+    assert report.passed is False
+    assert len(report.checks) == 1
+    assert report.checks[0].name == CHECK_WORKER_BINARY
+    assert "agy" in report.checks[0].message
+    assert "Install Antigravity CLI" in (report.checks[0].remediation or "")
 
 
 

@@ -15,12 +15,13 @@ An external, multi-agent Python orchestrator that coordinates AI coding agents (
 - [Prerequisites](#prerequisites)
 - [Installation & Setup](#installation--setup)
 - [How to Use](#how-to-use)
-  - [CLI Commands](#cli-commands)
+  - [CLI Commands & Reference](#cli-commands--reference)
   - [Exit Codes](#exit-codes)
   - [Terminal UI & Hotkeys](#terminal-ui--hotkeys)
   - [Presence Modes: Nearby vs. Away](#presence-modes-nearby-vs-away)
 - [How It Works](#how-it-works)
   - [Execution State Machine](#execution-state-machine)
+  - [Pre-Flight Checks (Doctor)](#pre-flight-checks-doctor)
   - [Gatekeeper & Circuit Breaker](#gatekeeper--circuit-breaker)
   - [Context Handoffs & Token Budgets](#context-handoffs--token-budgets)
   - [Token-Preserving Verification Guardrails](#token-preserving-verification-guardrails)
@@ -154,7 +155,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 | Spec | Title | Status | Primary Focus |
 | :--- | :--- | :--- | :--- |
 | **Spec 10b** | **Living Documentation & Roadmap** | Completed | Reconcile root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`), lock in domain glossary, establish external path invariants, and define the roadmap. |
-| **Spec 11** | **Decoupled Project Root & Multi-Agent** | Planned | Introduce `--project-dir <path>` CLI plumbing, abstract `AgentWorker` port (`runner/ports/agent_worker.py`), and multi-agent adapters for OpenCode and Antigravity CLI (`agy`). |
+| **Spec 11** | **Decoupled Project Root & Multi-Agent** | Completed | Introduce `--project-dir <path>` CLI plumbing, abstract `AgentWorker` port (`runner/ports/agent_worker.py`), and multi-agent adapters for OpenCode and Antigravity CLI (`agy`). |
 | **Spec 12** | **Project Scaffolding & Skills Distribution** | Planned | Implement two-tier configuration merging (`~/.ticket-runner/config.yaml` + `ticket-runner.yaml`), `ticket-runner init` heuristics, `ticket-runner init --ai-prompt`, and `ticket-runner skills sync`. |
 | **Spec 13** | **Token-Guarded Verification & Human Gate** | Planned | Behavioral verification harness contracts (`verify-<app>`), out-of-band evidence capture, token-preserving triage extractor (`evidence_triage.py`), and dual-mode Evidence Card human approval gate. |
 
@@ -407,35 +408,54 @@ export DISCORD_BOT_TOKEN="your_actual_discord_bot_token"
 
 ## How to Use
 
-### CLI Commands
+### CLI Commands & Reference
 
-Ticket Runner provides an entry-point CLI (`ticket-runner` or `python ticket_runner.py`):
+Ticket Runner provides an entry-point CLI (`ticket-runner` or `python ticket_runner.py`). All commands accept the `--project-dir <path>` argument to target any external codebase:
 
 ```powershell
-# Initialize a new target project (scaffolds directories, generates ticket-runner.yaml, syncs skills)
-ticket-runner --project-dir /path/to/project init
-
-# Generate the standalone LLM configuration prompt for coding assistants
-ticket-runner init --ai-prompt
-
-# Sync or update canonical agent skills from Viello/agent-skills
-ticket-runner --project-dir /path/to/project skills sync
-
-# Run pre-flight health checks on environment, git state, and agent binaries
-ticket-runner --project-dir /path/to/project doctor
-
-# Start the runner and begin processing the queue
-ticket-runner --project-dir /path/to/project start
-
-# Inspect active ticket, token usage, and presence status
-ticket-runner --project-dir /path/to/project status
-
-# Pause the active runner and release the queue lock for edits
-ticket-runner --project-dir /path/to/project pause
+# Syntax:
+ticket-runner [--project-dir <path>] <command> [options]
+# Alternatively, --project-dir can be specified after the subcommand:
+ticket-runner <command> [--project-dir <path>] [options]
 ```
 
-> [!NOTE]
-> If `--project-dir` is omitted, Ticket Runner defaults to the current working directory (`Path.cwd()`).
+#### Core Subcommands
+
+```powershell
+# 1. Run pre-flight health checks on environment, git state, and agent binaries
+ticket-runner --project-dir /path/to/my-app doctor
+ticket-runner doctor --local-only   # Runs against current directory, terminal-only
+
+# 2. Start the runner and begin processing the queue
+ticket-runner --project-dir /path/to/my-app start
+ticket-runner start --model qwen/qwen-plus  # Specific model override
+
+# 3. Initialize a new target project (scaffolds directories, generates ticket-runner.yaml, syncs skills)
+ticket-runner --project-dir /path/to/my-app init
+
+# 4. Generate the standalone LLM configuration prompt for coding assistants
+ticket-runner init --ai-prompt
+
+# 5. Sync or update canonical agent skills from Viello/agent-skills
+ticket-runner --project-dir /path/to/my-app skills sync
+
+# 6. Inspect active ticket, token usage, and presence status
+ticket-runner --project-dir /path/to/my-app status
+
+# 7. Pause the active runner and release the queue lock for edits
+ticket-runner --project-dir /path/to/my-app pause
+```
+
+#### Directory Resolution & Path Validation
+
+| Argument | Description | Default Behavior |
+| :--- | :--- | :--- |
+| `--project-dir <path>` | Absolute or relative path to the target project repository. | If omitted, defaults strictly to current working directory (`Path.cwd().resolve()`). |
+| `--config <path>` | Path to configuration file. | If relative and `--project-dir` is provided, resolved relative to target project root. |
+| `--local-only` | Bypass Discord connectivity checks and notifications. | Disabled by default; notifications route to Discord in Away mode. |
+
+> [!IMPORTANT]
+> **Defensive Path Validation:** `--project-dir` is rigorously validated before running commands. Non-existent paths or paths pointing to regular files exit immediately with exit code `1` and an actionable error message. Target directories must be initialized Git repositories (`git rev-parse --is-inside-work-tree`).
 
 ### Exit Codes
 
@@ -504,6 +524,23 @@ Only **one** ticket executes at a time. The loop follows strict transitions:
        └── FAIL (Attempts < verification.max_attempts) → Feed bounded triage excerpt → Retry WORKING
                 (Attempts exhausted) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
+
+### Pre-Flight Checks (Doctor)
+
+Before any ticket execution begins, `Doctor` inspects the environment, workspace, and configuration to catch missing tools, unconfigured dependencies, and invalid states early:
+
+1. **Target Project Directory & Git Repository**: Validates that `--project-dir` (or `CWD`) exists, is an accessible directory, and is a valid Git worktree (verified via `git rev-parse --is-inside-work-tree`).
+2. **Worker Provider CLI Binary**: Inspects system PATH for the executable corresponding to the configured `worker.provider`:
+   - `opencode`: Verifies `opencode` CLI binary exists in PATH and executes `opencode --version`.
+   - `antigravity`: Verifies `agy` CLI binary exists in PATH.
+3. **Branch Isolation & Clean Working Tree**: Verifies that the repository working tree has zero uncommitted changes and is checked out to the designated isolation branch (`agent/ticket-runner`).
+4. **Ticket Queue Validation**: Verifies `docs/tickets/` exists and contains at least one pending ticket specification.
+5. **Configuration Schema & Model Definitions**: Validates `config.yaml` against schema constraints and confirms at least one selectable model is configured under `model.models`.
+6. **Session Terminal Host**: Verifies configured terminal binary on PATH or prompts for interactive host selection (`wt.exe`, `pwsh.exe`, `powershell.exe`, `cmd.exe`).
+7. **Verification Commands**: Resolves the leading executable of `verification.test_cmd` and `verification.build_cmd` against PATH.
+8. **Pre-Push Hook Guardrail**: Verifies `.git/hooks/pre-push` is installed with blocking signature to prevent upstream pushes.
+9. **Operating Rules & Skills**: Confirms `AGENTS.md` and required skill definitions (`implement`, `code-review`, `diagnosing-bugs`) exist on disk.
+10. **Discord Connectivity & Permissions**: Validates bot credentials and channel permissions unless running with `--local-only`.
 
 ### Gatekeeper & Circuit Breaker
 
@@ -648,6 +685,16 @@ Ticket Runner separates global machine configuration from project-specific overr
 | `verification.timeout_seconds` | `int` | `300` | Timeout for test and build command executions. |
 | `lifecycle.mode` | `string` | `"human"` | `"human"` (requires human approval to commit) or `"autonomous"`. |
 | `lifecycle.queue_completion` | `string` | `"standby"` | Behavior when queue empties (`standby` or `terminate`). |
+
+### Worker Configuration
+
+The `worker.provider` setting controls which agent CLI backend is orchestrated by the `AgentWorker` port:
+
+| Provider | CLI Invocation | Description |
+| :--- | :--- | :--- |
+| `opencode` *(default)* | `opencode run --format json --auto "<prompt>"` | Production default. Drives OpenCode as an external subprocess with JSONL streaming telemetry and session resumption. |
+| `antigravity` | `agy run --auto "<prompt>"` | Integrates with Google Antigravity CLI (`agy`) for environments leveraging Antigravity agent workflows. |
+
 
 ---
 

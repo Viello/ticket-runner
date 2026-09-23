@@ -62,13 +62,34 @@ class RuntimePaths:
         """Path to the runner status file (.agent/status.json)."""
         return self.root_dir / "status.json"
 
+    def _validate_ticket_id(self, ticket_id: str) -> str:
+        """Validate ticket_id against allowlist to prevent directory traversal."""
+        if not isinstance(ticket_id, str) or not TICKET_ID_PATTERN.match(ticket_id):
+            raise ValueError(f"Invalid ticket identifier or path traversal detected: {ticket_id!r}")
+        return ticket_id
+
+    def _check_containment(self, target: Path, base: Path) -> Path:
+        """Ensure resolved target path is strictly contained within base directory."""
+        try:
+            base_resolved = base.resolve()
+            target_resolved = target.resolve()
+            if not target_resolved.is_relative_to(base_resolved):
+                raise ValueError(f"Path traversal detected escaping {base}: {target}")
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError(f"Path traversal detected escaping {base}: {target}") from exc
+        return target
+
     def ready_signal_path(self, ticket_id: str) -> Path:
         """Path to a ticket's ready signal file (.agent/signals/{ticket_id}_ready.json)."""
-        return self.signals_dir / f"{ticket_id}_ready.json"
+        self._validate_ticket_id(ticket_id)
+        target = self.signals_dir / f"{ticket_id}_ready.json"
+        return self._check_containment(target, self.signals_dir)
 
     def question_path(self, ticket_id: str) -> Path:
         """Path to a ticket's question file (.agent/questions/{ticket_id}.json)."""
-        return self.questions_dir / f"{ticket_id}.json"
+        self._validate_ticket_id(ticket_id)
+        target = self.questions_dir / f"{ticket_id}.json"
+        return self._check_containment(target, self.questions_dir)
 
     def question_file_path(self, ticket_id: str) -> Path:
         """Alias to question_path for caller convenience."""
@@ -76,7 +97,9 @@ class RuntimePaths:
 
     def checkpoint_dir(self, ticket_id: str) -> Path:
         """Directory for a ticket's handoff checkpoints (.agent/checkpoints/{ticket_id})."""
-        return self.checkpoints_dir / ticket_id
+        self._validate_ticket_id(ticket_id)
+        target = self.checkpoints_dir / ticket_id
+        return self._check_containment(target, self.checkpoints_dir)
 
     def checkpoint_path(self, ticket_id: str) -> Path:
         """Path to a ticket's handoff checkpoint (.agent/checkpoints/{ticket_id}/handoff.md)."""
@@ -84,7 +107,11 @@ class RuntimePaths:
 
     def session_log_path(self, ticket_id: str, session_id: str) -> Path:
         """Path to a worker session's JSONL telemetry log (.agent/logs/{ticket_id}_session_{session_id}.jsonl)."""
-        return self.logs_dir / f"{ticket_id}_session_{session_id}.jsonl"
+        self._validate_ticket_id(ticket_id)
+        if not is_valid_session_id(session_id):
+            raise ValueError(f"Invalid session identifier or path traversal detected: {session_id!r}")
+        target = self.logs_dir / f"{ticket_id}_session_{session_id}.jsonl"
+        return self._check_containment(target, self.logs_dir)
 
     def session_jsonl_path(self, ticket_id: str, session_id: str) -> Path:
         """Alias to session_log_path for caller convenience."""
@@ -92,7 +119,11 @@ class RuntimePaths:
 
     def session_stderr_path(self, ticket_id: str, session_id: str) -> Path:
         """Path to a worker session's stderr sidecar log (.agent/logs/{ticket_id}_session_{session_id}.stderr.log)."""
-        return self.logs_dir / f"{ticket_id}_session_{session_id}.stderr.log"
+        self._validate_ticket_id(ticket_id)
+        if not is_valid_session_id(session_id):
+            raise ValueError(f"Invalid session identifier or path traversal detected: {session_id!r}")
+        target = self.logs_dir / f"{ticket_id}_session_{session_id}.stderr.log"
+        return self._check_containment(target, self.logs_dir)
 
     def session_stderr_log_path(self, ticket_id: str, session_id: str) -> Path:
         """Alias to session_stderr_path for caller convenience."""
@@ -100,7 +131,9 @@ class RuntimePaths:
 
     def diagnostic_log_path(self, ticket_id: str) -> Path:
         """Path to a ticket's diagnostic report log (.agent/logs/{ticket_id}_diagnostic.md)."""
-        return self.logs_dir / f"{ticket_id}_diagnostic.md"
+        self._validate_ticket_id(ticket_id)
+        target = self.logs_dir / f"{ticket_id}_diagnostic.md"
+        return self._check_containment(target, self.logs_dir)
 
     def smoke_log_path(self, spec_slug: str) -> Path:
         """Path to a spec's smoke log (.agent/smoke_log_{safe_slug}.md).

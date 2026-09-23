@@ -1617,15 +1617,14 @@ def test_supervisor_detects_resource_from_raw_fallback_lines(tmp_path: Path) -> 
 
 
 def test_supervisor_resource_extraction_exception_is_non_fatal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An exception raised during resource extraction does not abort the supervisor session run."""
-    import runner.application.worker_supervisor as ws_mod
+    from typing import Any
+    from tests.fakes.fake_agent_worker import FakeAgentWorker
 
     def _failing_extract(*args: Any, **kwargs: Any) -> frozenset[str]:
         raise RuntimeError("Simulated extraction explosion")
-
-    monkeypatch.setattr(ws_mod, "extract_resource_access", _failing_extract)
 
     fake_runner = FakeCommandRunner()
     session_id = "ses_telemetry4"
@@ -1643,9 +1642,11 @@ def test_supervisor_resource_extraction_exception_is_non_fatal(
     )
 
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    fake_worker = FakeAgentWorker(canned_resources=_failing_extract)
     supervisor = WorkerSupervisor(
         command_runner=fake_runner,
         runtime_paths=runtime_paths,
+        agent_worker=fake_worker,
     )
 
     ticket = _make_ticket("T045")
@@ -2352,6 +2353,82 @@ def test_heartbeat_does_not_fire_after_worker_exits(tmp_path: Path) -> None:
     # Wait longer than heartbeat interval to ensure no trailing heartbeat
     asyncio.run(asyncio.sleep(0.05))
     assert len(printed_lines) == count_at_exit
+
+
+# --- T094: Decoupled Worker Supervisor & AgentWorker Port Integration ---
+
+
+def test_worker_supervisor_source_has_no_direct_opencode_adapter_imports() -> None:
+    """WorkerSupervisor imports zero symbols from runner.adapters.opencode."""
+    import inspect
+    from runner.application import worker_supervisor
+
+    source = inspect.getsource(worker_supervisor)
+    assert "runner.adapters.opencode" not in source, "Direct adapter import found in worker_supervisor"
+
+
+def test_worker_supervisor_drives_session_with_injected_fake_agent_worker(tmp_path: Path) -> None:
+    """WorkerSupervisor delegates command building, event decoding, and resource access to injected AgentWorker."""
+    from runner.ports.agent_worker import AgentWorker
+    from tests.fakes.fake_agent_worker import FakeAgentWorker
+
+    fake_runner = FakeCommandRunner()
+    fake_worker = FakeAgentWorker(
+        canned_resources=frozenset({"implement", "AGENTS.md"}),
+    )
+    assert isinstance(fake_worker, AgentWorker)
+
+    expected_cmd = ["opencode", "run", "--format", "json", "--auto", "prompt text"]
+    stream_lines = [
+        json.dumps({"type": "step_start", "sessionID": "ses_injected123"}) + "\n",
+        json.dumps({
+            "type": "tool_use",
+            "sessionID": "ses_injected123",
+            "part": {"tool": "read", "filePath": ".agents/skills/implement/SKILL.md"},
+        }) + "\n",
+        json.dumps({
+            "type": "step_finish",
+            "sessionID": "ses_injected123",
+            "part": {"tokens": {"total": 50000}},
+        }) + "\n",
+    ]
+    fake_runner.register_spawn(expected_cmd, stdout_lines=stream_lines, exit_code=0)
+
+    recorded_events = []
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=fake_worker,
+        on_event=recorded_events.append,
+    )
+
+    assert supervisor.agent_worker is fake_worker
+
+    ticket = _make_ticket("T094")
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    assert result.reason == RunTerminationReason.EXITED
+    assert result.session_id == "ses_injected123"
+    assert result.occupancy == 50000
+    assert result.resources_accessed == frozenset({"implement", "AGENTS.md"})
+
+    # Verify FakeAgentWorker received calls
+    assert len(fake_worker.commands_built) == 1
+    assert fake_worker.commands_built[0]["prompt"] == "prompt text"
+    assert len(fake_worker.decoded_lines) == 3
+    assert len(fake_worker.resource_access_calls) == 3
+    assert len(recorded_events) == 3
+
+
+def test_worker_supervisor_error_when_no_agent_worker_and_no_factory() -> None:
+    """WorkerSupervisor raises ValueError if agent_worker is None and no factory is registered."""
+    saved_factory = WorkerSupervisor._default_agent_worker_factory
+    try:
+        WorkerSupervisor.set_default_agent_worker_factory(None)
+        with pytest.raises(ValueError, match="WorkerSupervisor requires an AgentWorker instance"):
+            WorkerSupervisor(agent_worker=None)
+    finally:
+        WorkerSupervisor.set_default_agent_worker_factory(saved_factory)
 
 
 

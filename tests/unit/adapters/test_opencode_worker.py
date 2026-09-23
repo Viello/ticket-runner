@@ -6,12 +6,14 @@ import pytest
 from runner.adapters.opencode.opencode_worker import (
     KNOWN_EVENT_TYPES,
     OpenCodeEvent,
+    OpenCodeWorker,
     OpenCodeWorkerCli,
     build_opencode_run_command,
     decode_event,
     extract_resource_access,
 )
-from runner.domain.telemetry import TokenUsage
+from runner.domain.telemetry import TokenUsage, WorkerEvent
+from runner.ports.agent_worker import AgentWorker
 
 
 # --- Command Construction Tests ---
@@ -525,4 +527,102 @@ def test_extract_resource_access_edge_cases_and_seams() -> None:
     assert OpenCodeWorkerCli.decode_event is decode_event
     assert OpenCodeWorkerCli.extract_resource_access is extract_resource_access
     assert OpenCodeWorkerCli.build_run_command is build_opencode_run_command
+
+
+# --- T094: AgentWorker Protocol Conformance & OpenCodeWorker Adapter Tests ---
+
+
+def test_opencode_worker_protocol_conformance() -> None:
+    worker = OpenCodeWorker()
+    assert isinstance(worker, AgentWorker)
+    assert OpenCodeEvent is WorkerEvent
+
+
+def test_opencode_worker_maps_all_seven_event_types() -> None:
+    worker = OpenCodeWorker()
+    raw_payloads = [
+        {"type": "step_start", "sessionID": "ses_01"},
+        {"type": "step_finish", "sessionID": "ses_01", "part": {"tokens": {"total": 5000}}},
+        {"type": "text", "sessionID": "ses_01", "part": {"text": "hello"}},
+        {"type": "tool_call", "sessionID": "ses_01", "part": {"tool": "read"}},
+        {"type": "tool_use", "sessionID": "ses_01", "part": {"tool": "bash"}},
+        {"type": "tool_result", "sessionID": "ses_01", "part": {"output": "ok"}},
+        {"type": "error", "sessionID": "ses_01", "part": {"message": "failed"}},
+    ]
+
+    for payload in raw_payloads:
+        line = json.dumps(payload)
+        event = worker.decode_event(line)
+        assert event is not None
+        assert isinstance(event, WorkerEvent)
+        assert event.type == payload["type"]
+        assert event.session_id == "ses_01"
+        assert event.is_known is True
+
+    assert KNOWN_EVENT_TYPES == frozenset({
+        "step_start",
+        "step_finish",
+        "text",
+        "tool_call",
+        "tool_use",
+        "tool_result",
+        "error",
+    })
+
+
+def test_opencode_worker_delegation() -> None:
+    worker = OpenCodeWorker()
+    cmd = worker.build_run_command("run tests", session_id="ses_abc123", variant="low", model_id="gpt-4")
+    assert cmd == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--session",
+        "ses_abc123",
+        "-m",
+        "gpt-4",
+        "--variant",
+        "low",
+        "--auto",
+        "run tests",
+    ]
+
+    event = worker.decode_event('{"type": "text", "part": {"text": "inspecting AGENTS.md"}}\n')
+    assert event is not None
+    assert isinstance(event, WorkerEvent)
+
+    detected = worker.extract_resource_access(event, raw_line='inspecting .agents/skills/implement/SKILL.md')
+    assert detected == frozenset({"AGENTS.md", "implement"})
+
+
+def test_opencode_worker_security_validation() -> None:
+    worker = OpenCodeWorker()
+
+    # Reject empty or whitespace prompt
+    with pytest.raises(ValueError, match="Prompt cannot be empty"):
+        worker.build_run_command("")
+    with pytest.raises(ValueError, match="Prompt cannot be empty"):
+        worker.build_run_command("   \t\n")
+
+    # Reject non-string prompt
+    with pytest.raises(TypeError, match="Prompt must be a string"):
+        worker.build_run_command(None)  # type: ignore[arg-type]
+
+    # Reject invalid session ID allowlist violations
+    with pytest.raises(ValueError, match="Invalid session ID"):
+        worker.build_run_command("prompt", session_id="ses_123; rm -rf /")
+
+    with pytest.raises(ValueError, match="Invalid session ID"):
+        worker.build_run_command("prompt", session_id="../../etc/passwd")
+
+    with pytest.raises(ValueError, match="Invalid session ID"):
+        worker.build_run_command("prompt", session_id="invalid_prefix")
+
+    # Command is always returned as discrete token list (never a shell string)
+    cmd = worker.build_run_command("clean prompt", session_id="ses_ValidSession123")
+    assert isinstance(cmd, list)
+    assert all(isinstance(token, str) for token in cmd)
+    assert cmd[0] == "opencode"
+    assert cmd[1] == "run"
 

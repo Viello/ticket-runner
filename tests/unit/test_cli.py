@@ -1158,6 +1158,111 @@ def test_run_doctor_passes_live_to_doctor_instance() -> None:
     assert doc.passed_live is True
 
 
+# ==============================================================================
+# T098: CLI --project-dir argument plumbing & validation tests
+# ==============================================================================
+
+def test_cli_parser_project_dir_default() -> None:
+    """CLI parser defaults --project-dir to Path.cwd().resolve()."""
+    parser = ticket_runner.create_parser()
+
+    args_top = parser.parse_args([])
+    assert args_top.project_dir == Path.cwd().resolve()
+
+    args_doctor = parser.parse_args(["doctor"])
+    assert args_doctor.project_dir == Path.cwd().resolve()
+
+    args_start = parser.parse_args(["start"])
+    assert args_start.project_dir == Path.cwd().resolve()
+
+
+def test_cli_parser_project_dir_subcommands_and_order(tmp_path: Path) -> None:
+    """CLI parser accepts --project-dir before and after subcommands."""
+    parser = ticket_runner.create_parser()
+    custom_dir = (tmp_path / "custom").resolve()
+
+    # Pre-subcommand
+    args_pre_doc = parser.parse_args(["--project-dir", str(custom_dir), "doctor"])
+    assert args_pre_doc.project_dir == custom_dir
+
+    args_pre_start = parser.parse_args(["--project-dir", str(custom_dir), "start"])
+    assert args_pre_start.project_dir == custom_dir
+
+    # Post-subcommand
+    args_post_doc = parser.parse_args(["doctor", "--project-dir", str(custom_dir)])
+    assert args_post_doc.project_dir == custom_dir
+
+    args_post_start = parser.parse_args(["start", "--project-dir", str(custom_dir)])
+    assert args_post_start.project_dir == custom_dir
+
+
+def test_cli_main_invalid_project_dir_not_found(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """main exits with code 1 and error when --project-dir does not exist."""
+    non_existent = tmp_path / "does_not_exist"
+    code = ticket_runner.main(["--project-dir", str(non_existent), "doctor"])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "does not exist" in captured.out
+
+
+def test_cli_main_invalid_project_dir_not_a_directory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """main exits with code 1 and error when --project-dir points to a file."""
+    file_path = tmp_path / "some_file.txt"
+    file_path.write_text("hello", encoding="utf-8")
+
+    code = ticket_runner.main(["--project-dir", str(file_path), "doctor"])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "is not a directory" in captured.out
+
+
+def test_cli_main_project_dir_forwarded_to_run_doctor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ticket_runner.main forwards validated project_dir to run_doctor."""
+    target_dir = (tmp_path / "target_repo").resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    captured_args: dict[str, Any] = {}
+
+    async def fake_run_doctor(config_path: Path, local_only: bool, project_dir: Path | None = None, **kwargs: Any) -> int:
+        captured_args["config_path"] = config_path
+        captured_args["local_only"] = local_only
+        captured_args["project_dir"] = project_dir
+        return 0
+
+    monkeypatch.setattr(ticket_runner, "run_doctor", fake_run_doctor)
+
+    code = ticket_runner.main(["--project-dir", str(target_dir), "doctor", "--local-only"])
+    assert code == 0
+    assert captured_args["project_dir"] == target_dir
+    assert captured_args["local_only"] is True
+
+
+def test_cli_main_project_dir_forwarded_to_run_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ticket_runner.main forwards validated project_dir to run_start."""
+    target_dir = (tmp_path / "target_repo").resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    captured_args: dict[str, Any] = {}
+
+    async def fake_run_start(config_path: Path, local_only: bool, project_dir: Path | None = None, **kwargs: Any) -> int:
+        captured_args["config_path"] = config_path
+        captured_args["local_only"] = local_only
+        captured_args["project_dir"] = project_dir
+        return 0
+
+    monkeypatch.setattr(ticket_runner, "run_start", fake_run_start)
+
+    code = ticket_runner.main(["start", "--project-dir", str(target_dir), "--local-only"])
+    assert code == 0
+    assert captured_args["project_dir"] == target_dir
+    assert captured_args["local_only"] is True
+
+
+
 
 
 

@@ -222,10 +222,17 @@ class DirectoryTicketStore(TicketRepository):
             source_path = ticket
         elif isinstance(ticket, str):
             candidate = Path(ticket)
-            if candidate.is_file():
+            if candidate.is_absolute() and candidate.is_file():
                 source_path = candidate
             elif (self._root_dir / candidate).is_file():
                 source_path = self._root_dir / candidate
+            elif (
+                self._root_dir.parent.name == "docs"
+                and (self._root_dir.parent.parent / candidate).is_file()
+            ):
+                source_path = self._root_dir.parent.parent / candidate
+            elif candidate.is_file():
+                source_path = candidate
             else:
                 matched: list[Path] = []
                 ticket_str = ticket.strip()

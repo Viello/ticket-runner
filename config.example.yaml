@@ -10,7 +10,9 @@ project:
   base_branch: "main"
 
 worker:
-  # Skill path guiding the OpenCode worker during ticket execution
+  # Agent backend provider: "opencode" (default) or "antigravity"
+  provider: "opencode"
+  # Skill path guiding the worker during ticket execution
   execution_skill: ".agents/skills/implement/SKILL.md"
 
 model:
