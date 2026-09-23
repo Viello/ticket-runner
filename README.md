@@ -15,7 +15,7 @@ An external, multi-agent Python orchestrator that coordinates AI coding agents (
 - [Prerequisites](#prerequisites)
 - [Installation & Setup](#installation--setup)
 - [How to Use](#how-to-use)
-  - [CLI Commands](#cli-commands)
+  - [CLI Commands & Reference](#cli-commands--reference)
   - [Exit Codes](#exit-codes)
   - [Terminal UI & Hotkeys](#terminal-ui--hotkeys)
   - [Presence Modes: Nearby vs. Away](#presence-modes-nearby-vs-away)
@@ -408,35 +408,54 @@ export DISCORD_BOT_TOKEN="your_actual_discord_bot_token"
 
 ## How to Use
 
-### CLI Commands
+### CLI Commands & Reference
 
-Ticket Runner provides an entry-point CLI (`ticket-runner` or `python ticket_runner.py`):
+Ticket Runner provides an entry-point CLI (`ticket-runner` or `python ticket_runner.py`). All commands accept the `--project-dir <path>` argument to target any external codebase:
 
 ```powershell
-# Initialize a new target project (scaffolds directories, generates ticket-runner.yaml, syncs skills)
-ticket-runner --project-dir /path/to/project init
-
-# Generate the standalone LLM configuration prompt for coding assistants
-ticket-runner init --ai-prompt
-
-# Sync or update canonical agent skills from Viello/agent-skills
-ticket-runner --project-dir /path/to/project skills sync
-
-# Run pre-flight health checks on environment, git state, and agent binaries
-ticket-runner --project-dir /path/to/project doctor
-
-# Start the runner and begin processing the queue
-ticket-runner --project-dir /path/to/project start
-
-# Inspect active ticket, token usage, and presence status
-ticket-runner --project-dir /path/to/project status
-
-# Pause the active runner and release the queue lock for edits
-ticket-runner --project-dir /path/to/project pause
+# Syntax:
+ticket-runner [--project-dir <path>] <command> [options]
+# Alternatively, --project-dir can be specified after the subcommand:
+ticket-runner <command> [--project-dir <path>] [options]
 ```
 
-> [!NOTE]
-> If `--project-dir` is omitted, Ticket Runner defaults to the current working directory (`Path.cwd()`).
+#### Core Subcommands
+
+```powershell
+# 1. Run pre-flight health checks on environment, git state, and agent binaries
+ticket-runner --project-dir /path/to/my-app doctor
+ticket-runner doctor --local-only   # Runs against current directory, terminal-only
+
+# 2. Start the runner and begin processing the queue
+ticket-runner --project-dir /path/to/my-app start
+ticket-runner start --model qwen/qwen-plus  # Specific model override
+
+# 3. Initialize a new target project (scaffolds directories, generates ticket-runner.yaml, syncs skills)
+ticket-runner --project-dir /path/to/my-app init
+
+# 4. Generate the standalone LLM configuration prompt for coding assistants
+ticket-runner init --ai-prompt
+
+# 5. Sync or update canonical agent skills from Viello/agent-skills
+ticket-runner --project-dir /path/to/my-app skills sync
+
+# 6. Inspect active ticket, token usage, and presence status
+ticket-runner --project-dir /path/to/my-app status
+
+# 7. Pause the active runner and release the queue lock for edits
+ticket-runner --project-dir /path/to/my-app pause
+```
+
+#### Directory Resolution & Path Validation
+
+| Argument | Description | Default Behavior |
+| :--- | :--- | :--- |
+| `--project-dir <path>` | Absolute or relative path to the target project repository. | If omitted, defaults strictly to current working directory (`Path.cwd().resolve()`). |
+| `--config <path>` | Path to configuration file. | If relative and `--project-dir` is provided, resolved relative to target project root. |
+| `--local-only` | Bypass Discord connectivity checks and notifications. | Disabled by default; notifications route to Discord in Away mode. |
+
+> [!IMPORTANT]
+> **Defensive Path Validation:** `--project-dir` is rigorously validated before running commands. Non-existent paths or paths pointing to regular files exit immediately with exit code `1` and an actionable error message. Target directories must be initialized Git repositories (`git rev-parse --is-inside-work-tree`).
 
 ### Exit Codes
 

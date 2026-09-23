@@ -53,6 +53,12 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=Path.cwd().resolve(),
+        help="Target project directory path (default: current directory).",
+    )
+    parser.add_argument(
         "--local-only",
         action="store_true",
         help="Bypass Discord bot verification and notifications (terminal-only mode).",
@@ -72,6 +78,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Run pre-flight environment checks to verify system prerequisites.",
     )
     doctor_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    doctor_parser.add_argument(
         "--local-only",
         action="store_true",
         help="Bypass Discord bot verification and notifications.",
@@ -84,7 +96,7 @@ def create_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
+        default=argparse.SUPPRESS,
         help="Path to configuration YAML file (default: config.yaml).",
     )
 
@@ -96,6 +108,12 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     start_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    start_parser.add_argument(
         "--local-only",
         action="store_true",
         help="Bypass Discord bot verification and notifications.",
@@ -103,7 +121,7 @@ def create_parser() -> argparse.ArgumentParser:
     start_parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
+        default=argparse.SUPPRESS,
         help="Path to configuration YAML file (default: config.yaml).",
     )
     start_parser.add_argument(
@@ -119,9 +137,15 @@ def create_parser() -> argparse.ArgumentParser:
         help="Manage standalone Discord bot operations (smoke test or run).",
     )
     bot_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    bot_parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
+        default=argparse.SUPPRESS,
         help="Path to configuration YAML file (default: config.yaml).",
     )
     bot_group = bot_parser.add_mutually_exclusive_group(required=True)
@@ -173,11 +197,28 @@ async def run_doctor(
     doctor_instance: Doctor | None = None,
     terminal_detector: Any | None = None,
     live: bool = False,
+    project_dir: Path | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks and display formatted results."""
+    resolved_project_dir: Path | None = None
+    if project_dir is not None:
+        resolved_project_dir = Path(project_dir).resolve()
+        if not resolved_project_dir.exists():
+            print(f"\n[Runner] Error: Project directory '{resolved_project_dir}' does not exist.")
+            return 1
+        if not resolved_project_dir.is_dir():
+            print(f"\n[Runner] Error: Project path '{resolved_project_dir}' is not a directory.")
+            return 1
+
     pass_mark, fail_mark = _configure_console_encoding()
     print("[Doctor] Verifying environment...")
-    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
+
+    doctor = doctor_instance or Doctor(
+        config_path=config_path,
+        terminal_detector=terminal_detector,
+        cwd=resolved_project_dir,
+        project_dir=resolved_project_dir,
+    )
     try:
         report: DoctorReport = await doctor.run(local_only=local_only, halt_on_failure=True, live=live)
     except TypeError:
@@ -221,15 +262,32 @@ async def run_start(
     presence_coordinator: PresenceCoordinator | None = None,
     tui_coordinator: TuiCoordinator | None = None,
     terminal_detector: Any | None = None,
+    project_dir: Path | None = None,
 ) -> int:
     """Execute Doctor pre-flight checks, validate configuration, and drive queue lifecycle."""
+    resolved_project_dir: Path | None = None
+    if project_dir is not None:
+        resolved_project_dir = Path(project_dir).resolve()
+        if not resolved_project_dir.exists():
+            print(f"\n[Runner] Error: Project directory '{resolved_project_dir}' does not exist.")
+            return 1
+        if not resolved_project_dir.is_dir():
+            print(f"\n[Runner] Error: Project path '{resolved_project_dir}' is not a directory.")
+            return 1
+
     _configure_console_encoding()
-    doctor = doctor_instance or Doctor(config_path=config_path, terminal_detector=terminal_detector)
+    doctor = doctor_instance or Doctor(
+        config_path=config_path,
+        terminal_detector=terminal_detector,
+        cwd=resolved_project_dir,
+        project_dir=resolved_project_dir,
+    )
     doctor_code = await run_doctor(
         config_path=config_path,
         local_only=local_only,
         doctor_instance=doctor,
         terminal_detector=terminal_detector,
+        project_dir=resolved_project_dir,
     )
     if doctor_code != 0:
         return doctor_code
@@ -237,7 +295,12 @@ async def run_start(
     config = doctor.loaded_config
     if config is None:
         loader = YamlConfigLoader()
-        config = loader.load(config_path)
+        effective_cfg = (
+            resolved_project_dir / config_path
+            if resolved_project_dir and not config_path.is_absolute()
+            else config_path
+        )
+        config = loader.load(effective_cfg)
 
     supervisor: WorkerSupervisor | None = supervisor_instance
     crash_recovery: CrashRecoveryCoordinator | None = crash_recovery_instance
@@ -282,7 +345,11 @@ async def run_start(
 
         effective_state_store = state_store
         if effective_state_store is None:
-            runtime_paths = RuntimePaths()
+            runtime_paths = (
+                RuntimePaths(root_dir=resolved_project_dir / ".agent")
+                if resolved_project_dir
+                else RuntimePaths()
+            )
             effective_state_store = JsonStateStore(path=runtime_paths.state_path)
 
         prompt_adapter = model_prompt or ModelPrompt(read_key=key_reader)
@@ -303,6 +370,7 @@ async def run_start(
 
         container = build_container(
             config=config,
+            project_dir=resolved_project_dir,
             clock=clock,
             model_id=model_id,
             state_store=effective_state_store,
@@ -472,10 +540,28 @@ async def run_bot(
     permission_checker: Callable[[Any, Any], Awaitable[list[str]]] | None = None,
     stderr: Any | None = None,
     stop_event: asyncio.Event | None = None,
+    project_dir: Path | None = None,
 ) -> int:
     """Execute standalone Discord bot subcommand (--smoke or --run)."""
     err_stream = stderr or sys.stderr
-    container = container_instance or build_bot_container(config_path=config_path)
+    resolved_project_dir: Path | None = None
+    if project_dir is not None:
+        resolved_project_dir = Path(project_dir).resolve()
+        if not resolved_project_dir.exists():
+            err_stream.write(f"\n[Runner] Error: Project directory '{resolved_project_dir}' does not exist.\n")
+            return 1
+        if not resolved_project_dir.is_dir():
+            err_stream.write(f"\n[Runner] Error: Project path '{resolved_project_dir}' is not a directory.\n")
+            return 1
+
+    effective_config_path = config_path
+    if resolved_project_dir is not None and config_path is not None and not config_path.is_absolute():
+        effective_config_path = resolved_project_dir / config_path
+
+    container = container_instance or build_bot_container(
+        config_path=effective_config_path,
+        project_dir=resolved_project_dir,
+    )
     config = container.config
 
     if not config.discord.enabled:
@@ -664,6 +750,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    raw_project_dir = getattr(args, "project_dir", None)
+    if raw_project_dir is not None:
+        project_dir = Path(raw_project_dir).resolve()
+        if not project_dir.exists():
+            print(f"\n[Runner] Error: Project directory '{project_dir}' does not exist.")
+            return 1
+        if not project_dir.is_dir():
+            print(f"\n[Runner] Error: Project path '{project_dir}' is not a directory.")
+            return 1
+    else:
+        project_dir = Path.cwd().resolve()
+
     if not args.command:
         parser.print_help()
         return 0
@@ -678,6 +776,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     config_path=config_path,
                     local_only=local_only,
                     live=getattr(args, "live", False),
+                    project_dir=project_dir,
                 )
             )
         elif args.command == "start":
@@ -686,6 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     config_path=config_path,
                     local_only=local_only,
                     model_id=getattr(args, "model", None),
+                    project_dir=project_dir,
                 )
             )
         elif args.command == "bot":
@@ -694,6 +794,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     config_path=config_path,
                     smoke=getattr(args, "smoke", False),
                     run=getattr(args, "run", False),
+                    project_dir=project_dir,
                 )
             )
         elif args.command in ("pause", "status"):

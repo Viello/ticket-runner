@@ -116,8 +116,14 @@ class Doctor:
         ppid_resolver: Callable[[], str | None] | None = None,
         gateway: Any | None = None,
         live_discord_checker: Callable[..., Any] | None = None,
+        project_dir: Path | str | None = None,
     ) -> None:
-        self._cwd = cwd
+        if project_dir is not None:
+            self._cwd = Path(project_dir).resolve()
+        elif cwd is not None:
+            self._cwd = Path(cwd).resolve()
+        else:
+            self._cwd = None
         self._command_runner = command_runner or SubprocessRunner()
         if git_operations is not None:
             self._git_operations = git_operations
@@ -129,13 +135,25 @@ class Doctor:
 
         if config_path is not None:
             self._config_path = Path(config_path)
+            if self._cwd and not self._config_path.is_absolute():
+                self._config_path = self._cwd / self._config_path
         elif self._cwd:
-            self._config_path = self._cwd / DEFAULT_CONFIG_PATH
+            ticket_runner_yaml = self._cwd / "ticket-runner.yaml"
+            if ticket_runner_yaml.is_file():
+                self._config_path = ticket_runner_yaml
+            else:
+                self._config_path = self._cwd / DEFAULT_CONFIG_PATH
         else:
-            self._config_path = DEFAULT_CONFIG_PATH
+            ticket_runner_yaml = Path("ticket-runner.yaml")
+            if ticket_runner_yaml.is_file():
+                self._config_path = ticket_runner_yaml
+            else:
+                self._config_path = DEFAULT_CONFIG_PATH
 
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
+            if self._cwd and not self._tickets_dir.is_absolute():
+                self._tickets_dir = self._cwd / self._tickets_dir
         elif self._cwd:
             self._tickets_dir = self._cwd / DEFAULT_TICKETS_DIR
         else:
@@ -145,6 +163,8 @@ class Doctor:
 
         if git_dir is not None:
             self._git_dir = Path(git_dir)
+            if self._cwd and not self._git_dir.is_absolute():
+                self._git_dir = self._cwd / self._git_dir
         elif self._cwd:
             self._git_dir = self._cwd / ".git"
         else:
@@ -152,6 +172,8 @@ class Doctor:
 
         if agents_md_path is not None:
             self._agents_md_path = Path(agents_md_path)
+            if self._cwd and not self._agents_md_path.is_absolute():
+                self._agents_md_path = self._cwd / self._agents_md_path
         elif self._cwd:
             self._agents_md_path = self._cwd / DEFAULT_AGENTS_MD_PATH
         else:
@@ -175,6 +197,11 @@ class Doctor:
     def loaded_config(self) -> RunnerConfig | None:
         """Loaded RunnerConfig after successful config check."""
         return self._loaded_config
+
+    @property
+    def project_dir(self) -> Path | None:
+        """Configured target project root directory, if any."""
+        return self._cwd
 
     def _get_worker_provider(self) -> str:
         """Resolve the configured worker provider name ('opencode' or 'antigravity')."""

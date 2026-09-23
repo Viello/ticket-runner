@@ -1,6 +1,7 @@
 # T098 — CLI `--project-dir` Argument Plumbing and Spec 11 Integration Suite
-Status: pending
+Status: completed
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
+Completed: 2026-09-23T13:50:00Z
 Blocked by: T096, T097
 Security: required
 Reasoning: medium
@@ -24,10 +25,10 @@ Reasoning: medium
 
 ### Smoke Scenarios
 **Scenario: CLI Doctor and Start with --project-dir**
-- Setup: A clean external git repository in a temp directory containing sample tickets and `config.yaml`.
-- Why: Confirm that the operator can execute `ticket-runner --project-dir <path> doctor` and `start` from any arbitrary directory.
+- Setup: None (runs directly using Python and temporary directories).
+- Why: Confirm that an operator can execute `ticket-runner` against any external repository from any working directory, with defensive validation catching non-existent paths before executing.
 - Steps:
-  1. Run PowerShell verification executing `python ticket_runner.py --project-dir <temp_dir> doctor`:
+  1. Open PowerShell and run the copy-pasteable verification snippet:
      ```powershell
      python -c @"
      import subprocess, sys, tempfile
@@ -37,14 +38,17 @@ Reasoning: medium
          subprocess.run(['git', 'init'], cwd=target, check=True, stdout=subprocess.DEVNULL)
          res = subprocess.run([sys.executable, 'ticket_runner.py', '--project-dir', str(target), 'doctor', '--local-only'], capture_output=True, text=True)
          print(res.stdout)
-         print(res.stderr)
-         # Should successfully invoke doctor on external target
          assert 'Verifying environment' in res.stdout
      print('PASS: CLI accepts --project-dir and targets external repo.')
      "@
      ```
-  2. Run `pytest tests/specs/test_spec_11_decoupled_runner.py`.
-- Expected: CLI runs pre-flight checks against the target repository, integration suite passes with exit code 0.
+  2. Run the automated Spec 11 integration test suite:
+     ```powershell
+     python -m pytest tests/specs/test_spec_11_decoupled_runner.py
+     ```
+- Expected: Pre-flight checks execute against the target repository, and the Spec 11 integration test suite passes 100% with exit code 0.
 
 ### Gotchas
+- On subparsers in `argparse`, declare arguments with `default=argparse.SUPPRESS` to prevent subparser evaluation from overwriting top-level flags.
 - Keep backwards compatibility when `--project-dir` is not supplied: default strictly to `Path.cwd().resolve()`.
+- Validate path existence and directory type immediately at CLI boundaries (`project_dir.exists()` and `project_dir.is_dir()`), exiting with code 1 and a descriptive message.
