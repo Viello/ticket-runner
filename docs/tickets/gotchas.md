@@ -133,5 +133,39 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Starter messages posted in a parent channel to create a public thread (`msg.create_thread()`) cannot be retrieved via `thread.fetch_message()` on the thread object itself, raising 404 `Unknown Message`. Additionally, attempting to send or edit a Discord message with empty content when no embed is provided causes Discord API error 50006 `Cannot send an empty message`. Pinning starter messages in parent channels may also trigger 403 `Missing Permissions` if the bot lacks channel-wide manage messages permissions. Furthermore, in end-to-end integration tests, signals seeded in repositories before `processor.process(ticket)` are purged by the isolation layer at the start of the ticket, leading to missing ready signal errors.
 - **Solution:** In `DiscordPyGateway._resolve_message`, catch `discord.NotFound` on thread message fetching and fall back to `channel.parent.fetch_message(msg_id)` when `channel` is a thread. In `post_message` and `edit_message`, default empty content to `"..."` whenever `embed` is `None` to satisfy Discord API constraints. In `open_ticket_thread`, wrap `pin_message` in a guarded `try/except DiscordGatewayError` block so missing channel-level pin permissions do not abort thread opening. In integration test suites, seed signals dynamically inside the cycle runner callback so they are written during cycle execution rather than wiped by the initial ticket purge.
 
+---
+
+## External Runner Architecture Synchronization & Living Documentation Updates
+
+- **Problem:** When evolving a monolithic or local repository orchestrator into an external multi-agent runner targeting `--project-dir`, living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`) can quickly drift out of date. Outdated references to superseded active specs (e.g. referencing specs 04–06 when specs 01–10 are archived), missing architectural layers (such as `tests/integration/`, `clean_slate.py`, `crash_recovery.py`), or obsolete ADR counters degrade developer and AI context.
+- **Solution:** Maintain living documents as strict authoritative reflections of both the current working codebase and planned architectural boundaries. When updating `ARCHITECTURE.md`, verify that active spec lists, ADR indices, test directory trees, and adapter implementations reflect actual repository state alongside newly introduced ports (`AgentWorker`) and contracts (Verification Subsystem, `--project-dir` runtime separation).
+
+---
+
+## External Multi-Agent Domain Invariant Maintenance & Synonym Prohibitions
+
+- **Problem:** As the system architecture transitions from a project-local runner to an external multi-agent orchestrator, new architectural concepts (Target Project, AgentWorker, Verification Harness, Evidence Card, Project Overlay Config, Skills Catalog, LLM Config Prompt) risk being referred to by vague or conflicting synonyms across agent sessions (e.g. "target repo", "client project", "LLM backend", "test harness", "verification summary"), muddying domain boundaries and confusing prompt contexts.
+- **Solution:** Maintain explicit, canonical definitions in `CONTEXT.md` with dedicated `_Avoid_:` synonym blocks. Guard foundational orchestrator terms (such as `Worker` and `Gatekeeper`) against redefinition or dilution, and decouple agent lifecycle abstractions through `AgentWorker` while anchoring repository boundaries at `Target Project`.
+
+---
+
+## Agent Living Document Context Preservation & Invariant Density
+
+- **Problem:** Adding new operational invariants and guardrails to root living documents like `AGENTS.md` can inadvertently bloat always-loaded agent context windows if written as multi-sentence explanatory prose. Excessive prose increases context consumption across every subsequent turn and degrades prompt adherence.
+- **Solution:** Apply the `writing-for-agents` discipline strictly: lead with tight capitalized labels and positive prompts, formulate hard bounds numerically (e.g. 30 lines / 1,000 characters), prune explanatory commentary already covered in detailed specs, and keep statements checkable and dense.
+
+---
+
+## Nested Markdown Code Blocks in LLM Config Prompts & Two-Tier Configuration Clarity
+
+- **Problem:** When providing standalone copy-pasteable Markdown LLM Config Prompts containing inner fenced code blocks (` ```yaml `, ` ```powershell `) within top-level documentation like `README.md`, standard 3-backtick delimiters prematurely close the outer container block, corrupting markdown rendering on GitHub and CLI viewers. Furthermore, conflating machine-level infrastructure settings (Discord bot tokens, global token limits) with repository-level settings in configuration templates confuses developers and AI assistants configuring new projects.
+- **Solution:** Always enclose markdown templates containing inner fenced blocks in 4-backtick (` ````markdown ` ... ` ```` `) boundaries to guarantee clean parsing and syntax highlighting. Explicitly structure configuration documentation around the two-tier hierarchy: global machine settings in `~/.ticket-runner/config.yaml` vs minimal project overrides in `ticket-runner.yaml`, keeping the project overlay template lightweight and focused strictly on test commands, build commands, and branch names.
+
+---
+
+## Spec 10b Alignment Audit & Living Documentation Synchronization
+
+- **Problem:** Evolving architectural specifications and introducing new domain vocabulary in `CONTEXT.md` (e.g. `Target Project`, `AgentWorker`, `Project Overlay Config`, `Verification Harness`, `Evidence Card`, `Skills Catalog`, `LLM Config Prompt`) easily leaves lingering avoided synonyms (like `setup prompt`, `session rollover`, `project settings`, `verification summary`, `dumps`) in top-level documentation, downstream draft specs, or README headers and tables of contents. Furthermore, changing section headers without updating corresponding table-of-contents anchor slugs breaks markdown in-page navigation.
+- **Solution:** As part of every spec-closing alignment ticket, execute repository-wide automated audits checking against all `_Avoid_:` lists defined in `CONTEXT.md`, synchronize table-of-contents anchor slugs with revised header titles, verify all internal markdown links and code block fence balance (` ```` ` vs ` ``` `), and ensure test suites remain completely green before archiving the spec.
 
 

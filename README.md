@@ -1,53 +1,351 @@
 # Ticket Runner
 
-A local Python orchestrator that coordinates OpenCode to execute sequential development tickets autonomously with strict gatekeeping, context handoffs, and remote Discord/CLI interaction.
+An external, multi-agent Python orchestrator that coordinates AI coding agents (OpenCode, Antigravity CLI) to execute sequential development tickets autonomously with strict gatekeeping, token-preserving verification, context handoffs, and remote Discord/CLI interaction.
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Triad Ecosystem Architecture](#triad-ecosystem-architecture)
+- [8-Stage Development Workflow](#8-stage-development-workflow)
+- [Architectural Roadmap](#architectural-roadmap)
+- [Standalone LLM Config Prompt](#standalone-llm-config-prompt)
 - [Key Features](#key-features)
 - [Prerequisites](#prerequisites)
 - [Installation & Setup](#installation--setup)
 - [How to Use](#how-to-use)
   - [CLI Commands](#cli-commands)
-    - [Exit Codes](#exit-codes)
+  - [Exit Codes](#exit-codes)
   - [Terminal UI & Hotkeys](#terminal-ui--hotkeys)
   - [Presence Modes: Nearby vs. Away](#presence-modes-nearby-vs-away)
 - [How It Works](#how-it-works)
   - [Execution State Machine](#execution-state-machine)
   - [Gatekeeper & Circuit Breaker](#gatekeeper--circuit-breaker)
   - [Context Handoffs & Token Budgets](#context-handoffs--token-budgets)
+  - [Token-Preserving Verification Guardrails](#token-preserving-verification-guardrails)
+  - [Dual-Mode Human-in-the-Loop Approval Gate](#dual-mode-human-in-the-loop-approval-gate)
+  - [Spec Context Excerpt Injection](#spec-context-excerpt-injection)
   - [Git Safety & Push Guardrails](#git-safety--push-guardrails)
 - [Ticket Queue Workflow](#ticket-queue-workflow)
   - [Ticket File Format](#ticket-file-format)
   - [Queue Dynamics & Lockfile](#queue-dynamics--lockfile)
-- [Configuration Reference (`config.yaml`)](#configuration-reference-configyaml)
+  - [Spec-Closing Alignment Tickets](#spec-closing-alignment-tickets)
+- [Configuration Reference](#configuration-reference)
+  - [Two-Tier Configuration System](#two-tier-configuration-system)
+  - [Global Configuration (~/.ticket-runner/config.yaml)](#global-configuration-ticket-runnerconfigyaml)
+  - [Project Overlay Configuration (ticket-runner.yaml)](#project-overlay-configuration-ticket-runneryaml)
 - [Project Documentation & Specifications](#project-documentation--specifications)
 
 ---
 
 ## Overview
 
-Large language model agents are powerful at implementing scoped coding tasks, but left unconstrained across long runs they can hallucinate completion, exhaust context windows, or push unverified changes upstream.
+Large language model coding agents are powerful at implementing scoped coding tasks, but left unconstrained across long runs they hallucinate completion, exhaust token context windows, cascade unverified changes, or push broken code upstream.
 
-**Ticket Runner** solves this by acting as a strict, local orchestrator:
-1. **One Ticket at a Time:** Executes work sequentially from an ordered queue under `docs/tickets/`.
-2. **Independent Verification (Gatekeeper):** Never trusts the agent's self-report; automatically runs configured test suites and builds before accepting work.
-3. **Context Preservation:** Monitors token consumption in real time, triggering structured context handoffs to fresh sessions before degradation occurs.
-4. **Presence Modes:** Displays a rich interactive terminal dashboard while you are at your desk (**Nearby Mode**), and escalates unanswered prompts to **Discord** threads when you walk away (**Away Mode**).
-5. **Git Guardrails:** Works strictly on a dedicated `agent/ticket-runner` branch with an installed pre-push hook that prevents automated work from pushing to remote repositories.
+**Ticket Runner** solves this by acting as an external, multi-agent orchestrator:
+1. **Target Project Decoupling:** Operates externally against any codebase via `--project-dir <path>`, leaving target repositories clean.
+2. **One Ticket at a Time:** Executes work sequentially from an ordered queue under `docs/tickets/<spec-slug>/`.
+3. **Independent Verification (Gatekeeper):** Never trusts agent self-reports; automatically executes configured test suites, builds, and behavioral verification harnesses before accepting work.
+4. **Token-Preserving Guardrails:** Keeps heavy browser/CLI traces out of LLM prompts; persists full evidence to `.agent/evidence/<ticket_id>/` and feeds back only bounded triage excerpts (≤ 30 lines / 1,000 characters).
+5. **Context Preservation:** Monitors token consumption in real time, triggering structured context handoffs to fresh sessions before context degradation occurs.
+6. **Dual-Mode Presence:** Displays an interactive Rich terminal dashboard while you are at your desk (**Nearby Mode**), and escalates unanswered prompts to **Discord** threads when you step away (**Away Mode**).
+7. **Human-in-the-Loop Approval:** In human gate mode, verification halts after green checks to present an Evidence Card via the active presence channel; commits strictly require explicit human sign-off.
+8. **Git Guardrails:** Works strictly on a dedicated `agent/ticket-runner` branch with an installed pre-push hook that prevents automated work from pushing upstream.
+
+---
+
+## Triad Ecosystem Architecture
+
+Ticket Runner operates within a decoupled three-repository ecosystem that separates reusable agent capabilities, the orchestration engine, and target application codebases:
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                   Viello/agent-skills                   │
+│               (Reusable Skills Catalog)                 │
+│  - Reusable agent skills: implement, code-review, etc.  │
+│  - Meta-skills: verify-<app> scaffolding & maintenance  │
+└────────────────────────────┬────────────────────────────┘
+                             │ ticket-runner skills sync / init
+                             ▼
+┌──────────────────────────────────────────┐             invokes             ┌──────────────────────────────────────────┐
+│              Target Project              │ ◄────────────────────────────── │           Viello/ticket-runner           │
+│          (--project-dir <path>)          │       orchestrates queue        │       (External Multi-Agent Runner)      │
+│  - Target codebase, tests, & build files │                                 │  - CLI: start, doctor, init, skills sync │
+│  - ticket-runner.yaml (overlay config)   │                                 │  - Clean Architecture runtime engine     │
+│  - docs/tickets/ & docs/specs/           │                                 │  - ~/.ticket-runner/config.yaml (global) │
+│  - .agent/ (runtime signals & evidence)  │                                 │  - AgentWorker port: OpenCode, AGY CLI   │
+│  - .agents/skills/ (project skills)      │                                 │  - Dual presence: Rich TUI & Discord Bot │
+└──────────────────────────────────────────┘                                 └──────────────────────────────────────────┘
+```
+
+### The Three Decoupled Pillars
+
+1. **Reusable Skills Catalog (`Viello/agent-skills`)**:
+   - Centralized repository of reusable, agent-agnostic development discipline handbooks (`implement`, `code-review`, `security-review`, `diagnosing-bugs`, `to-tickets`, `grilling`).
+   - Distributable to any target project via `ticket-runner skills sync`.
+2. **Standalone Orchestrator (`Viello/ticket-runner`)**:
+   - External CLI binary installed globally or run from its own repository.
+   - Houses the Clean Architecture core (domain, interactors, ports, and adapters).
+   - Reads global machine preferences from `~/.ticket-runner/config.yaml` (Discord tokens, default models, ceiling limits).
+   - Coordinates multi-agent providers (OpenCode, Antigravity CLI) through the unified `AgentWorker` port.
+3. **Target Project (`<project-dir>`)**:
+   - The application repository under active development.
+   - Contains source code, test suites, and project overlay configuration (`ticket-runner.yaml`).
+   - Houses the ticket queue (`docs/tickets/`), specifications (`docs/specs/`), project skills (`.agents/skills/`), and runtime state (`.agent/`).
+
+---
+
+## 8-Stage Development Workflow
+
+Ticket Runner organizes software engineering into an 8-stage quality pipeline moving across planning, specification, execution, and verification:
+
+```text
+┌──────────────────────────────────┐
+│  1. Planning & Alignment         │  Stress-test ideas & plans (/grill-me, /prototype)
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  2. Formal Specification         │  Synthesize requirements into docs/specs/<spec-slug>.md (/to-spec)
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  3. Ticket Decomposition         │  Decompose spec into queue: docs/tickets/<spec-slug>/T<NNN>-<slug>.md (/to-tickets)
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  4. Implementation (TDD)         │  AgentWorker executes ticket test-first via worker.execution_skill
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  5. Pre-Signal Review            │  Two-axis review (/code-review: coding standards & originating spec)
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  6. Security Review              │  Security posture check (/security-review) when Security: required
+└─────────────────┬────────────────┘
+                  ▼
+┌──────────────────────────────────┐
+│  7. Gatekeeper Verification      │  Independent test_cmd, build_cmd, & Verification Harness
+└─────────────────┬────────────────┘  Full evidence to .agent/evidence/ (bounded 30-line triage on fail)
+                  ▼
+┌──────────────────────────────────┐
+│  8. Human Gate & Completion      │  Evidence Card on TUI/Discord -> Human Approval -> Atomic Commit
+└──────────────────────────────────┘
+```
+
+### Stage Details
+
+1. **Planning & Alignment**: Stress-test architectural proposals, API designs, and state models with `/grill-me` or interactive interview skills. Throwaway prototypes are explored using `/prototype` before committing to code.
+2. **Formal Specification**: Synthesize aligned requirements into a structured specification file under `docs/specs/<spec-slug>.md` using `/to-spec`, defining the problem statement, architectural boundaries, and target solution.
+3. **Ticket Decomposition & Queueing**: Decompose the specification into discrete, testable tickets under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using `/to-tickets`. Every ticket defines requirements, acceptance criteria, smoke scenarios, and gotchas. Every queue concludes with a mandatory spec-closing alignment ticket.
+4. **Implementation (TDD)**: The Runner launches an `AgentWorker` (OpenCode or Antigravity CLI) guided by `worker.execution_skill` (`.agents/skills/implement/SKILL.md`). The Worker implements the active ticket slice test-first across red-green cycles, but never commits directly.
+5. **Pre-Signal Review**: Before signaling completion, the Worker conducts a two-axis review using `/code-review` to verify that code adheres to repository standards and accurately delivers the originating spec requirements.
+6. **Security Review**: If flagged in ticket requirements or frontmatter (`Security: required`), the Worker invokes `/security-review` before signaling readiness to catch OWASP vulnerabilities, unsafe data handling, or credential exposure.
+7. **Gatekeeper Verification**: Gatekeeper runs independent test and build commands, plus behavioral verification harnesses (Playwright, PTY CLI, HTTP). Full logs and media persist out-of-band to `.agent/evidence/<ticket_id>/`. On failure, the Runner feeds back a strictly bounded triage excerpt (≤ 30 lines / 1,000 characters) to preserve the model's context.
+8. **Human Gate & Completion**: In Human-in-the-Loop mode, Gatekeeper halts after green checks to present an **Evidence Card** via the active presence channel (Rich terminal prompt in Nearby mode; Discord Status Card with `/approve` in Away mode). Upon human sign-off, Gatekeeper authors exactly one atomic conventional commit, relocates the ticket to `completed/`, and logs smoke scenarios to `.agent/smoke_log_<spec-slug>.md`.
+
+---
+
+## Architectural Roadmap
+
+Ticket Runner's evolution from a project-local script into an enterprise-grade, multi-agent external framework follows four sequential specifications:
+
+| Spec | Title | Status | Primary Focus |
+| :--- | :--- | :--- | :--- |
+| **Spec 10b** | **Living Documentation & Roadmap** | Completed | Reconcile root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`), lock in domain glossary, establish external path invariants, and define the roadmap. |
+| **Spec 11** | **Decoupled Project Root & Multi-Agent** | Planned | Introduce `--project-dir <path>` CLI plumbing, abstract `AgentWorker` port (`runner/ports/agent_worker.py`), and multi-agent adapters for OpenCode and Antigravity CLI (`agy`). |
+| **Spec 12** | **Project Scaffolding & Skills Distribution** | Planned | Implement two-tier configuration merging (`~/.ticket-runner/config.yaml` + `ticket-runner.yaml`), `ticket-runner init` heuristics, `ticket-runner init --ai-prompt`, and `ticket-runner skills sync`. |
+| **Spec 13** | **Token-Guarded Verification & Human Gate** | Planned | Behavioral verification harness contracts (`verify-<app>`), out-of-band evidence capture, token-preserving triage extractor (`evidence_triage.py`), and dual-mode Evidence Card human approval gate. |
+
+### Specification Highlights
+
+- **Spec 10b (Living Documentation & Roadmap)**:
+  - Establishes canonical domain vocabulary in [CONTEXT.md](CONTEXT.md) and strict synonym prohibitions.
+  - Updates [ARCHITECTURE.md](ARCHITECTURE.md) to document Clean Architecture layers, ports, adapters, and verification subsystem layout.
+  - Codifies external path resolution, token-budgeted verification guardrails, and human approval gates in [AGENTS.md](AGENTS.md).
+- **Spec 11 (Decoupled Project Root & Multi-Agent Worker Port)**:
+  - Adds `--project-dir <path>` (defaulting to `Path.cwd()`), allowing the runner to execute against any external repository.
+  - Decouples `WorkerSupervisor` from OpenCode via the abstract `AgentWorker` protocol.
+  - Implements concrete adapters for `OpenCodeWorker` and `AntigravityWorker`.
+- **Spec 12 (Project Scaffolding, LLM-Friendly Config & Skills Distribution)**:
+  - Scaffolds new target projects in seconds via interactive `ticket-runner init`.
+  - Distributes and updates canonical agent discipline skills from `Viello/agent-skills` via `ticket-runner skills sync`.
+  - Provides a standardized LLM Config Prompt (`ticket-runner init --ai-prompt`) allowing coding assistants to configure projects autonomously.
+- **Spec 13 (Token-Guarded Verification Subsystem & Human-in-the-Loop Gate)**:
+  - Provides `create-verification-skill` scaffolding for Playwright, CLI PTYs, and HTTP APIs with a 5-step lifecycle (`Launch` $\rightarrow$ `Doctor` $\rightarrow$ `Drive` $\rightarrow$ `Evidence` $\rightarrow$ `Cleanup`).
+  - Guards LLM token contexts by enforcing out-of-band execution and bounded triage truncation (≤ 30 lines / 1,000 characters).
+  - Unifies human sign-off across Terminal and Discord with interactive Evidence Cards before committing.
+
+---
+
+## Standalone LLM Config Prompt
+
+Copy and paste the prompt below into any AI coding assistant (Cursor, OpenCode, Antigravity, Claude Code, ChatGPT) inside your project repository to automatically generate a tailored `ticket-runner.yaml` configuration file:
+
+````markdown
+# Task: Configure Ticket Runner for this Repository
+
+You are an expert software engineer and DevOps architect. Inspect this repository and generate a valid, minimal `ticket-runner.yaml` configuration file at the repository root.
+
+## Instructions
+1. Inspect the repository root and project files to identify:
+   - Primary language and runtime framework.
+   - Package manager / build tool (`npm`, `pnpm`, `yarn`, `bun`, `poetry`, `pip`, `cargo`, `go`, etc.).
+   - Test runner command (e.g. `pytest`, `npm test`, `cargo test`, `go test ./...`). Must run non-interactively.
+   - Build or typecheck command if applicable (e.g. `npm run build`, `tsc --noEmit`, `cargo check`), or empty string `""` if not needed.
+   - Default git base branch (`main` or `master`).
+2. Write a minimal `ticket-runner.yaml` file to the root of this project following the schema below.
+
+## Configuration Schema (`ticket-runner.yaml`)
+
+```yaml
+# Target Project Overlay Configuration
+project:
+  name: "<project-name>"               # Project identifier
+  base_branch: "main"                  # Target base branch (e.g., main or master)
+  branch: "agent/ticket-runner"        # Isolated branch for agent work
+
+worker:
+  provider: "opencode"                 # Agent backend: "opencode" or "antigravity"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "<non-interactive test command>"   # Executed by Gatekeeper (e.g., "pytest", "npm test")
+  build_cmd: "<build or typecheck command>"    # Optional build check (or "" if none)
+  max_attempts: 3                              # Attempts before tripping circuit breaker
+  timeout_seconds: 300                         # Test timeout in seconds
+
+lifecycle:
+  mode: "human"                        # "human" (requires approval to commit) or "autonomous"
+  queue_completion: "standby"          # "standby" (wait for tickets) or "terminate" (exit when empty)
+```
+
+## Stack-Specific Examples
+
+### Node.js / TypeScript (npm / pnpm / yarn / bun)
+```yaml
+project:
+  name: "my-web-app"
+  base_branch: "main"
+  branch: "agent/ticket-runner"
+
+worker:
+  provider: "opencode"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "pnpm test"
+  build_cmd: "pnpm run build"
+  max_attempts: 3
+  timeout_seconds: 300
+
+lifecycle:
+  mode: "human"
+  queue_completion: "standby"
+```
+
+### Python (pytest & ruff)
+```yaml
+project:
+  name: "my-python-service"
+  base_branch: "main"
+  branch: "agent/ticket-runner"
+
+worker:
+  provider: "opencode"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "pytest"
+  build_cmd: "python -m ruff check ."
+  max_attempts: 3
+  timeout_seconds: 300
+
+lifecycle:
+  mode: "human"
+  queue_completion: "standby"
+```
+
+### Rust (Cargo)
+```yaml
+project:
+  name: "my-rust-crate"
+  base_branch: "main"
+  branch: "agent/ticket-runner"
+
+worker:
+  provider: "opencode"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "cargo test"
+  build_cmd: "cargo check"
+  max_attempts: 3
+  timeout_seconds: 300
+
+lifecycle:
+  mode: "human"
+  queue_completion: "standby"
+```
+
+### Go
+```yaml
+project:
+  name: "my-go-api"
+  base_branch: "main"
+  branch: "agent/ticket-runner"
+
+worker:
+  provider: "opencode"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "go test ./..."
+  build_cmd: "go vet ./..."
+  max_attempts: 3
+  timeout_seconds: 300
+
+lifecycle:
+  mode: "human"
+  queue_completion: "standby"
+```
+
+### Monorepo (pnpm / Turborepo)
+```yaml
+project:
+  name: "my-monorepo"
+  base_branch: "main"
+  branch: "agent/ticket-runner"
+
+worker:
+  provider: "opencode"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+verification:
+  test_cmd: "pnpm turbo run test"
+  build_cmd: "pnpm turbo run build"
+  max_attempts: 3
+  timeout_seconds: 600
+
+lifecycle:
+  mode: "human"
+  queue_completion: "standby"
+```
+````
 
 ---
 
 ## Key Features
 
-- **Sequential Execution Loop:** Processes tickets one-by-one; relocates finished tickets to a `completed/` archive upon Gatekeeper pass.
-- **Pre-Flight Doctor:** Validates OpenCode availability, git working tree cleanliness, configuration syntax, and hook installation before any code runs.
-- **Discord Thread-per-Ticket:** In Away mode, opens a dedicated Discord thread per ticket to stream milestone alerts and collect interactive prompt answers directly from your mobile device.
-- **Circuit Breaker:** Halts automatic retry loops once the configured `verification.max_attempts` budget is exhausted and escalates to a human decision (`[R]etry`, `[S]kip`, `[A]bort`).
-- **Clean Architecture:** Strict inward-pointing boundaries with zero I/O in the core domain, abstract ports for all dependencies, and test doubles for deterministic verification.
+- **Decoupled Multi-Agent Support:** Orchestrates OpenCode and Antigravity CLI via the clean `AgentWorker` port abstraction.
+- **Sequential Queue Loop:** Evaluates tickets one-by-one from `docs/tickets/<spec-slug>/`; relocates verified tickets to `completed/` upon Gatekeeper commit.
+- **Pre-Flight Doctor:** Validates agent CLI availability, git tree cleanliness, configuration syntax, and hook installation before any code runs.
+- **Token-Preserving Verification:** Persists heavy behavioral traces, logs, and screenshots out-of-band in `.agent/evidence/<ticket_id>/`, passing only bounded triage excerpts (≤ 30 lines / 1,000 characters) to LLMs.
+- **Dual Presence (Nearby vs. Away):** Interactive split-screen Rich terminal dashboard when you are at your desk; escalates prompts to ticket-specific Discord threads when you are away.
+- **Circuit Breaker:** Halts execution when verification attempts exceed the configured threshold, escalating to an operator decision (`[R]etry`, `[S]kip`, `[A]bort`).
+- **Human-in-the-Loop Sign-Off:** Halts after green checks to present an Evidence Card via Terminal or Discord; commits strictly require explicit human approval.
+- **Clean Architecture:** Strict inward dependency rule, zero I/O in the domain layer, abstract ports, and comprehensive test doubles.
 
 ---
 
@@ -55,21 +353,23 @@ Large language model agents are powerful at implementing scoped coding tasks, bu
 
 - **Operating System:** Windows 10/11 (PowerShell environment) or Linux/macOS with a POSIX-compliant shell.
 - **Python:** Version **3.11** or higher.
-- **OpenCode CLI:** Installed and authenticated in your system PATH (`opencode`).
+- **Agent CLI:** OpenCode CLI (`opencode`) or Antigravity CLI (`agy`) installed and authenticated in system PATH.
 - **Git:** Git 2.30+ installed.
-- **Discord Account (Optional):** Required only if enabling remote Away Mode notifications via Discord bot.
+- **Discord Account (Optional):** Required only if enabling remote Away Mode notifications and slash command interaction.
 
 ---
 
 ## Installation & Setup
 
-### 1. Clone the Repository
+### 1. Install Ticket Runner
+
+Clone the standalone orchestrator repository:
 ```powershell
-git clone https://github.com/your-org/ticket-runner.git
+git clone https://github.com/Viello/ticket-runner.git
 cd ticket-runner
 ```
 
-### 2. Create and Activate a Virtual Environment
+### 2. Create and Activate Virtual Environment
 ```powershell
 # On Windows (PowerShell)
 python -m venv .venv
@@ -86,16 +386,15 @@ pip install -r requirements.txt
 ```
 *(Dependencies include `pyyaml`, `rich`, `discord.py`, and `pytest` for testing).*
 
-### 4. Create Your Configuration
-Copy the starter template:
+### 4. Create Global Configuration
+Create your machine-wide configuration under `~/.ticket-runner/config.yaml`:
 ```powershell
-Copy-Item config.example.yaml config.yaml
+mkdir ~/.ticket-runner
+Copy-Item config.example.yaml ~/.ticket-runner/config.yaml
 ```
 
-Customize `config.yaml` to match your test commands and project settings. See the [Configuration Reference](#configuration-reference-configyaml) below for details.
-
 ### 5. Set Environment Variables (If Using Discord)
-If Discord integration is enabled in `config.yaml`, set the bot token environment variable (never store raw tokens in `config.yaml`):
+If Discord integration is enabled, export your bot token:
 ```powershell
 # PowerShell
 $env:DISCORD_BOT_TOKEN = "your_actual_discord_bot_token"
@@ -110,25 +409,37 @@ export DISCORD_BOT_TOKEN="your_actual_discord_bot_token"
 
 ### CLI Commands
 
-Ticket Runner provides an entry-point CLI (`ticket_runner.py`):
+Ticket Runner provides an entry-point CLI (`ticket-runner` or `python ticket_runner.py`):
 
 ```powershell
-# Run pre-flight health checks to verify your environment
-python ticket_runner.py doctor
+# Initialize a new target project (scaffolds directories, generates ticket-runner.yaml, syncs skills)
+ticket-runner --project-dir /path/to/project init
+
+# Generate the standalone LLM configuration prompt for coding assistants
+ticket-runner init --ai-prompt
+
+# Sync or update canonical agent skills from Viello/agent-skills
+ticket-runner --project-dir /path/to/project skills sync
+
+# Run pre-flight health checks on environment, git state, and agent binaries
+ticket-runner --project-dir /path/to/project doctor
 
 # Start the runner and begin processing the queue
-python ticket_runner.py start
+ticket-runner --project-dir /path/to/project start
 
-# Display the active ticket, token usage, and presence status
-python ticket_runner.py status
+# Inspect active ticket, token usage, and presence status
+ticket-runner --project-dir /path/to/project status
 
 # Pause the active runner and release the queue lock for edits
-python ticket_runner.py pause
+ticket-runner --project-dir /path/to/project pause
 ```
 
-#### Exit Codes
+> [!NOTE]
+> If `--project-dir` is omitted, Ticket Runner defaults to the current working directory (`Path.cwd()`).
 
-Ticket Runner codifies a stable exit code contract for operators, scripts, and supervisors:
+### Exit Codes
+
+Ticket Runner adheres to a strict exit code contract for operators, CI pipelines, and supervisors:
 
 | Exit Code | Meaning | Description |
 | :--- | :--- | :--- |
@@ -139,7 +450,7 @@ Ticket Runner codifies a stable exit code contract for operators, scripts, and s
 
 ### Terminal UI & Hotkeys
 
-When started in **Nearby Mode**, Ticket Runner displays a rich split terminal dashboard:
+In **Nearby Mode**, Ticket Runner displays a rich split-view terminal dashboard:
 
 ```text
 ╔════════════════════════════════════════════════════════════════════╗
@@ -155,14 +466,14 @@ When started in **Nearby Mode**, Ticket Runner displays a rich split terminal da
 ```
 
 Interactive hotkeys are non-blocking:
-- `[p]` — **Pause**: Immediately requests pause and releases `docs/tickets/.queue.lock` so you can add, edit, or reorder tickets.
+- `[p]` — **Pause**: Releases `docs/tickets/.queue.lock` so you can add, edit, or reorder tickets.
 - `[m]` — **Toggle Mode**: Manually switches between `Nearby` and `Away` presence modes.
 - `[q]` — **Quit**: Gracefully terminates child worker processes, persists state to `.agent/state.json`, and shuts down.
 
 ### Presence Modes: Nearby vs. Away
 
 - **Nearby Mode (Default):** Silences remote Discord pings while you are active at the terminal. Prompts and questions appear directly in your local terminal.
-- **Away Mode:** Activated either manually via `[m]` or automatically after 3 minutes of idle inactivity on an unanswered prompt. In Away mode, questions and milestone notifications route directly to ticket-specific Discord threads.
+- **Away Mode:** Activated manually via `[m]` or automatically after 3 minutes of idle inactivity on an unanswered prompt. In Away mode, questions and milestone notifications route directly to ticket-specific Discord threads.
 
 ---
 
@@ -170,7 +481,7 @@ Interactive hotkeys are non-blocking:
 
 ### Execution State Machine
 
-Only **one** ticket is executed at a time. The loop follows strict transitions:
+Only **one** ticket executes at a time. The loop follows strict transitions:
 
 ```text
        [START]
@@ -179,71 +490,88 @@ Only **one** ticket is executed at a time. The loop follows strict transitions:
           ↓
        PENDING (Select top alphanumeric pending ticket)
           ↓
-    WORKING & PLANNING (opencode run --format json --session <id>)
+    WORKING & PLANNING (AgentWorker execution)
        ├── Token usage >= 135k → Checkpoint handoff → Resume in fresh session
        ├── Worker needs input  → Terminal prompt / Discord thread
        └── Pause requested     → Release lock & wait
           ↓
-   READY SIGNAL (.agent/signals/{ticket_id}_ready.json)
+    READY SIGNAL (.agent/signals/{ticket_id}_ready.json)
           ↓
-      GATEKEEPER (Runs independent test_cmd & build_cmd)
-       ├── PASS → Commit (<type>(<scope>): <Title>) → Archive ticket → Next ticket
-       └── FAIL (Attempts < verification.max_attempts) → Feed errors to Worker → Retry WORKING
-                (Budget exhausted) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
+    GATEKEEPER (Independent test_cmd, build_cmd, & Verification Harness)
+       ├── PASS → Human Gate (Evidence Card on TUI/Discord)
+       │           ├── APPROVE → Commit (<type>(<scope>): <Title>) → Archive ticket → Next ticket
+       │           └── REJECT  → Feed rejection notes to Worker → Retry WORKING
+       └── FAIL (Attempts < verification.max_attempts) → Feed bounded triage excerpt → Retry WORKING
+                (Attempts exhausted) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
 
 ### Gatekeeper & Circuit Breaker
 
-- **Independent Verification:** The OpenCode Worker cannot mark tickets as completed. Only the Gatekeeper can accept a ticket by running your configured `test_cmd` and `build_cmd`.
-- **Circuit Breaker:** If a ticket exhausts the configured `verification.max_attempts` budget, the Circuit Breaker trips, alerting you via terminal or Discord to choose:
-  - `[R]etry [hint]`: Restore the full budget and give the Worker another cycle with your optional guidance.
-  - `[S]kip`: Discard uncommitted edits (behind one confirmation) and proceed to the next ticket.
-  - `[A]bort`: Stop the runner while preserving the working tree for direct debugging.
+- **Independent Verification:** The Worker cannot mark tickets completed. Only Gatekeeper accepts work by running configured verification commands and harnesses.
+- **Circuit Breaker:** When verification attempts exhaust `verification.max_attempts`, the Circuit Breaker trips, halting the loop and escalating via Terminal or Discord:
+  - `[R]etry [hint]`: Restore attempt budget and resume Worker with optional operator guidance.
+  - `[S]kip`: Discard uncommitted edits (behind confirmation) and advance to the next ticket.
+  - `[A]bort`: Stop the runner while preserving the working tree for manual debugging.
 
 ### Context Handoffs & Token Budgets
 
-To prevent model hallucination caused by context saturation, Ticket Runner monitors token usage during OpenCode streaming:
+To eliminate model hallucinations from context saturation, Ticket Runner monitors token telemetry:
 - **120,000 tokens:** Warning emitted to dashboard/Discord.
-- **135,000 tokens:** Automated Context Handoff triggered. The Worker executes `.agents/skills/handoff/SKILL.md` to persist progress to `.agent/checkpoints/{ticket_id}/handoff.md`. The runner then resumes in a fresh OpenCode session with the checkpoint as context.
-- **150,000 tokens:** Hard ceiling forcing immediate session rollover.
+- **135,000 tokens:** Automated Context Handoff triggered. The Worker executes `.agents/skills/handoff/SKILL.md` to persist progress to `.agent/checkpoints/{ticket_id}/handoff.md`. The runner resumes in a fresh session with the checkpoint as context.
+- **150,000 tokens:** Hard ceiling forcing immediate Context Handoff.
 
-### Spec Context Excerpt Injection (ADR 0011)
+### Token-Preserving Verification Guardrails
 
-To ground the Worker in overarching architectural goals without exhausting context windows:
-- Each ticket is linked to its parent spec (via an explicit `Spec:` header or inferred from `docs/specs/<spec-slug>.md`).
-- The Runner extracts the `## Problem Statement` and `## Solution` sections (~300 tokens) and inlines them directly into the Worker's initial prompt as a **Spec Excerpt**.
-- The prompt includes a path link to the full spec file so the Worker can inspect deeper user stories or acceptance criteria on demand using its file reading tools.
+- **Out-of-band Execution:** Heavy verification harnesses (Playwright browser runners, CLI PTY drivers, load tests) execute outside the LLM context.
+- **Disk Persistence:** Full logs, traces, screenshots, and DOM snapshots are saved strictly to `<project-dir>/.agent/evidence/<ticket_id>/`.
+- **Bounded Triage Excerpts:** On verification failure, `evidence_triage.py` extracts a strictly bounded excerpt (maximum **30 lines / 1,000 characters**) covering the failing test and root cause. Raw browser transcripts are never injected into the LLM context.
+
+### Dual-Mode Human-in-the-Loop Approval Gate
+
+In Human-in-the-Loop mode (`lifecycle.mode: "human"`):
+- Gatekeeper halts after green verification checks and formats an **Evidence Card** summarizing status, duration, artifact links, and human smoke scenarios.
+- In **Nearby Mode**, an interactive terminal prompt displays the card with actions: `[y]` approve & commit, `[n]` reject & retry, `[d]` launch diagnostic session.
+- In **Away Mode**, the card posts to the ticket's Discord thread, awaiting `/approve` or `/reject` slash commands.
+- Commits are strictly blocked until human approval is confirmed.
+
+### Spec Context Excerpt Injection
+
+- Each ticket is linked to its parent spec via `Spec:` frontmatter or inferred from `docs/specs/<spec-slug>.md`.
+- The Runner extracts `## Problem Statement` and `## Solution` (~300 tokens) and inlines them into the Worker's initial prompt as a **Spec Excerpt**.
+- The prompt provides file path links so the Worker can read deeper requirements on demand without upfront context bloat.
 
 ### Git Safety & Push Guardrails
 
 - All automated work occurs on `agent/ticket-runner`.
-- The Runner commits verified code using conventional commit messages with subsystem scope and bulleted changes, never including ticket numbers (e.g., `feat(admin): Fix admin loading state`).
+- Gatekeeper authors atomic commits following conventional commit syntax (`<type>(<scope>): <Title>`) with imperative bulleted changes and no ticket numbers.
 - An installed pre-push hook (`.git/hooks/pre-push`) rejects all pushes from the agent branch to remote origins, guaranteeing zero unintended upstream pushes.
 
 ---
 
 ## Ticket Queue Workflow
 
-Tickets live under `docs/tickets/<spec-slug>/` as individual markdown files.
+Tickets live under `docs/tickets/<spec-slug>/` as individual markdown files:
 
 ```text
 docs/tickets/
-├── .queue.lock                       # Lockfile held during execution
-├── gotchas.md                        # Global Gotchas accumulated across runs
-└── 04-signal-protocol-and-gatekeeper/ # Grouped by functional spec
-    ├── T025-example-ticket.md           # Active pending ticket
-    └── completed/                        # Verified & committed tickets
-        └── T000-setup.md
+├── .queue.lock                       # Sentinel file lock held during execution
+├── gotchas.md                        # Global operational lessons learned
+└── 10b-living-documentation-and-roadmap/
+    ├── T089-update-architecture.md   # Completed tickets relocated upon commit
+    ├── T092-update-readme.md         # Active pending ticket
+    └── completed/                    # Verified & committed archive
+        └── T089-update-architecture.md
 ```
 
 ### Ticket File Format
 
-Each ticket defines requirements, acceptance criteria, and gotchas:
+Each ticket defines requirements, acceptance criteria, smoke scenarios, and gotchas:
 
 ```markdown
 # T001 — Fix admin loading state
 Status: pending
 Spec: docs/specs/01-admin-panel.md
+Reasoning: medium
 
 ### Requirements
 - Add loading state to verified datasets table.
@@ -255,6 +583,15 @@ Spec: docs/specs/01-admin-panel.md
 - No layout shift or double scrollbars.
 - Existing CRUD operations remain green.
 
+### Smoke Scenarios
+**Scenario: Verify Admin Table Loading State**
+- Setup: None (runs from repo root).
+- Why: Ensure users see an unambiguous loading indicator during data retrieval.
+- Steps:
+  1. Open the admin datasets page.
+  2. Trigger table sort refetch.
+- Expected: Spinner displays immediately and disappears once rows render.
+
 ### Gotchas
 - Table component uses virtualized rendering; loading state must wrap the table body.
 ```
@@ -262,45 +599,64 @@ Spec: docs/specs/01-admin-panel.md
 ### Queue Dynamics & Lockfile
 
 - **Alphanumeric Ordering:** Tickets are evaluated in alphanumeric order (`T001`, `T002`, ...).
-- **Lockfile & Live Editing:** When running, the Runner holds `.queue.lock`. Pressing `[p]` (Pause) releases the lock, allowing you to edit requirements, add new tickets, or reprioritize the queue before resuming.
-- **Completed Relocation:** When a ticket passes Gatekeeper checks and is committed, the Runner updates the ticket header (`Status: completed`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`. The commit SHA is written to untracked `.agent/state.json` only — never embedded in git-tracked ticket frontmatter (ADR 0012).
+- **Lockfile & Live Editing:** When running, the Runner holds `.queue.lock`. Pressing `[p]` (Pause) releases the lock, allowing you to edit requirements, add tickets, or reprioritize the queue before resuming.
+- **Archive Relocation:** Upon Gatekeeper pass and commit, the Runner updates ticket frontmatter (`Status: completed`, `Completed: <timestamp>`) and moves the file to `docs/tickets/<spec-slug>/completed/`.
+
+### Spec-Closing Alignment Tickets
+
+Every ticket queue decomposed under `docs/tickets/<spec-slug>/` must conclude with a final alignment ticket. This ticket audits the actual implementation against the originating specification and updates root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`) to reconcile any architectural divergence before the spec is archived.
 
 ---
 
-## Configuration Reference (`config.yaml`)
+## Configuration Reference
+
+### Two-Tier Configuration System
+
+Ticket Runner separates global machine configuration from project-specific overrides:
+- **Global User Configuration (`~/.ticket-runner/config.yaml`)**: Stores machine-wide credentials, Discord bot tokens, default LLM models, and token budget defaults.
+- **Project Overlay Configuration (`<project-dir>/ticket-runner.yaml`)**: Stores project-specific test commands, build commands, branch names, and agent provider selections.
+
+### Global Configuration (`~/.ticket-runner/config.yaml`)
 
 | Key | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `project.name` | `string` | `"ticket-runner"` | Identifier for the project. |
-| `project.branch` | `string` | `"agent/ticket-runner"` | Isolated working branch for agent operations. |
-| `project.base_branch` | `string` | `"main"` | Base branch from which the agent branch is created. |
-| `worker.execution_skill` | `string` | `".agents/skills/implement/SKILL.md"` | Path to the worker implementation discipline skill. |
-| `verification.test_cmd` | `string` | `"pytest"` | Independent verification test command executed by Gatekeeper. |
-| `verification.build_cmd` | `string` | `""` | Optional build command executed before tests. |
-| `verification.max_attempts` | `int` | `3` | Total Verification Attempts before tripping the Circuit Breaker. |
-| `verification.timeout_seconds`| `int` | `300` | Timeout for test and build command executions. |
 | `tokens.warn` | `int` | `120000` | Token threshold for warning notification. |
 | `tokens.handoff` | `int` | `135000` | Token threshold for checkpointing and context handoff. |
-| `tokens.ceiling` | `int` | `150000` | Hard token limit forcing immediate session rollover. |
-| `presence.default_mode` | `string` | `"nearby"` | Default mode (`nearby` or `away`). |
-| `presence.idle_escalation_minutes` | `int` | `3` | Minutes of idle inactivity before prompt escalates to Discord. |
+| `tokens.ceiling` | `int` | `150000` | Hard token limit forcing immediate Context Handoff. |
+| `presence.default_mode` | `string` | `"nearby"` | Default operational mode (`nearby` or `away`). |
+| `presence.idle_escalation_minutes` | `int` | `3` | Inactivity minutes before prompts escalate to Discord. |
 | `discord.enabled` | `bool` | `true` | Enable or disable Discord bot notifications. |
-| `discord.token_env` | `string` | `"DISCORD_BOT_TOKEN"` | Name of environment variable holding the Discord bot token. |
-| `discord.channel_id` | `string` | `""` | Discord channel ID where ticket threads are posted. |
-| `lifecycle.queue_completion` | `string` | `"standby"` | Behavior when queue empties (`standby` to watch for new tickets, or `terminate` to exit). |
+| `discord.token_env` | `string` | `"DISCORD_BOT_TOKEN"` | Environment variable holding Discord bot token. |
+| `discord.guild_id` | `string` | `""` | Target Discord server snowflake ID. |
+| `discord.channel_id` | `string` | `""` | Target Discord channel snowflake ID for threads. |
+| `discord.notify_user_id` | `string` | `""` | Optional Discord user snowflake ID to @mention on alerts. |
 | `git.auto_push` | `bool` | `false` | Always `false`. Never push automated work upstream. |
-| `git.commit_prefix` | `string` | `"feat"` | Commit message convention prefix (e.g. `feat(scope): Title`). |
 | `git.enforce_pre_push_hook` | `bool` | `true` | Ensure `.git/hooks/pre-push` guardrail is installed. |
+
+### Project Overlay Configuration (`ticket-runner.yaml`)
+
+| Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `project.name` | `string` | `"my-project"` | Identifier for the target project. |
+| `project.base_branch` | `string` | `"main"` | Base branch from which the agent branch is branched. |
+| `project.branch` | `string` | `"agent/ticket-runner"` | Isolated working branch for agent operations. |
+| `worker.provider` | `string` | `"opencode"` | Agent backend provider (`opencode` or `antigravity`). |
+| `worker.execution_skill` | `string` | `".agents/skills/implement/SKILL.md"` | Path to the worker implementation discipline skill. |
+| `verification.test_cmd` | `string` | `"pytest"` | Independent verification test command executed by Gatekeeper. |
+| `verification.build_cmd` | `string` | `""` | Optional build/typecheck command executed before tests. |
+| `verification.max_attempts` | `int` | `3` | Total verification attempts before tripping circuit breaker. |
+| `verification.timeout_seconds` | `int` | `300` | Timeout for test and build command executions. |
+| `lifecycle.mode` | `string` | `"human"` | `"human"` (requires human approval to commit) or `"autonomous"`. |
+| `lifecycle.queue_completion` | `string` | `"standby"` | Behavior when queue empties (`standby` or `terminate`). |
 
 ---
 
 ## Project Documentation & Specifications
 
-For deeper architectural and design details, consult the following documentation:
+For comprehensive architectural specifications and design records, consult:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Concentric Clean Architecture layers, ports, adapters, and module responsibilities.
-- [ticket-runner-plan.md](ticket-runner-plan.md) — Historical design specification; remaining sections cover Signals, Presence, Discord, State, and TUI (specs 4–6).
-- [CONTEXT.md](CONTEXT.md) — Domain vocabulary, concepts, and canonical terminology.
-- [AGENTS.md](AGENTS.md) — Operating rules, invariants, and agent pair-programming instructions.
-- [docs/specs/](docs/specs/) — Active functional specifications: Signal Protocol (04), Presence & Discord (05), State Persistence & UI (06). Specs 01–03 archived to `.agent/archive/`.
-- [docs/adr/](docs/adr/) — Architectural Decision Records (ADRs 0001–0015).
+- [CONTEXT.md](CONTEXT.md) — Canonical domain vocabulary, concepts, and synonym prohibitions.
+- [AGENTS.md](AGENTS.md) — Operating rules, invariants, verification guardrails, and pair-programming instructions.
+- [docs/specs/](docs/specs/) — Active and planned specifications (Specs 10b, 11, 12, 13).
+- [docs/adr/](docs/adr/) — Architectural Decision Records (ADRs 0001 to 0022).
