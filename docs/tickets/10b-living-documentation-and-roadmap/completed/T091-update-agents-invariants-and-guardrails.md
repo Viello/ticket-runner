@@ -1,5 +1,6 @@
 # T091 — Update AGENTS.md with External Invariants & Verification Guardrails
-Status: pending
+Status: completed
+Completed: 2026-09-23T07:56:00Z
 Spec: docs/specs/10b-living-documentation-and-roadmap.md
 Blocked by: T090
 Reasoning: medium
@@ -23,10 +24,30 @@ Reasoning: medium
 - Setup: None (runs from repo root).
 - Why: Ensure coding agents following `AGENTS.md` abide by the new external pathing, token budgeting, and approval rules.
 - Steps:
-  1. Read `AGENTS.md` under `## Invariants`.
-  2. Verify that the 30-line verification failure bound is documented.
-  3. Verify that the closing alignment ticket requirement is stated clearly.
-- Expected: All four new invariants are documented clearly with positive guidance.
+  1. Run the Python verification script in PowerShell to assert that all four new invariants and approval workflows are present in `AGENTS.md`:
+     ```powershell
+     python -c @"
+     with open('AGENTS.md', 'r', encoding='utf-8') as f:
+         content = f.read()
+
+     checks = {
+         'External path resolution': 'Target Project' in content and 'CWD' in content,
+         'Token-preserving verification': ('30 lines' in content or '30-line' in content) and '.agent/evidence/' in content,
+         'Human-in-the-loop gate': 'Evidence Card' in content and 'human approval' in content,
+         'Spec-closing alignment ticket': 'closing ticket' in content and 'living documents' in content,
+         'Interactive mode parity': 'human approval' in content and 'interactive' in content,
+     }
+
+     missing = [k for k, v in checks.items() if not v]
+     if missing:
+         print('FAILED CHECKS:', missing)
+         exit(1)
+
+     print('PASS: All invariants and verification guardrails verified in AGENTS.md.')
+     "@
+     ```
+  2. Inspect the terminal output for the `PASS` confirmation message and exit code 0.
+- Expected: Script prints `PASS: All invariants and verification guardrails verified in AGENTS.md.` with exit code 0.
 
 ### Gotchas
 - Keep `AGENTS.md` lean: avoid verbose prose that bloats agent context windows; use tight leading words.

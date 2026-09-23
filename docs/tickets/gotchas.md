@@ -147,7 +147,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** As the system architecture transitions from a project-local runner to an external multi-agent orchestrator, new architectural concepts (Target Project, AgentWorker, Verification Harness, Evidence Card, Project Overlay Config, Skills Catalog, LLM Config Prompt) risk being referred to by vague or conflicting synonyms across agent sessions (e.g. "target repo", "client project", "LLM backend", "test harness", "verification summary"), muddying domain boundaries and confusing prompt contexts.
 - **Solution:** Maintain explicit, canonical definitions in `CONTEXT.md` with dedicated `_Avoid_:` synonym blocks. Guard foundational orchestrator terms (such as `Worker` and `Gatekeeper`) against redefinition or dilution, and decouple agent lifecycle abstractions through `AgentWorker` while anchoring repository boundaries at `Target Project`.
 
+---
 
+## Agent Living Document Context Preservation & Invariant Density
 
-
+- **Problem:** Adding new operational invariants and guardrails to root living documents like `AGENTS.md` can inadvertently bloat always-loaded agent context windows if written as multi-sentence explanatory prose. Excessive prose increases context consumption across every subsequent turn and degrades prompt adherence.
+- **Solution:** Apply the `writing-for-agents` discipline strictly: lead with tight capitalized labels and positive prompts, formulate hard bounds numerically (e.g. 30 lines / 1,000 characters), prune explanatory commentary already covered in detailed specs, and keep statements checkable and dense.
 

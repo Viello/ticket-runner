@@ -21,6 +21,7 @@ Reasoning: medium
 - `README.md` contains the standalone LLM configuration prompt with schema and examples.
 ### Suggested Skills
 - `writing-for-agents`: Progressive disclosure, clear cognitive hierarchy, and authoritative reference design.
+- `writing-shape`: Shape raw material into structured documentation, paragraph by paragraph with deliberate grounding.
 
 ### Smoke Scenarios
 **Scenario: Verify README Documentation and AI Setup Prompt**
