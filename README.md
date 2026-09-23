@@ -649,6 +649,16 @@ Ticket Runner separates global machine configuration from project-specific overr
 | `lifecycle.mode` | `string` | `"human"` | `"human"` (requires human approval to commit) or `"autonomous"`. |
 | `lifecycle.queue_completion` | `string` | `"standby"` | Behavior when queue empties (`standby` or `terminate`). |
 
+### Worker Configuration
+
+The `worker.provider` setting controls which agent CLI backend is orchestrated by the `AgentWorker` port:
+
+| Provider | CLI Invocation | Description |
+| :--- | :--- | :--- |
+| `opencode` *(default)* | `opencode run --format json --auto "<prompt>"` | Production default. Drives OpenCode as an external subprocess with JSONL streaming telemetry and session resumption. |
+| `antigravity` | `agy run --auto "<prompt>"` | Integrates with Google Antigravity CLI (`agy`) for environments leveraging Antigravity agent workflows. |
+
+
 ---
 
 ## Project Documentation & Specifications

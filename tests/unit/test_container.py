@@ -129,3 +129,50 @@ def test_build_container_allows_status_publisher_override(tmp_path: Path) -> Non
     assert container.status_publisher is fake_publisher
 
 
+def test_build_container_instantiates_opencode_worker_by_default(tmp_path: Path) -> None:
+    from runner.adapters.opencode.opencode_worker import OpenCodeWorker
+    config = _make_config()
+    container = build_container(config=config, cwd=tmp_path)
+
+    assert isinstance(container.agent_worker, OpenCodeWorker)
+    assert isinstance(container.supervisor.agent_worker, OpenCodeWorker)
+
+
+def test_build_container_instantiates_antigravity_worker_when_configured(tmp_path: Path) -> None:
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md", provider="antigravity"),
+        verification=VerificationConfig(test_cmd="pytest"),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(),
+        git=GitConfig(),
+    )
+    container = build_container(config=config, cwd=tmp_path)
+
+    assert isinstance(container.agent_worker, AntigravityWorker)
+    assert isinstance(container.supervisor.agent_worker, AntigravityWorker)
+
+
+def test_build_container_allows_agent_worker_override(tmp_path: Path) -> None:
+    from tests.fakes.fake_agent_worker import FakeAgentWorker
+    fake = FakeAgentWorker()
+    config = RunnerConfig(
+        project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md", provider="antigravity"),
+        verification=VerificationConfig(test_cmd="pytest"),
+        tokens=TokenBudgetConfig(),
+        presence=PresenceConfig(),
+        discord=DiscordConfig(enabled=False),
+        lifecycle=LifecycleConfig(),
+        git=GitConfig(),
+    )
+    container = build_container(config=config, cwd=tmp_path, agent_worker=fake)
+
+    assert container.agent_worker is fake
+    assert container.supervisor.agent_worker is fake
+
+
+

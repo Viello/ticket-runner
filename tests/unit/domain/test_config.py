@@ -236,6 +236,42 @@ def test_immutability_frozen_dataclass() -> None:
         budget.warn = 100000  # type: ignore[misc]
 
 
+def test_worker_config_valid_and_defaults() -> None:
+    cfg = WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md")
+    assert cfg.execution_skill == ".agents/skills/implement/SKILL.md"
+    assert cfg.provider == "opencode"
+
+    cfg_opencode = WorkerConfig(
+        execution_skill=".agents/skills/implement/SKILL.md",
+        provider="opencode",
+    )
+    assert cfg_opencode.provider == "opencode"
+
+    cfg_antigravity = WorkerConfig(
+        execution_skill=".agents/skills/implement/SKILL.md",
+        provider="antigravity",
+    )
+    assert cfg_antigravity.provider == "antigravity"
+
+
+@pytest.mark.parametrize(
+    "invalid_provider",
+    ["unsupported", "claude", "", "   ", 123, True, None],
+)
+def test_worker_config_invalid_provider(invalid_provider: object) -> None:
+    with pytest.raises(ConfigError, match="provider"):
+        WorkerConfig(
+            execution_skill=".agents/skills/implement/SKILL.md",
+            provider=invalid_provider,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid_skill", ["", "   ", 123, None])
+def test_worker_config_invalid_execution_skill(invalid_skill: object) -> None:
+    with pytest.raises(ConfigError, match="execution_skill"):
+        WorkerConfig(execution_skill=invalid_skill)  # type: ignore[arg-type]
+
+
 def test_runner_config_composite() -> None:
     project = ProjectConfig(name="ticket-runner", branch="agent/ticket-runner", base_branch="main")
     worker = WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md")

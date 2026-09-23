@@ -139,8 +139,14 @@ class YamlConfigLoader(ConfigLoader):
         # 2. Worker section
         if "execution_skill" not in worker_dict:
             raise ConfigError("Missing required field 'execution_skill' in section 'worker'")
+        provider = worker_dict.get("provider", "opencode")
+        if not isinstance(provider, str):
+            raise ConfigError(
+                f"Field 'provider' in section 'worker' must be a string, got: {type(provider).__name__}"
+            )
         worker = WorkerConfig(
             execution_skill=worker_dict["execution_skill"],
+            provider=provider,
         )
 
         # 3. Verification section
@@ -327,6 +333,7 @@ class YamlConfigLoader(ConfigLoader):
             },
             "worker": {
                 "execution_skill": config.worker.execution_skill,
+                "provider": config.worker.provider,
             },
             "verification": {
                 "test_cmd": config.verification.test_cmd,

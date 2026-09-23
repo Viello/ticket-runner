@@ -1,5 +1,6 @@
 # T095 — Antigravity Worker Adapter and Multi-Agent Provider Configuration
-Status: pending
+Status: completed
+Completed: 2026-09-23T10:44:00Z
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
 Blocked by: T094
 Security: required
@@ -29,7 +30,7 @@ Reasoning: medium
 ### Smoke Scenarios
 **Scenario: Antigravity Command Generation and Config Switching**
 - Setup: None (runs from repo root).
-- Why: Verify that configuring `worker.provider: "antigravity"` creates an `AntigravityWorker` adapter and builds valid CLI arguments.
+- Why: Verify that configuring `worker.provider: "antigravity"` creates an `AntigravityWorker` adapter, builds valid CLI arguments starting with `agy run --auto`, and enforces strict provider validation.
 - Steps:
   1. Run PowerShell verification asserting `WorkerConfig` accepts "antigravity", rejects invalid providers, and `AntigravityWorker` constructs expected argv lists:
      ```powershell
@@ -50,8 +51,11 @@ Reasoning: medium
      print('PASS: AntigravityWorker and provider configuration verified.')
      "@
      ```
-  2. Run `pytest tests/unit/adapters/test_antigravity_worker_adapter.py`.
-- Expected: CLI argv starts with `['agy', 'run', '--auto']`, config validates properly, tests exit 0.
+  2. Run the adapter test suite:
+     ```powershell
+     pytest tests/unit/adapters/test_antigravity_worker_adapter.py
+     ```
+- Expected: Step 1 prints `PASS: AntigravityWorker and provider configuration verified.`, Step 2 passes 21 unit tests with return code 0.
 
 ### Gotchas
 - The Antigravity adapter in this spec is an execution CLI adapter stub; full Python SDK in-process streaming is out of scope per Spec 11.

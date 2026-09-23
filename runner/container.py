@@ -18,6 +18,7 @@ from runner.adapters.json_status_publisher import JsonFileStatusPublisher
 from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
+from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.opencode.opencode_worker import OpenCodeWorker
 from runner.adapters.ui.terminal import RichTerminalDisplay
@@ -219,8 +220,13 @@ def build_container(
         target=resolved_runtime_paths.status_file
     )
 
-    WorkerSupervisor.set_default_agent_worker_factory(OpenCodeWorker)
-    resolved_agent_worker = agent_worker or OpenCodeWorker()
+    worker_factory = (
+        AntigravityWorker
+        if resolved_config.worker.provider == "antigravity"
+        else OpenCodeWorker
+    )
+    WorkerSupervisor.set_default_agent_worker_factory(worker_factory)
+    resolved_agent_worker = agent_worker or worker_factory()
 
     resolved_supervisor = supervisor or WorkerSupervisor(
         command_runner=resolved_command_runner,

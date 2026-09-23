@@ -222,6 +222,36 @@ git: {}
     assert config.git.auto_push is False
     assert config.git.commit_prefix == "feat"
     assert config.git.enforce_pre_push_hook is True
+    assert config.worker.provider == "opencode"
+
+
+def test_load_worker_provider_honored() -> None:
+    yaml_content = VALID_CONFIG_YAML.replace(
+        '  execution_skill: ".agents/skills/implement/SKILL.md"',
+        '  execution_skill: ".agents/skills/implement/SKILL.md"\n  provider: "antigravity"',
+    )
+    loader = YamlConfigLoader()
+    config = loader.load_from_string(yaml_content)
+    assert config.worker.provider == "antigravity"
+
+    dumped = loader.dump(config)
+    reloaded = loader.load_from_string(dumped)
+    assert reloaded.worker.provider == "antigravity"
+
+
+@pytest.mark.parametrize(
+    "invalid_provider",
+    ["unsupported", "claude", "", 123, True],
+)
+def test_load_worker_provider_invalid(invalid_provider: object) -> None:
+    loader = YamlConfigLoader()
+    import yaml
+    data = yaml.safe_load(VALID_CONFIG_YAML)
+    data["worker"]["provider"] = invalid_provider
+
+    with pytest.raises(ConfigError, match="provider"):
+        loader.load_from_dict(data)
+
 
 
 def test_load_lifecycle_poll_interval_honored() -> None:

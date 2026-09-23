@@ -10,6 +10,7 @@ from runner.domain.exceptions import ConfigError
 VALID_PRESENCE_MODES = frozenset({"nearby", "away"})
 VALID_QUEUE_COMPLETIONS = frozenset({"standby", "terminate"})
 VALID_CLEAN_SLATE_POLICIES = frozenset({"interactive", "always", "never"})
+VALID_WORKER_PROVIDERS = frozenset({"opencode", "antigravity"})
 
 
 @dataclass(frozen=True)
@@ -34,10 +35,15 @@ class WorkerConfig:
     """Worker model execution configuration."""
 
     execution_skill: str
+    provider: str = "opencode"
 
     def __post_init__(self) -> None:
         if not isinstance(self.execution_skill, str) or not self.execution_skill.strip():
             raise ConfigError("Worker execution_skill must be a non-empty string path")
+        if not isinstance(self.provider, str) or self.provider not in VALID_WORKER_PROVIDERS:
+            raise ConfigError(
+                f"Worker provider must be one of {sorted(VALID_WORKER_PROVIDERS)}, got: '{self.provider}'"
+            )
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@
 import inspect
 import pytest
 
+from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
 from runner.adapters.opencode.opencode_worker import OpenCodeWorker
 from runner.domain.telemetry import TokenUsage, WorkerEvent
 from runner.ports.agent_worker import AgentWorker
@@ -25,6 +26,12 @@ def test_agent_worker_protocol_methods() -> None:
 def test_opencode_worker_conforms_to_protocol() -> None:
     """OpenCodeWorker satisfies the AgentWorker protocol at runtime."""
     worker = OpenCodeWorker()
+    assert isinstance(worker, AgentWorker)
+
+
+def test_antigravity_worker_conforms_to_protocol() -> None:
+    """AntigravityWorker satisfies the AgentWorker protocol at runtime."""
+    worker = AntigravityWorker()
     assert isinstance(worker, AgentWorker)
 
 
