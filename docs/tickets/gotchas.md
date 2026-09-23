@@ -228,7 +228,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 ## Skills Catalog Synchronization, Zip Slip Mitigation & Asynchronous Seam Bridging
 
-- **Problem:** GitHub archive tarballs nest repository contents under `{repo_name}-{ref}/` (e.g. `agent-skills-main/`), while remote repositories also contain non-skill root files (`README.md`, `LICENSE`) that must not be copied as agent skills. In addition, extracting untrusted archives exposes systems to Zip Slip / path traversal vulnerabilities (`..` or absolute paths). Furthermore, when synchronous port methods (`sync_skills`) invoke async command runners (`CommandRunner.run`) during fallback operations (`git clone`), directly calling `asyncio.run()` fails if an event loop is already active in the calling thread.
 - **Solution:** In `GitHubSkillsClient`, inspect every archive member before extraction, verifying path containment (`dest.is_relative_to(target)`) and rejecting any entry containing `..`, absolute paths, or suspicious links with immediate `SkillsSyncError`. Locate skill roots dynamically by searching for `SKILL.md` rather than assuming fixed nesting depths, preserving custom local skills and respecting `force=False` for modified files. Bridge async `CommandRunner` invocations to synchronous callers using `ThreadPoolExecutor` when an event loop is running, ensuring seamless execution across CLI, test suite, and async bot environments.
+
+---
+
+## .gitignore Newline Separation & Symlink Path Traversal in Project Scaffolding
+
+- **Problem:** When appending entries such as `.agent/` to existing `.gitignore` files, missing trailing newlines can concatenate strings onto existing lines (corrupting previous ignore rules). Furthermore, naive filesystem scaffolding without un-resolved symlink inspection allows symlink traversal or overwriting linked files if a target path is an existing symlink pointing outside or inside the project directory.
+- **Solution:** Check the trailing newline of `.gitignore` content before appending (`prefix = "" if (not content or content.endswith("\n") or content.endswith("\r\n")) else "\n"`), and validate raw un-resolved paths (`raw_target.is_symlink()`) as well as resolved relative containment (`target.resolve().is_relative_to(resolved_root)`) before creating files or directories during scaffolding.
 
 

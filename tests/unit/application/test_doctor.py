@@ -602,7 +602,11 @@ async def test_run_halts_on_first_failure(tmp_path: Path) -> None:
     runner.register("opencode --version", exit_code=1, stderr="OpenCode missing")
 
     git_ops = FakeGitOperations(clean=True)
-    doctor = Doctor(command_runner=runner, git_operations=git_ops)
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        config_path=tmp_path / "missing_config.yaml",
+    )
 
     report = await doctor.run(halt_on_failure=True)
 

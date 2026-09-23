@@ -8,9 +8,9 @@ import re
 import subprocess
 from typing import Any
 
-from runner.domain.scaffolding import ProjectHeuristics
+from runner.domain.scaffolding import ProjectHeuristics, ScaffoldReport
 
-__all__ = ["ProjectHeuristics", "ProjectSniffer"]
+__all__ = ["ProjectHeuristics", "ProjectSniffer", "ScaffoldReport"]
 
 
 def _is_safe_file(path: Path, root: Path) -> bool:

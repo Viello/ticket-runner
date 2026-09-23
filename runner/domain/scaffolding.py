@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from runner.domain.config import VALID_WORKER_PROVIDERS
 from runner.domain.exceptions import ConfigError
+
+
+@dataclass(frozen=True)
+class ScaffoldReport:
+    """Outcome of a project scaffolding operation."""
+
+    project_dir: Path
+    created_dirs: tuple[Path, ...] = ()
+    created_files: tuple[Path, ...] = ()
+    config_path: Path | None = None
+    gitignore_updated: bool = False
+    skills_sync_result: Any | None = None
 
 
 @dataclass(frozen=True)
