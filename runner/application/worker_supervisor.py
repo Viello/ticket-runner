@@ -16,18 +16,13 @@ import time
 from typing import Any, TextIO
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
-from runner.adapters.opencode.opencode_worker import (
-    OpenCodeEvent,
-    build_opencode_run_command,
-    decode_event,
-    extract_resource_access,
-)
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.status_event import RunState, StatusEvent
-from runner.domain.telemetry import BudgetAction, BudgetMonitor
+from runner.domain.telemetry import BudgetAction, BudgetMonitor, WorkerEvent
 from runner.domain.ticket import Ticket
+from runner.ports.agent_worker import AgentWorker
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.status_publisher import StatusPublisher
@@ -125,8 +120,8 @@ def _default_notify(notice: str) -> None:
     sys.stderr.flush()
 
 
-def _format_tool_event(event: OpenCodeEvent) -> str:
-    """Format an OpenCode tool event into a human-readable telemetry line."""
+def _format_tool_event(event: WorkerEvent) -> str:
+    """Format an agent tool event into a human-readable telemetry line."""
     tool_name = ""
     part = event.part if isinstance(event.part, dict) else {}
     raw = event.raw if isinstance(event.raw, dict) else {}
@@ -186,7 +181,16 @@ def _format_tool_event(event: OpenCodeEvent) -> str:
 
 
 class WorkerSupervisor:
-    """Supervises OpenCode Worker subprocess session runs with telemetry, watchdog, and termination ladder."""
+    """Supervises AgentWorker subprocess session runs with telemetry, watchdog, and termination ladder."""
+
+    _default_agent_worker_factory: Callable[[], AgentWorker] | None = None
+
+    @classmethod
+    def set_default_agent_worker_factory(
+        cls, factory: Callable[[], AgentWorker] | None
+    ) -> None:
+        """Register a default factory for creating AgentWorker instances when omitted."""
+        cls._default_agent_worker_factory = factory
 
     def __init__(
         self,
@@ -200,7 +204,7 @@ class WorkerSupervisor:
         bounded_timeout: float = BOUNDED_RUN_TIMEOUT_SECONDS,
         process_wait_timeout: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
-        on_event: Callable[[OpenCodeEvent], None] | None = None,
+        on_event: Callable[[WorkerEvent], None] | None = None,
         on_budget_action: Callable[[BudgetAction, int], None] | None = None,
         signal_grace_timeout: float = SIGNAL_GRACE_SECONDS,
         signal_repository: SignalRepository | None = None,
@@ -214,6 +218,7 @@ class WorkerSupervisor:
         printer: Callable[[str], None] | None = None,
         heartbeat_interval: float = 30.0,
         max_attempts: int = 3,
+        agent_worker: AgentWorker | None = None,
     ) -> None:
         self._cwd = cwd
         self._command_runner = command_runner or SubprocessRunner()
@@ -241,10 +246,24 @@ class WorkerSupervisor:
         self._heartbeat_interval = float(heartbeat_interval)
         self._max_attempts = int(max_attempts)
 
+        if agent_worker is not None:
+            self._agent_worker = agent_worker
+        elif self._default_agent_worker_factory is not None:
+            self._agent_worker = self._default_agent_worker_factory()
+        else:
+            raise ValueError(
+                "WorkerSupervisor requires an AgentWorker instance (agent_worker=...) or a registered default worker factory."
+            )
+
         self._current_handle: ProcessHandle | None = None
         self._kill_reason: RunTerminationReason | None = None
         self._kill_event: asyncio.Event | None = None
         self._signal_first_seen_at: float | None = None
+
+    @property
+    def agent_worker(self) -> AgentWorker:
+        """AgentWorker instance driving agent process commands and decoding."""
+        return self._agent_worker
 
     @property
     def is_running(self) -> bool:
@@ -443,7 +462,7 @@ class WorkerSupervisor:
             if isinstance(ticket, Ticket)
             else ""
         ) or self._default_reasoning
-        cmd = build_opencode_run_command(
+        cmd = self._agent_worker.build_run_command(
             prompt=prompt,
             session_id=session_id,
             variant=variant,
@@ -643,10 +662,10 @@ class WorkerSupervisor:
                     if self._is_signal_present(ticket_id):
                         self._signal_first_seen_at = arrival_time
 
-                event = decode_event(line)
+                event = self._agent_worker.decode_event(line)
 
                 try:
-                    detected = extract_resource_access(event, raw_line=line)
+                    detected = self._agent_worker.extract_resource_access(event, raw_line=line)
                     for resource_name in sorted(detected):
                         logger.info(
                             f"[{ticket_id}] Worker accessed resource: {resource_name}"

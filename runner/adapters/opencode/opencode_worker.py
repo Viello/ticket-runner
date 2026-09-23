@@ -9,7 +9,8 @@ import re
 from typing import Any
 
 from runner.domain.runtime_paths import is_valid_session_id
-from runner.domain.telemetry import TokenUsage
+from runner.domain.telemetry import TokenUsage, WorkerEvent
+from runner.ports.agent_worker import AgentWorker
 
 # Seven canonical event types emitted by opencode run --format json
 KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
@@ -37,18 +38,8 @@ AGENTS_MD_PATTERN: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
-
-@dataclass(frozen=True)
-class OpenCodeEvent:
-    """Decoded OpenCode JSONL stream event."""
-
-    type: str
-    session_id: str | None = None
-    timestamp: int | None = None
-    token_usage: TokenUsage | None = None
-    part: Mapping[str, Any] | None = None
-    raw: Mapping[str, Any] | None = None
-    is_known: bool = True
+# Backwards-compatible alias for WorkerEvent domain model
+OpenCodeEvent = WorkerEvent
 
 
 def build_opencode_run_command(
@@ -311,7 +302,7 @@ def extract_resource_access(
     # 2. Fallback stream line scanning
     if actual_line:
         _check_and_add_resource(actual_line, detected)
-    elif actual_event is not None and isinstance(actual_event.raw, dict):
+    if actual_event is not None and isinstance(actual_event.raw, dict):
         try:
             _check_and_add_resource(json.dumps(actual_event.raw), detected)
         except Exception:
@@ -320,7 +311,42 @@ def extract_resource_access(
     return frozenset(detected)
 
 
-class OpenCodeWorkerCli:
+class OpenCodeWorker:
+    """OpenCode CLI adapter implementing AgentWorker protocol."""
+
+    def build_run_command(
+        self,
+        prompt: str,
+        session_id: str | None = None,
+        variant: str | None = None,
+        model_id: str | None = None,
+    ) -> list[str]:
+        """Construct the argv token list for opencode run."""
+        return build_opencode_run_command(
+            prompt=prompt,
+            session_id=session_id,
+            variant=variant,
+            model_id=model_id,
+        )
+
+    def decode_event(self, line: str) -> WorkerEvent | None:
+        """Decode a single raw stdout line into a normalized WorkerEvent domain model."""
+        return decode_event(line)
+
+    def extract_resource_access(
+        self,
+        event: WorkerEvent | None = None,
+        raw_line: str | None = None,
+        *,
+        event_or_line: WorkerEvent | str | None = None,
+    ) -> frozenset[str]:
+        """Detect project-local skill and AGENTS.md resource accesses from event stream."""
+        actual_event = event if event is not None else (event_or_line if isinstance(event_or_line, WorkerEvent) else None)
+        actual_line = raw_line if raw_line is not None else (event_or_line if isinstance(event_or_line, str) else None)
+        return extract_resource_access(event_or_line=actual_event or actual_line, raw_line=actual_line, event=actual_event)
+
+
+class OpenCodeWorkerCli(OpenCodeWorker):
     """Namespace seam exposing OpenCode CLI adapter methods."""
 
     decode_event = staticmethod(decode_event)

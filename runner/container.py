@@ -19,6 +19,7 @@ from runner.adapters.markdown.file_lock import DEFAULT_LOCK_PATH, QueueFileLock
 from runner.adapters.markdown.gotchas_store import DEFAULT_GOTCHAS_PATH, GotchasStore
 from runner.adapters.markdown.spec_parser import SpecMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
+from runner.adapters.opencode.opencode_worker import OpenCodeWorker
 from runner.adapters.ui.terminal import RichTerminalDisplay
 from runner.adapters.ui.terminal_detector import TerminalHostDetector
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
@@ -47,6 +48,7 @@ from runner.domain.config import (
     WorkerConfig,
 )
 from runner.domain.runtime_paths import RuntimePaths
+from runner.ports.agent_worker import AgentWorker
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
@@ -99,6 +101,7 @@ class RunnerContainer:
     tui_coordinator: TuiCoordinator | None = None
     discord_thread_manager: Any | None = None
     discord_logger: Any | None = None
+    agent_worker: AgentWorker | None = None
 
 
 def build_container(
@@ -143,6 +146,7 @@ def build_container(
     terminal_detector: Any | None = None,
     discord_thread_manager: Any | None = None,
     discord_logger: Any | None = None,
+    agent_worker: AgentWorker | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -215,6 +219,9 @@ def build_container(
         target=resolved_runtime_paths.status_file
     )
 
+    WorkerSupervisor.set_default_agent_worker_factory(OpenCodeWorker)
+    resolved_agent_worker = agent_worker or OpenCodeWorker()
+
     resolved_supervisor = supervisor or WorkerSupervisor(
         command_runner=resolved_command_runner,
         runtime_paths=resolved_runtime_paths,
@@ -231,6 +238,7 @@ def build_container(
         presence_mode=resolved_config.presence.default_mode,
         printer=printer,
         max_attempts=resolved_config.verification.max_attempts,
+        agent_worker=resolved_agent_worker,
     )
     if resolved_supervisor.state_coordinator is None:
         resolved_supervisor.state_coordinator = resolved_state_coordinator
@@ -392,6 +400,7 @@ def build_container(
         tui_coordinator=resolved_tui_coordinator,
         discord_thread_manager=discord_thread_manager,
         discord_logger=discord_logger,
+        agent_worker=resolved_agent_worker,
     )
 
 

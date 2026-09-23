@@ -170,6 +170,7 @@ ticket-runner/
     ├── conftest.py                   # Pytest fixtures (temp filesystem, test doubles)
     ├── fakes/                        # Deterministic In-Memory Port Test Doubles
     │   ├── __init__.py
+    │   ├── fake_agent_worker.py      # In-memory AgentWorker double for deterministic supervisor testing
     │   ├── fake_command_runner.py    # Simulates CLI stdout streams and exit codes
     │   ├── fake_ticket_repository.py # In-memory ticket queue double
     │   ├── fake_state_store.py       # In-memory state persistence double
@@ -260,8 +261,14 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 3. **Two-Tier Configuration Overlay**:
    `yaml_config_loader.py` merges `~/.ticket-runner/config.yaml` (machine-level defaults: Discord credentials, default models, timeouts) with `<project-dir>/ticket-runner.yaml` (project-specific overrides: `test_cmd`, `build_cmd`, `branch`, `worker.provider`) into an immutable domain `RunnerConfig`.
 
-4. **Multi-Agent `AgentWorker` Port Contract**:
-   Worker supervisor interacts exclusively with `AgentWorker` (`runner/ports/agent_worker.py`). Both `runner/adapters/opencode/` and `runner/adapters/antigravity/` implement identical command construction, stream decoding, and resource access contracts.
+4. **Multi-Agent `AgentWorker` Port Contract & Supervisor Decoupling**:
+   `WorkerSupervisor` interacts exclusively with the abstract `AgentWorker` protocol (`runner/ports/agent_worker.py`), importing zero symbols from concrete adapter packages.
+   - **`WorkerEvent` Normalized Wire Model** (`runner/domain/telemetry.py`): Immutable domain entity standardizing stream events across providers (`type`, `session_id`, `timestamp`, `token_usage`, `part`, `raw`, `is_known`). Adapters maintain backward-compatible aliases (e.g. `OpenCodeEvent = WorkerEvent`).
+   - **`AgentWorker` Protocol Methods**:
+     - `build_run_command(prompt, session_id, variant, model_id) -> list[str]`: Construct command token lists with session allowlist validation (`^ses_[A-Za-z0-9]+$`) and empty prompt rejection, avoiding shell injection.
+     - `decode_event(line: str) -> WorkerEvent | None`: Tolerant JSONL stream parsing mapping canonical provider events to `WorkerEvent`.
+     - `extract_resource_access(event, raw_line) -> frozenset[str]`: Dual-mode structured and stream-fallback detection of accessed project skills and `AGENTS.md`.
+   - **Dependency Inversion & Composition Root**: Concrete adapters (`OpenCodeWorker`, and future multi-agent adapters such as `AntigravityWorker`) implement `AgentWorker` and are wired exclusively in `runner/container.py`. Deterministic testing is enabled via `FakeAgentWorker` (`tests/fakes/fake_agent_worker.py`).
 
 5. **Token-Preserving Verification Guardrails**:
    Verification harnesses run out-of-band. Full execution logs and visual artifacts are written directly to `<project-dir>/.agent/evidence/<ticket_id>/`. The LLM prompt receives exclusively a bounded triage excerpt (maximum **30 lines / 1,000 characters**) extracted by `evidence_triage.py`.

@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from runner.domain.config import TokenBudgetConfig
+
+
+@dataclass(frozen=True)
+class WorkerEvent:
+    """Normalized domain model representing an agent stream event."""
+
+    type: str
+    session_id: str | None = None
+    timestamp: int | None = None
+    token_usage: TokenUsage | None = None
+    part: Mapping[str, Any] | None = None
+    raw: Mapping[str, Any] | None = None
+    is_known: bool = True
 
 
 class BudgetAction(str, Enum):

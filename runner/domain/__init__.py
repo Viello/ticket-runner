@@ -65,6 +65,7 @@ from runner.domain.telemetry import (
     BudgetAction,
     BudgetMonitor,
     TokenUsage,
+    WorkerEvent,
     effective_ceiling,
 )
 from runner.domain.ticket import Ticket, TicketStatus, parse_ticket_status
@@ -118,6 +119,7 @@ __all__ = [
     "VALID_RING_BUFFER_SOURCES",
     "VerificationConfig",
     "WorkerConfig",
+    "WorkerEvent",
     "analyse",
     "build_isolation_command",
     "effective_ceiling",

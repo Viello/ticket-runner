@@ -1,5 +1,6 @@
 # T094 — Worker Port Contract, OpenCode Adapter Realignment, and Supervisor Decoupling
-Status: pending
+Status: completed
+Completed: 2026-09-23T10:28:40Z
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
 Blocked by: None
 Security: required
@@ -54,8 +55,13 @@ Reasoning: medium
      print('PASS: WorkerSupervisor decoupled from OpenCode adapter.')
      "@
      ```
-  2. Run `pytest tests/unit/ports/test_agent_worker.py tests/unit/adapters/test_opencode_worker.py tests/unit/application/test_worker_supervisor.py`.
-- Expected: Zero import violations detected, tests pass with exit code 0.
+  2. Run targeted test suites:
+     ```powershell
+     python -m pytest tests/unit/ports/test_agent_worker.py tests/unit/adapters/test_opencode_worker.py tests/unit/application/test_worker_supervisor.py
+     ```
+- Expected:
+  PowerShell script prints `PASS: WorkerSupervisor decoupled from OpenCode adapter.` and pytest exits with code 0 (all 118 tests pass).
 
 ### Gotchas
 - Keep `OpenCodeEvent` as a type alias or backwards-compatible shim in `runner/adapters/opencode/opencode_worker.py` so existing tests or imports outside supervisor don't break abruptly.
+- When decoupling `WorkerSupervisor`, provide `set_default_agent_worker_factory` to preserve backwards compatibility across legacy tests that instantiate supervisor without injecting an explicit worker.
