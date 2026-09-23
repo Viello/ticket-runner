@@ -162,16 +162,19 @@ def build_container(
     if config is not None:
         resolved_config = config
     else:
-        if effective_dir:
-            config_file = effective_dir / "ticket-runner.yaml"
-            if not config_file.is_file():
-                config_file = effective_dir / "config.yaml"
-        else:
-            config_file = Path("ticket-runner.yaml")
-            if not config_file.is_file():
-                config_file = Path("config.yaml")
-        if config_file.is_file():
-            resolved_config = YamlConfigLoader().load(config_file)
+        effective_project = effective_dir or Path.cwd().resolve()
+        has_cfg = (effective_project / "ticket-runner.yaml").is_file() or (effective_project / "config.yaml").is_file()
+        if has_cfg:
+            try:
+                resolved_config = YamlConfigLoader().load_two_tier(project_dir=effective_project)
+            except Exception:
+                config_file = effective_project / "ticket-runner.yaml"
+                if not config_file.is_file():
+                    config_file = effective_project / "config.yaml"
+                try:
+                    resolved_config = YamlConfigLoader().load(config_file)
+                except Exception:
+                    resolved_config = _default_config()
         else:
             resolved_config = _default_config()
 
@@ -460,19 +463,34 @@ def build_bot_container(
     if config is not None:
         resolved_config = config
     else:
+        effective_project = effective_dir or Path.cwd().resolve()
         if config_path:
-            path = Path(config_path)
-        elif effective_dir:
-            path = effective_dir / "ticket-runner.yaml"
-            if not path.is_file():
-                path = effective_dir / "config.yaml"
-        else:
-            path = Path("ticket-runner.yaml")
-            if not path.is_file():
-                path = Path("config.yaml")
-
-        if path.is_file():
-            resolved_config = YamlConfigLoader().load(path)
+            raw_path = Path(config_path)
+            resolved_path = raw_path if raw_path.is_absolute() else effective_project / raw_path
+            if resolved_path.is_file():
+                try:
+                    resolved_config = YamlConfigLoader().load_two_tier(
+                        project_dir=effective_project,
+                        project_config_path=resolved_path,
+                    )
+                except Exception:
+                    try:
+                        resolved_config = YamlConfigLoader().load(resolved_path)
+                    except Exception:
+                        resolved_config = _default_config()
+            else:
+                resolved_config = _default_config()
+        elif (effective_project / "ticket-runner.yaml").is_file() or (effective_project / "config.yaml").is_file():
+            try:
+                resolved_config = YamlConfigLoader().load_two_tier(project_dir=effective_project)
+            except Exception:
+                config_file = effective_project / "ticket-runner.yaml"
+                if not config_file.is_file():
+                    config_file = effective_project / "config.yaml"
+                try:
+                    resolved_config = YamlConfigLoader().load(config_file)
+                except Exception:
+                    resolved_config = _default_config()
         else:
             resolved_config = _default_config()
 

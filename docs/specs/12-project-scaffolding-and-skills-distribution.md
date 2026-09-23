@@ -18,7 +18,8 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
    - Automatically scaffolds required directories: `docs/specs/`, `docs/tickets/`, and `.agent/`.
 3. **LLM-Friendly Configuration Prompt Generator**:
    - Add a `ticket-runner init --ai-prompt` flag that prints a self-contained, structured Markdown prompt containing a strict JSON/YAML schema, stack-specific examples, and clear instructions. A developer can copy-paste this prompt into any AI agent (or run it inline) to have the AI inspect the repository and author `ticket-runner.yaml` autonomously.
-4. **Skills Distribution & Synchronization (`ticket-runner skills sync`)**:
+4. **Skills Repository & Distribution (`ticket-runner skills sync`)**:
+   - Initialize and publish the canonical `Viello/agent-skills` remote repository on GitHub containing core reusable skills (`implement`, `code-review`, `security-review`, `to-tickets`, `handoff`, `diagnosing-bugs`, etc.).
    - Provide a `ticket-runner skills sync [--project-dir <path>]` command that downloads or updates the canonical skills catalog from the remote repository (`Viello/agent-skills`) into `<project-dir>/.agents/skills/`.
    - `ticket-runner init` automatically triggers skills synchronization as part of project setup.
 
@@ -35,9 +36,10 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
 9. As a developer, I want `ticket-runner init` to detect the current git default branch (`main` or `master`) and suggest it as `base_branch`, while defaulting `branch` to `agent/ticket-runner`.
 10. As a developer working with an AI coding assistant, I want to run `ticket-runner init --ai-prompt`, so that I receive an exhaustive, self-contained prompt to hand to my AI to configure the project for me.
 11. As an AI coding assistant receiving the prompt, I want the prompt to include clear schema rules and stack examples, so that I produce a valid `ticket-runner.yaml` without syntax errors.
-12. As a developer, I want to run `ticket-runner skills sync`, so that the latest verified skills from `Viello/agent-skills` are cloned or updated into my project's `.agents/skills/` directory.
-13. As a developer, I want `ticket-runner init` to offer to sync skills automatically, so that a newly initialized project is immediately ready for agent execution.
-14. As an operator, I want the final ticket of this spec queue to audit implementation against Spec 12 and update living documents if any architectural details shifted during development.
+12. As an ecosystem maintainer, I want the canonical reusable skills repository `Viello/agent-skills` published on GitHub, so that all runner installations have an authoritative, accessible remote catalog.
+13. As a developer, I want to run `ticket-runner skills sync`, so that the latest verified skills from `Viello/agent-skills` are cloned or updated into my project's `.agents/skills/` directory.
+14. As a developer, I want `ticket-runner init` to offer to sync skills automatically, so that a newly initialized project is immediately ready for agent execution.
+15. As an operator, I want the final ticket of this spec queue to audit implementation against Spec 12 and update living documents if any architectural details shifted during development.
 
 ## Implementation Decisions
 
@@ -67,7 +69,8 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
      - Guidelines: How the AI should inspect `package.json`, `pyproject.toml`, Makefile, or CI workflows to determine the fastest, most reliable test and build commands.
      - Output format: Clean fenced YAML block ready for writing to disk.
 
-5. **Skills Catalog Client (`runner/adapters/skills/skills_client.py`)**:
+5. **Skills Catalog Publication & Client (`runner/adapters/skills/skills_client.py`)**:
+   - Initialize and publish `Viello/agent-skills` on GitHub containing canonical skills and README index.
    - Implements a download/sync protocol pulling from GitHub raw or tarball archive (`https://github.com/Viello/agent-skills/archive/refs/heads/main.tar.gz` or git clone via `CommandRunner`).
    - Copies files into `<project_dir>/.agents/skills/` while preserving custom project-specific skills that don't collide with catalog names.
 
@@ -77,12 +80,12 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
   - `tests/unit/adapters/test_two_tier_config.py`: Test merging of global defaults with project overrides, ensuring project fields take precedence.
   - `tests/unit/application/test_project_sniffer.py`: Test detection on mock project directories (mock `package.json`, mock `pyproject.toml`, mock `Cargo.toml`, etc.).
   - `tests/unit/application/test_prompt_generator.py`: Verify that `--ai-prompt` outputs complete schema and valid instructions.
+  - `tests/unit/adapters/test_skills_client.py`: Test skills downloading, extraction, path safety (Zip Slip prevention), and custom skill preservation.
 - **Integration Tests**:
   - `tests/specs/test_spec_12_scaffolding.py`: Execute `ticket-runner init` on an empty temporary directory with simulated inputs; verify generated `ticket-runner.yaml`, created directories, and `.gitignore` update.
 
 ## Out of Scope
 
-- Hosting the remote `Viello/agent-skills` repository on GitHub (catalog URL can be configured or defaulted).
 - Generating project-specific `verify-<app>` feature maps (deferred to Spec 13).
 
 ## Further Notes

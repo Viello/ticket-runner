@@ -203,6 +203,46 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When an argument like `--project-dir` or `--config` is declared on both the root `ArgumentParser` and on subparsers (`doctor`, `start`) with default values (such as `Path.cwd().resolve()`), Python's `argparse` executes subparser evaluation after parent parsing. If the operator passes `--project-dir <path> doctor` (before the subcommand), the subparser's default clobbers the parsed target directory back to `CWD`. Furthermore, passing an unvalidated non-existent directory or regular file path to `--project-dir` causes confusing, delayed errors inside git operations or storage adapters rather than a fast, informative pre-flight exit.
 - **Solution:** In `ticket_runner.py:create_parser`, declare arguments on subparsers with `default=argparse.SUPPRESS`. This ensures arguments supplied either before or after subcommands are preserved without subparser defaults overwriting top-level flags. In `main()`, `run_doctor()`, and `run_start()`, defensively validate that `project_dir` exists and is a directory (`project_dir.exists()` and `project_dir.is_dir()`), exiting immediately with code 1 on invalid paths. In `Doctor.__init__`, resolve relative configuration, ticket, and git paths relative to `self._cwd` so external project structures are loaded accurately.
 
+---
+
+## Temporary Directory Isolation & Secret Auditing for Remote Skills Publication
+
+- **Problem:** Publishing a remote skills catalog repository (such as `Viello/agent-skills`) from a local orchestrator workspace using `gh repo create` or `git init` directly inside the parent repository risks corrupting the parent repository's git remotes, accidentally committing internal `.env` files or session traces, or linking submodules unintentionally. Furthermore, pushing uninspected local skills to a public GitHub repository could leak API keys or private tokens.
+- **Solution:** In `scripts/publish_agent_skills.py`, assemble and stage the skills catalog inside an isolated temporary directory (`tempfile.TemporaryDirectory()`) outside the project root. Enforce an automated security audit scanning for forbidden file names (`.env*`, `*.pem`, `*.key`, `*.token`, `credentials.json`) and regex patterns for credentials (GitHub PATs, private keys, API keys) prior to git staging. Isolate git operations (`git init -b main`, `git remote add origin`, `git push -u origin main`) entirely within the clean temporary directory so the parent Ticket Runner git repository is never linked or altered.
+
+---
+
+## Two-Tier Configuration Deep-Merging & Safe Path Resolution
+
+- **Problem:** When loading layered configurations (global machine defaults vs project-level overrides), shallow dictionary updates (`dict.update()`) overwrite entire sub-sections (e.g., overriding only `tokens.ceiling` would erase `tokens.warn` and `tokens.handoff`). Conversely, list or scalar collisions could append duplicates instead of cleanly overriding parent settings. Additionally, accepting external `project_dir` or `project_config_path` arguments exposes the runner to directory traversal attacks (e.g. `../` escaping project root) or null-byte injection.
+- **Solution:** Implement a recursive `_deep_merge` helper where nested dictionaries are recursively merged while lists and scalar values in the overlay strictly replace their base counterpart. Seed the merge with built-in safe machine defaults (`DEFAULT_MACHINE_CONFIG`), merge global user configuration (`~/.ticket-runner/config.yaml`) if present, and finally deep-merge the project overlay (`ticket-runner.yaml` or fallback `config.yaml`). Defensively sanitize all input paths by rejecting embedded null bytes, verifying directory existence, and using `path.resolve().is_relative_to(project_dir.resolve())` to guarantee project configuration files cannot escape the target project boundary.
+
+---
+
+## Project Manifest Sniffing, Malformed Manifests & Git Detached HEAD Clean Recovery
+
+- **Problem:** Target project manifests (`package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`) are untrusted and can contain malformed JSON, corrupted TOML syntax, or unexpected field types that cause crashes during static inspection. Furthermore, inspecting Git metadata on uncommitted repositories, bare directories, or detached HEAD states can cause Git commands to return non-zero exit codes, fail symbolic ref resolution, or raise unexpected errors. Finally, Windows PowerShell strips inner quotation marks when executing inline `python -c "..."` commands, causing syntax errors in CLI smoke tests.
+- **Solution:** In `ProjectSniffer`, isolate file reads within bounded size limits (1MB) and parse JSON within guarded exception blocks that fall back to sensible defaults (`npm test`) without crashing. For Git inspection, verify `.git` directory presence and boundary containment before running commands, query `.git/HEAD` directly as a zero-process fallback, and catch all subprocess errors when resolving symbolic refs or branches, defaulting safely to `main`. When running self-contained Python smoke snippets in PowerShell, use PowerShell here-strings (`python -c @"..."@`) to preserve nested quotations cleanly.
+
+---
+
+## Skills Catalog Synchronization, Zip Slip Mitigation & Asynchronous Seam Bridging
+
+- **Solution:** In `GitHubSkillsClient`, inspect every archive member before extraction, verifying path containment (`dest.is_relative_to(target)`) and rejecting any entry containing `..`, absolute paths, or suspicious links with immediate `SkillsSyncError`. Locate skill roots dynamically by searching for `SKILL.md` rather than assuming fixed nesting depths, preserving custom local skills and respecting `force=False` for modified files. Bridge async `CommandRunner` invocations to synchronous callers using `ThreadPoolExecutor` when an event loop is running, ensuring seamless execution across CLI, test suite, and async bot environments.
+
+---
+
+## .gitignore Newline Separation & Symlink Path Traversal in Project Scaffolding
+
+- **Problem:** When appending entries such as `.agent/` to existing `.gitignore` files, missing trailing newlines can concatenate strings onto existing lines (corrupting previous ignore rules). Furthermore, naive filesystem scaffolding without un-resolved symlink inspection allows symlink traversal or overwriting linked files if a target path is an existing symlink pointing outside or inside the project directory.
+- **Solution:** Check the trailing newline of `.gitignore` content before appending (`prefix = "" if (not content or content.endswith("\n") or content.endswith("\r\n")) else "\n"`), and validate raw un-resolved paths (`raw_target.is_symlink()`) as well as resolved relative containment (`target.resolve().is_relative_to(resolved_root)`) before creating files or directories during scaffolding.
+
+---
+
+## CLI Two-Tier Configuration Resolution, Subparser Defaults & Scaffolding Fallbacks
+
+- **Problem:** When integrating two-tier configuration resolution (`~/.ticket-runner/config.yaml` + `<project-dir>/ticket-runner.yaml`) into CLI commands (`doctor`, `start`), top-level `--config` arguments with defaults (like `default=Path("config.yaml")`) clobber two-tier resolution, treating every invocation as an explicit config request and preventing automated fallback to `ticket-runner.yaml`. In addition, scaffolding un-manifested or empty repositories produces an empty `test_cmd: ""`, causing subsequent `VerificationConfig` and doctor pre-flight validation to immediately fail. Finally, omitting default models from `DEFAULT_MACHINE_CONFIG` causes initialized repositories to fail `Doctor.check_model` before a global user configuration is created.
+- **Solution:** In `ticket_runner.py:create_parser`, declare top-level `--config` with `default=None` and subparser `--config` flags with `default=argparse.SUPPRESS` so `main()` can cleanly detect when `--config` is explicitly specified by the user (overriding `project_config_path` while still merging over global configuration). In `ProjectScaffolder.scaffold`, fallback empty detected test commands to `"python -m pytest"` so generated overlays are immediately valid and executable on Windows PATH. In `DEFAULT_MACHINE_CONFIG`, seed baseline default models (`deepseek/deepseek-chat` and `qwen/qwen-plus`) matching `config.example.yaml` so two-tier pre-flight checks pass cleanly out of the box.
 
 
 

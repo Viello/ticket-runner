@@ -75,6 +75,16 @@ class FakeConfigLoader:
             raise self.error
         return self.config
 
+    def load_two_tier(
+        self,
+        project_dir: Path | str,
+        global_path: Path | str | None = None,
+        project_config_path: Path | str | None = None,
+    ):
+        if self.error:
+            raise self.error
+        return self.config
+
     def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
         self.persisted_terminals.append((path, session_terminal))
         if self.config is not None:
@@ -592,7 +602,11 @@ async def test_run_halts_on_first_failure(tmp_path: Path) -> None:
     runner.register("opencode --version", exit_code=1, stderr="OpenCode missing")
 
     git_ops = FakeGitOperations(clean=True)
-    doctor = Doctor(command_runner=runner, git_operations=git_ops)
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,
+        config_path=tmp_path / "missing_config.yaml",
+    )
 
     report = await doctor.run(halt_on_failure=True)
 

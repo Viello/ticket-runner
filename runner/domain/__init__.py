@@ -50,6 +50,7 @@ from runner.domain.ring_buffer import (
     VALID_RING_BUFFER_SOURCES,
 )
 from runner.domain.runtime_paths import DEFAULT_AGENT_DIR, RuntimePaths
+from runner.domain.scaffolding import ProjectHeuristics
 from runner.domain.signal import (
     QuestionSignal,
     QuestionType,
@@ -95,6 +96,7 @@ __all__ = [
     "NonInteractiveError",
     "PresenceConfig",
     "ProjectConfig",
+    "ProjectHeuristics",
     "QueueLockError",
     "QuestionSignal",
     "QuestionType",

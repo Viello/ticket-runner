@@ -97,6 +97,7 @@ ticket-runner/
 │   │   ├── hotkey_dispatch.py        # Interactive hotkey handler for TUI (pause, open, abort)
 │   │   ├── discord_thread_manager.py # Thread lifecycle coordinator for Discord integration
 │   │   ├── evidence_triage.py        # Token-preserving triage extractor (<=30 lines / 1,000 chars)
+│   │   ├── prompt_generator.py       # Standalone LLM prompt generator for AI-driven project configuration
 │   │   └── scaffolding.py            # Project sniffer and config generator for ticket-runner init
 │   │
 │   ├── ports/                        # Pure Abstract Protocols (Dependency Inversion Seams)
@@ -118,6 +119,7 @@ ticket-runner/
 │       ├── __init__.py
 │       ├── cli/
 │       │   ├── __init__.py
+│       │   ├── scaffolder.py         # Interactive terminal scaffolder implementing rich prompts & defaults
 │       │   ├── subprocess_runner.py  # Asyncio subprocess implementing CommandRunner
 │       │   └── windows_job.py        # Windows Job Object process tree termination wrapper
 │       ├── opencode/
@@ -126,6 +128,9 @@ ticket-runner/
 │       ├── antigravity/
 │       │   ├── __init__.py
 │       │   └── antigravity_worker.py # Antigravity CLI / SDK adapter implementing AgentWorker protocol
+│       ├── skills/
+│       │   ├── __init__.py
+│       │   └── skills_client.py      # Remote skills catalog sync adapter pulling from Viello/agent-skills
 │       ├── git/
 │       │   ├── __init__.py
 │       │   ├── git_client.py         # Git CLI operations using CommandRunner
@@ -193,7 +198,8 @@ ticket-runner/
         ├── test_spec_04_gatekeeper.py
         ├── test_spec_06_state_ui.py
         ├── test_spec_07_model_selection.py
-        └── test_spec_11_decoupled_runner.py
+        ├── test_spec_11_decoupled_runner.py
+        └── test_spec_12_scaffolding.py
 ```
 
 ---
@@ -281,3 +287,9 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 
 6. **Dual-Mode Human-in-the-Loop Approval Gate**:
    When verification passes in Human-in-the-Loop mode, execution pauses before committing. An `EvidenceCard` is dispatched via `ApprovalGateway` to the active presence channel (Rich TUI prompt in Nearby mode; Discord thread card with `/approve` in Away mode). Commits are strictly blocked until human sign-off.
+
+7. **Project Scaffolding & Skills Distribution**:
+   - `ProjectSniffer` (`runner/application/scaffolding.py`): Pure application service detecting project heuristics across Python, Node.js, Rust, Go, and Git without external process or network dependencies.
+   - `InteractiveScaffolder` (`runner/adapters/cli/scaffolder.py`): Prompts operator with detected defaults to author `<project-dir>/ticket-runner.yaml` and initialize `.agent/`, `docs/specs/`, and `docs/tickets/`.
+   - `PromptGenerator` (`runner/application/prompt_generator.py`): Formats standalone LLM prompt (`ticket-runner init --ai-prompt`) containing full YAML schema and stack examples for automated AI setup.
+   - `SkillsClient` (`runner/adapters/skills/skills_client.py`): Protocol and GitHub adapter synchronizing canonical skills catalog from `Viello/agent-skills` into `<project-dir>/.agents/skills/` with Zip Slip security mitigation.
