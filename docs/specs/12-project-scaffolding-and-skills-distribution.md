@@ -12,7 +12,7 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
 
 1. **Two-Tier Configuration Overlay**:
    - Split configuration into **Global User Configuration** (`~/.ticket-runner/config.yaml`) containing machine-wide preferences (Discord credentials, model lists, presence timeouts, token thresholds) and **Project Overlay Configuration** (`<project-dir>/ticket-runner.yaml`) containing only project-specific overrides (`test_cmd`, `build_cmd`, `base_branch`, `agent_branch`, `worker.provider`).
-   - The runner automatically merges project settings over global defaults upon loading.
+   - The runner automatically merges Project Overlay Config over global defaults upon loading.
 2. **Interactive & Heuristic Scaffolding (`ticket-runner init`)**:
    - Provide a `ticket-runner init [--project-dir <path>]` command that inspects project files (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`), detects test and build commands, detects the git base branch, and prompts the user with smart defaults to generate a clean `ticket-runner.yaml`.
    - Automatically scaffolds required directories: `docs/specs/`, `docs/tickets/`, and `.agent/`.
@@ -26,7 +26,7 @@ When a developer wants to use Ticket Runner on a new or existing repository, the
 
 1. As a developer, I want my global settings (Discord token, default models, token budget ceilings) stored once in `~/.ticket-runner/config.yaml`, so that I do not have to re-enter them in every repository.
 2. As a developer, I want each target repository to need only a minimal `ticket-runner.yaml` (under 15 lines), so that configuration overhead is minimal and project-focused.
-3. As a developer, I want project-level settings in `ticket-runner.yaml` to take precedence over global settings in `~/.ticket-runner/config.yaml`, so that individual projects can customize their test commands or branch names.
+3. As a developer, I want Project Overlay Config in `ticket-runner.yaml` to take precedence over global settings in `~/.ticket-runner/config.yaml`, so that individual projects can customize their test commands or branch names.
 4. As a developer, I want to run `ticket-runner init` inside an existing repository, so that the required directory structure (`docs/specs/`, `docs/tickets/`, `.agent/`) is created automatically.
 5. As a developer initializing a Python project with `pyproject.toml`, I want `ticket-runner init` to auto-detect `python -m pytest` as the default test command, so that I can accept it with a single keystroke.
 6. As a developer initializing a Node.js project with `package.json`, I want `ticket-runner init` to detect whether `npm`, `pnpm`, `yarn`, or `bun` is used and propose the appropriate test and build scripts.

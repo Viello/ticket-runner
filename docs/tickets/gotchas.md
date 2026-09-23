@@ -156,9 +156,16 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 ---
 
-## Nested Markdown Code Blocks in Setup Prompts & Two-Tier Configuration Clarity
+## Nested Markdown Code Blocks in LLM Config Prompts & Two-Tier Configuration Clarity
 
-- **Problem:** When providing standalone copy-pasteable Markdown setup prompts containing inner fenced code blocks (` ```yaml `, ` ```powershell `) within top-level documentation like `README.md`, standard 3-backtick delimiters prematurely close the outer container block, corrupting markdown rendering on GitHub and CLI viewers. Furthermore, conflating machine-level infrastructure settings (Discord bot tokens, global token limits) with repository-level settings in configuration templates confuses developers and AI assistants configuring new projects.
+- **Problem:** When providing standalone copy-pasteable Markdown LLM Config Prompts containing inner fenced code blocks (` ```yaml `, ` ```powershell `) within top-level documentation like `README.md`, standard 3-backtick delimiters prematurely close the outer container block, corrupting markdown rendering on GitHub and CLI viewers. Furthermore, conflating machine-level infrastructure settings (Discord bot tokens, global token limits) with repository-level settings in configuration templates confuses developers and AI assistants configuring new projects.
 - **Solution:** Always enclose markdown templates containing inner fenced blocks in 4-backtick (` ````markdown ` ... ` ```` `) boundaries to guarantee clean parsing and syntax highlighting. Explicitly structure configuration documentation around the two-tier hierarchy: global machine settings in `~/.ticket-runner/config.yaml` vs minimal project overrides in `ticket-runner.yaml`, keeping the project overlay template lightweight and focused strictly on test commands, build commands, and branch names.
+
+---
+
+## Spec 10b Alignment Audit & Living Documentation Synchronization
+
+- **Problem:** Evolving architectural specifications and introducing new domain vocabulary in `CONTEXT.md` (e.g. `Target Project`, `AgentWorker`, `Project Overlay Config`, `Verification Harness`, `Evidence Card`, `Skills Catalog`, `LLM Config Prompt`) easily leaves lingering avoided synonyms (like `setup prompt`, `session rollover`, `project settings`, `verification summary`, `dumps`) in top-level documentation, downstream draft specs, or README headers and tables of contents. Furthermore, changing section headers without updating corresponding table-of-contents anchor slugs breaks markdown in-page navigation.
+- **Solution:** As part of every spec-closing alignment ticket, execute repository-wide automated audits checking against all `_Avoid_:` lists defined in `CONTEXT.md`, synchronize table-of-contents anchor slugs with revised header titles, verify all internal markdown links and code block fence balance (` ```` ` vs ` ``` `), and ensure test suites remain completely green before archiving the spec.
 
 

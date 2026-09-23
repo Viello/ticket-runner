@@ -10,7 +10,7 @@ An external, multi-agent Python orchestrator that coordinates AI coding agents (
 - [Triad Ecosystem Architecture](#triad-ecosystem-architecture)
 - [8-Stage Development Workflow](#8-stage-development-workflow)
 - [Architectural Roadmap](#architectural-roadmap)
-- [Standalone LLM Project Setup Prompt](#standalone-llm-project-setup-prompt)
+- [Standalone LLM Config Prompt](#standalone-llm-config-prompt)
 - [Key Features](#key-features)
 - [Prerequisites](#prerequisites)
 - [Installation & Setup](#installation--setup)
@@ -153,7 +153,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 
 | Spec | Title | Status | Primary Focus |
 | :--- | :--- | :--- | :--- |
-| **Spec 10b** | **Living Documentation & Roadmap** | **Active** | Reconcile root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`), lock in domain glossary, establish external path invariants, and define the roadmap. |
+| **Spec 10b** | **Living Documentation & Roadmap** | Completed | Reconcile root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`), lock in domain glossary, establish external path invariants, and define the roadmap. |
 | **Spec 11** | **Decoupled Project Root & Multi-Agent** | Planned | Introduce `--project-dir <path>` CLI plumbing, abstract `AgentWorker` port (`runner/ports/agent_worker.py`), and multi-agent adapters for OpenCode and Antigravity CLI (`agy`). |
 | **Spec 12** | **Project Scaffolding & Skills Distribution** | Planned | Implement two-tier configuration merging (`~/.ticket-runner/config.yaml` + `ticket-runner.yaml`), `ticket-runner init` heuristics, `ticket-runner init --ai-prompt`, and `ticket-runner skills sync`. |
 | **Spec 13** | **Token-Guarded Verification & Human Gate** | Planned | Behavioral verification harness contracts (`verify-<app>`), out-of-band evidence capture, token-preserving triage extractor (`evidence_triage.py`), and dual-mode Evidence Card human approval gate. |
@@ -171,7 +171,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 - **Spec 12 (Project Scaffolding, LLM-Friendly Config & Skills Distribution)**:
   - Scaffolds new target projects in seconds via interactive `ticket-runner init`.
   - Distributes and updates canonical agent discipline skills from `Viello/agent-skills` via `ticket-runner skills sync`.
-  - Provides a standardized AI setup prompt (`ticket-runner init --ai-prompt`) allowing coding assistants to configure projects autonomously.
+  - Provides a standardized LLM Config Prompt (`ticket-runner init --ai-prompt`) allowing coding assistants to configure projects autonomously.
 - **Spec 13 (Token-Guarded Verification Subsystem & Human-in-the-Loop Gate)**:
   - Provides `create-verification-skill` scaffolding for Playwright, CLI PTYs, and HTTP APIs with a 5-step lifecycle (`Launch` $\rightarrow$ `Doctor` $\rightarrow$ `Drive` $\rightarrow$ `Evidence` $\rightarrow$ `Cleanup`).
   - Guards LLM token contexts by enforcing out-of-band execution and bounded triage truncation (≤ 30 lines / 1,000 characters).
@@ -179,7 +179,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 
 ---
 
-## Standalone LLM Project Setup Prompt
+## Standalone LLM Config Prompt
 
 Copy and paste the prompt below into any AI coding assistant (Cursor, OpenCode, Antigravity, Claude Code, ChatGPT) inside your project repository to automatically generate a tailored `ticket-runner.yaml` configuration file:
 
@@ -518,7 +518,7 @@ Only **one** ticket executes at a time. The loop follows strict transitions:
 To eliminate model hallucinations from context saturation, Ticket Runner monitors token telemetry:
 - **120,000 tokens:** Warning emitted to dashboard/Discord.
 - **135,000 tokens:** Automated Context Handoff triggered. The Worker executes `.agents/skills/handoff/SKILL.md` to persist progress to `.agent/checkpoints/{ticket_id}/handoff.md`. The runner resumes in a fresh session with the checkpoint as context.
-- **150,000 tokens:** Hard ceiling forcing immediate session rollover.
+- **150,000 tokens:** Hard ceiling forcing immediate Context Handoff.
 
 ### Token-Preserving Verification Guardrails
 
@@ -622,7 +622,7 @@ Ticket Runner separates global machine configuration from project-specific overr
 | :--- | :--- | :--- | :--- |
 | `tokens.warn` | `int` | `120000` | Token threshold for warning notification. |
 | `tokens.handoff` | `int` | `135000` | Token threshold for checkpointing and context handoff. |
-| `tokens.ceiling` | `int` | `150000` | Hard token limit forcing immediate session rollover. |
+| `tokens.ceiling` | `int` | `150000` | Hard token limit forcing immediate Context Handoff. |
 | `presence.default_mode` | `string` | `"nearby"` | Default operational mode (`nearby` or `away`). |
 | `presence.idle_escalation_minutes` | `int` | `3` | Inactivity minutes before prompts escalate to Discord. |
 | `discord.enabled` | `bool` | `true` | Enable or disable Discord bot notifications. |

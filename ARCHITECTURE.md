@@ -226,7 +226,7 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 │   ├── state.json                    # Active atomic runner state and crash recovery checkpoint
 │   ├── signals/                      # Worker-to-Runner durable signals ({ticket_id}_ready.json)
 │   ├── questions/                    # Worker operator questions ({ticket_id}.json)
-│   ├── checkpoints/                  # Token budget context handoff dumps ({ticket_id}/handoff.md)
+│   ├── checkpoints/                  # Token budget context handoff checkpoints ({ticket_id}/handoff.md)
 │   ├── logs/                         # Raw worker telemetry and stdout logs
 │   ├── smoke_log_<spec-slug>.md      # Cumulative Gatekeeper smoke verification log
 │   ├── evidence/                     # Verification Subsystem Evidence Artifacts (Spec 13)

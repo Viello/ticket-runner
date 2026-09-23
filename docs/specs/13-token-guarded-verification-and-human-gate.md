@@ -23,7 +23,7 @@ Current AI code generation workflows frequently suffer from two critical failure
 3. **Unified Human-in-the-Loop Gate**:
    - When configured in Human-in-the-Loop mode (`lifecycle.mode: "human"` or presence-driven), Gatekeeper verifies tests and behavioral harnesses first.
    - Upon green verification, Gatekeeper pauses execution, generates an **Evidence Card**, and presents it through the active presence channel:
-     - **Nearby Mode (Terminal)**: Interactive Rich prompt showing verification summary, evidence links, and smoke scenarios with actions: `[y] approve & commit`, `[n] reject & retry`, `[d] open diagnostic session`.
+     - **Nearby Mode (Terminal)**: Interactive Rich prompt showing Evidence Card, evidence links, and smoke scenarios with actions: `[y] approve & commit`, `[n] reject & retry`, `[d] open diagnostic session`.
      - **Away Mode (Discord)**: Posts the Evidence Card and smoke scenario checklist to the Ticket's Discord thread; waits for operator slash commands (`/approve`, `/reject`).
    - Commits are strictly blocked until human approval is confirmed.
 
