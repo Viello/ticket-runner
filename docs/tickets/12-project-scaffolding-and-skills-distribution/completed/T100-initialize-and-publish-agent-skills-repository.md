@@ -1,5 +1,6 @@
 # T100 — Initialize and Publish Reusable Agent Skills Repository (Viello/agent-skills)
-Status: pending
+Status: completed
+Completed: 2026-09-23T14:29:10Z
 Spec: docs/specs/12-project-scaffolding-and-skills-distribution.md
 Blocked by: None
 Security: required
@@ -28,14 +29,19 @@ Reasoning: medium
 
 ### Smoke Scenarios
 **Scenario: Verify Remote Agent Skills Repository and Tarball Endpoint**
-- Setup: GitHub CLI (`gh`) authenticated with repository permissions for account `Viello`.
-- Why: Ensure the remote skills catalog exists on GitHub and provides a downloadable tarball archive for downstream runners and projects to synchronize.
+- Setup: None (runs from repo root with GitHub CLI `gh` authenticated as `Viello`).
+- Why: Confirm that the canonical `Viello/agent-skills` repository is publicly accessible on GitHub and that its source tarball can be fetched and parsed by downstream tools.
 - Steps:
   1. Inspect remote repository status:
      `gh repo view Viello/agent-skills --json name,url,isPrivate,defaultBranchRef`
-  2. Download the tarball archive:
+  2. Download and verify the archive tarball in Python:
      `python -c "import urllib.request, tarfile, io; data = urllib.request.urlopen('https://github.com/Viello/agent-skills/archive/refs/heads/main.tar.gz').read(); tf = tarfile.open(fileobj=io.BytesIO(data)); names = tf.getnames(); assert any('implement/SKILL.md' in n for n in names); print('PASS: Downloaded valid skills tarball with', len(names), 'entries')"`
-- Expected: Repository is found, `isPrivate` is false, default branch is `main`, and the tarball archive contains canonical skills like `implement/SKILL.md`.
+  3. Run the publication script idempotency check:
+     `python scripts/publish_agent_skills.py`
+- Expected:
+  - Step 1 outputs `{"defaultBranchRef":{"name":"main"},"isPrivate":false,"name":"agent-skills","url":"https://github.com/Viello/agent-skills"}`.
+  - Step 2 outputs `PASS: Downloaded valid skills tarball with 194 entries`.
+  - Step 3 reports `PASS: Tarball verified with 194 archive entries.` and `Remote repository is already completely up to date. No changes to commit.`
 
 ### Gotchas
 - When creating the repo via `gh repo create`, ensure working in a clean temporary directory or using `--source` carefully so that the parent Ticket Runner git repository is not linked or modified.
