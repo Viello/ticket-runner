@@ -1,5 +1,6 @@
 # T090 — Update CONTEXT.md Domain Glossary with External Orchestrator Terms
-Status: pending
+Status: completed
+Completed: 2026-09-23T07:50:00Z
 Spec: docs/specs/10b-living-documentation-and-roadmap.md
 Blocked by: T089
 Reasoning: medium
@@ -26,11 +27,51 @@ Reasoning: medium
 ### Smoke Scenarios
 **Scenario: Verify Domain Glossary Definitions**
 - Setup: None (runs from repo root).
-- Why: Ensure all agents operating in the repository share exact terminology and avoid ambiguous synonyms.
+- Why: We need to verify that CONTEXT.md explicitly defines all 7 new domain terms alongside forbidden synonyms, ensuring that AI agents and human contributors share unambiguous language across external runner sessions.
 - Steps:
-  1. Open `CONTEXT.md` and check for the presence of **Target Project**, **AgentWorker**, **Project Overlay Config**, **Verification Harness**, **Evidence Card**, **Skills Catalog**, and **LLM Config Prompt**.
-  2. Confirm every term defines an explicit `_Avoid_:` block with forbidden synonyms.
-- Expected: All 7 terms are present, formatted canonically, with zero markdown syntax errors.
+  1. Run the Python verification script in PowerShell to assert that all 7 new domain terms and their `_Avoid_:` blocks are present in `CONTEXT.md`:
+     ```powershell
+     python -c @"
+     with open('CONTEXT.md', 'r', encoding='utf-8') as f:
+         content = f.read()
+
+     required_terms = [
+         'Target Project',
+         'AgentWorker',
+         'Project Overlay Config',
+         'Verification Harness',
+         'Evidence Card',
+         'Skills Catalog',
+         'LLM Config Prompt',
+     ]
+
+     missing = [t for t in required_terms if f'**{t}**:' not in content]
+     if missing:
+         print('MISSING TERMS:', missing)
+         exit(1)
+
+     missing_avoid = []
+     for term in required_terms:
+         idx = content.find(f'**{term}**:')
+         snippet = content[idx:idx+400]
+         if '_Avoid_:' not in snippet:
+             missing_avoid.append(term)
+
+     if missing_avoid:
+         print('MISSING _Avoid_ BLOCK FOR:', missing_avoid)
+         exit(1)
+
+     existing_terms = ['Runner', 'Worker', 'Gatekeeper', 'Checkpoint', 'Signal', 'Presence Mode']
+     missing_existing = [t for t in existing_terms if f'**{t}**:' not in content]
+     if missing_existing:
+         print('MISSING EXISTING TERMS:', missing_existing)
+         exit(1)
+
+     print('PASS: All required domain terms and avoid blocks present in CONTEXT.md.')
+     "@
+     ```
+  2. Inspect the terminal output for the `PASS` confirmation message and exit code 0.
+- Expected: Script prints `PASS: All required domain terms and avoid blocks present in CONTEXT.md.` with exit code 0.
 
 ### Gotchas
 - Do not redefine existing terms like `Worker` or `Gatekeeper`—they remain foundational entities.

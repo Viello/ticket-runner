@@ -140,6 +140,14 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When evolving a monolithic or local repository orchestrator into an external multi-agent runner targeting `--project-dir`, living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`) can quickly drift out of date. Outdated references to superseded active specs (e.g. referencing specs 04–06 when specs 01–10 are archived), missing architectural layers (such as `tests/integration/`, `clean_slate.py`, `crash_recovery.py`), or obsolete ADR counters degrade developer and AI context.
 - **Solution:** Maintain living documents as strict authoritative reflections of both the current working codebase and planned architectural boundaries. When updating `ARCHITECTURE.md`, verify that active spec lists, ADR indices, test directory trees, and adapter implementations reflect actual repository state alongside newly introduced ports (`AgentWorker`) and contracts (Verification Subsystem, `--project-dir` runtime separation).
 
+---
+
+## External Multi-Agent Domain Invariant Maintenance & Synonym Prohibitions
+
+- **Problem:** As the system architecture transitions from a project-local runner to an external multi-agent orchestrator, new architectural concepts (Target Project, AgentWorker, Verification Harness, Evidence Card, Project Overlay Config, Skills Catalog, LLM Config Prompt) risk being referred to by vague or conflicting synonyms across agent sessions (e.g. "target repo", "client project", "LLM backend", "test harness", "verification summary"), muddying domain boundaries and confusing prompt contexts.
+- **Solution:** Maintain explicit, canonical definitions in `CONTEXT.md` with dedicated `_Avoid_:` synonym blocks. Guard foundational orchestrator terms (such as `Worker` and `Gatekeeper`) against redefinition or dilution, and decouple agent lifecycle abstractions through `AgentWorker` while anchoring repository boundaries at `Target Project`.
+
+
 
 
 
