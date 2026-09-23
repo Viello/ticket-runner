@@ -97,6 +97,8 @@ class RunnerContainer:
     presence_coordinator: PresenceCoordinator | None = None
     tui_launcher: TuiLauncher | None = None
     tui_coordinator: TuiCoordinator | None = None
+    discord_thread_manager: Any | None = None
+    discord_logger: Any | None = None
 
 
 def build_container(
@@ -139,6 +141,8 @@ def build_container(
     status_publisher: StatusPublisher | None = None,
     console: Any | None = None,
     terminal_detector: Any | None = None,
+    discord_thread_manager: Any | None = None,
+    discord_logger: Any | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     resolved_config: RunnerConfig
@@ -311,6 +315,24 @@ def build_container(
         idle_escalation_minutes=idle_esc_min,
     )
 
+    if hasattr(resolved_processor, "discord_thread_manager") and resolved_processor.discord_thread_manager is None:
+        resolved_processor.discord_thread_manager = discord_thread_manager
+    if hasattr(resolved_processor, "discord_logger") and resolved_processor.discord_logger is None:
+        resolved_processor.discord_logger = discord_logger
+    if hasattr(resolved_processor, "presence_coordinator") and resolved_processor.presence_coordinator is None:
+        resolved_processor.presence_coordinator = resolved_presence_coordinator
+    if hasattr(resolved_processor, "runner_config") and resolved_processor.runner_config is None:
+        resolved_processor.runner_config = resolved_config
+
+    if hasattr(resolved_orchestrator, "discord_thread_manager") and resolved_orchestrator.discord_thread_manager is None:
+        resolved_orchestrator._discord_thread_manager = discord_thread_manager
+    if hasattr(resolved_orchestrator, "discord_logger") and resolved_orchestrator.discord_logger is None:
+        resolved_orchestrator._discord_logger = discord_logger
+    if hasattr(resolved_orchestrator, "presence_coordinator") and resolved_orchestrator.presence_coordinator is None:
+        resolved_orchestrator._presence_coordinator = resolved_presence_coordinator
+    if hasattr(resolved_orchestrator, "runner_config") and resolved_orchestrator.runner_config is None:
+        resolved_orchestrator._runner_config = resolved_config
+
     resolved_tui_launcher = tui_launcher or TuiLauncher(
         command_runner=resolved_command_runner,
     )
@@ -368,6 +390,8 @@ def build_container(
         presence_coordinator=resolved_presence_coordinator,
         tui_launcher=resolved_tui_launcher,
         tui_coordinator=resolved_tui_coordinator,
+        discord_thread_manager=discord_thread_manager,
+        discord_logger=discord_logger,
     )
 
 

@@ -1254,3 +1254,512 @@ def test_ticket_processor_outcome_includes_manual_verification(tmp_path: Path) -
     assert "- Verify terminal checklist" in outcome.changes
 
 
+class _FakeDiscordThreadManager:
+    def __init__(self, raises_on: set[str] | None = None) -> None:
+        self.open_calls: list[tuple[Any, str]] = []
+        self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.close_calls: list[tuple[str, str, str]] = []
+        self.discord_enabled: bool = True
+        self.raises_on = raises_on or set()
+
+    async def open_ticket_thread(self, ticket: Any, channel_id: str, **kwargs: Any) -> tuple[str, str]:
+        from runner.domain.exceptions import DiscordGatewayError
+        if "open" in self.raises_on:
+            raise DiscordGatewayError("Network timeout during thread creation")
+        self.open_calls.append((ticket, channel_id))
+        return ("thread-999", "msg-888")
+
+    async def update_status_card(self, thread_id: str, message_id: str, **fields: Any) -> None:
+        from runner.domain.exceptions import DiscordGatewayError
+        if "update" in self.raises_on:
+            raise DiscordGatewayError("Network error during card update")
+        self.update_calls.append((thread_id, message_id, fields))
+
+    async def close_ticket_thread(self, thread_id: str, status_card_message_id: str, commit_summary: str) -> None:
+        from runner.domain.exceptions import DiscordGatewayError
+        if "close" in self.raises_on:
+            raise DiscordGatewayError("Network error during thread archival")
+        self.close_calls.append((thread_id, status_card_message_id, commit_summary))
+
+
+class _FakeDiscordLogger:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def log(
+        self,
+        event_type: str,
+        payload: str,
+        thread_id: str,
+        presence_mode: str = "nearby",
+        *,
+        severity: str | None = None,
+    ) -> list[str]:
+        self.events.append({
+            "event_type": event_type,
+            "payload": payload,
+            "thread_id": thread_id,
+            "presence_mode": presence_mode,
+            "severity": severity,
+        })
+        return ["msg-event-1"]
+
+
+class _FakePresenceCoordinator:
+    def __init__(self, mode: str = "nearby") -> None:
+        self.current_mode = mode
+        self.schedule_calls: list[tuple[str, str, Any]] = []
+        self.cancel_calls: int = 0
+
+    async def schedule_escalation(self, ticket_id: str, thread_id: str, discord_logger: Any) -> None:
+        self.schedule_calls.append((ticket_id, thread_id, discord_logger))
+
+    def cancel_escalation(self) -> None:
+        self.cancel_calls += 1
+
+
+def test_discord_full_ticket_lifecycle(tmp_path: Path) -> None:
+    """T087 Smoke Scenario: Full ticket lifecycle in Discord."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway()
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+    presence_coord = _FakePresenceCoordinator(mode="away")
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["runner/domain/ticket.py"],
+                "scope": "domain",
+                "self_review_notes": "Implemented",
+                "new_gotchas": [],
+                "timestamp": "2026-09-23T00:00:00+00:00",
+                "manual_verification": [
+                    {
+                        "name": "Full lifecycle check",
+                        "setup": "None",
+                        "steps": "Check Discord",
+                        "expected": "Card updated and thread closed",
+                    }
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_lifecycle",
+                resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            ),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+        presence_coordinator=presence_coord,
+        discord_channel_id="chan-777",
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+    # 1. open_ticket_thread called first
+    assert len(thread_mgr.open_calls) == 1
+    assert thread_mgr.open_calls[0] == (ticket, "chan-777")
+
+    # 2. Status card updated for Working, Reviewing, Verifying
+    statuses_updated = [call[2].get("status") for call in thread_mgr.update_calls]
+    assert any("Working" in s for s in statuses_updated)
+    assert any("Reviewing" in s for s in statuses_updated)
+    assert any("Verifying" in s for s in statuses_updated)
+
+    # 3. Phase transitions logged to DiscordLogger
+    phase_events = [e for e in discord_logger.events if e["event_type"] == "phase_transition"]
+    assert len(phase_events) >= 3
+
+    # 4. close_ticket_thread called with commit summary
+    assert len(thread_mgr.close_calls) == 1
+    closed_thread_id, closed_msg_id, commit_summary = thread_mgr.close_calls[0]
+    assert closed_thread_id == "thread-999"
+    assert closed_msg_id == "msg-888"
+    assert "domain" in commit_summary
+    assert "runner/domain/ticket.py" in commit_summary
+
+
+def test_circuit_breaker_discord_critical_embed(tmp_path: Path) -> None:
+    """T087 Smoke Scenario: Circuit Breaker -> Discord critical embed."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(decisions=["abort"])
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+
+    # 3 consecutive non-ready failures consuming max_attempts
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.FAILED, escalation_details="Syntax error 1"),
+            WorkerRunResult(status=SingleCycleStatus.FAILED, escalation_details="Syntax error 2"),
+            WorkerRunResult(status=SingleCycleStatus.FAILED, escalation_details="Syntax error 3"),
+        ]
+    )
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        max_attempts=3,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+    )
+
+    try:
+        asyncio.run(processor(ticket))
+    except UserAbortError:
+        pass
+
+    breaker_events = [e for e in discord_logger.events if e["event_type"] == "circuit_breaker_trip"]
+    assert len(breaker_events) == 1
+    assert "Circuit breaker tripped" in breaker_events[0]["payload"]
+
+
+def test_verification_failed_discord_critical_embed(tmp_path: Path) -> None:
+    """T087: Verification failure routes verification_failed event to DiscordLogger."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(decisions=["abort"])
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["foo.py"],
+                "self_review_notes": "Implemented",
+                "new_gotchas": [],
+                "timestamp": "2026-09-23T00:00:00+00:00",
+                "manual_verification": [{"name": "smoke", "setup": "", "steps": "", "expected": ""}],
+            }),
+            encoding="utf-8",
+        )
+
+    failing_report = _failing_report(tail="1 failed")
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_2"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_3"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([failing_report, failing_report, failing_report])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        max_attempts=3,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+    )
+
+    try:
+        asyncio.run(processor(ticket))
+    except UserAbortError:
+        pass
+
+    failed_events = [e for e in discord_logger.events if e["event_type"] == "verification_failed"]
+    assert len(failed_events) >= 1
+    assert "1 failed" in failed_events[0]["payload"]
+
+
+def test_hard_ceiling_and_handoff_discord_events(tmp_path: Path) -> None:
+    """T087: Hard ceiling (>=150k) and handoff (>=135k) route critical events."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway()
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["foo.py"],
+                "self_review_notes": "Implemented",
+                "new_gotchas": [],
+                "timestamp": "2026-09-23T00:00:00+00:00",
+                "manual_verification": [{"name": "smoke", "setup": "", "steps": "", "expected": ""}],
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            # Cycle 1 triggers handoff event (occupancy 136k >= 135k)
+            WorkerRunResult(
+                status=SingleCycleStatus.READY,
+                session_id="ses_1",
+                occupancy=136000,
+                handoffs=1,
+            ),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+    handoff_events = [e for e in discord_logger.events if e["event_type"] == "handoff"]
+    assert len(handoff_events) == 1
+    assert "136000" in handoff_events[0]["payload"]
+
+
+def test_hard_ceiling_discord_event(tmp_path: Path) -> None:
+    """T087: Hard ceiling (status=CEILING or occupancy >= 150k) routes hard_ceiling event."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(decisions=["abort"])
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(
+                status=SingleCycleStatus.CEILING,
+                session_id="ses_ceil",
+                occupancy=152000,
+            ),
+        ]
+    )
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        max_attempts=1,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+    )
+
+    try:
+        asyncio.run(processor(ticket))
+    except UserAbortError:
+        pass
+
+    ceil_events = [e for e in discord_logger.events if e["event_type"] == "hard_ceiling"]
+    assert len(ceil_events) == 1
+    assert "Hard ceiling reached" in ceil_events[0]["payload"]
+
+
+def test_question_signal_schedules_and_cancels_escalation(tmp_path: Path) -> None:
+    """T087 Smoke Scenario: Question signal -> escalation timer scheduled, local answer -> cancelled."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(answers=["Use Clean Architecture"])
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+    presence_coord = _FakePresenceCoordinator()
+
+    q_path = paths.questions_dir / f"{ticket.id}.json"
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+
+    def _on_call(t: Ticket, count: int) -> None:
+        if count == 1:
+            q_path.parent.mkdir(parents=True, exist_ok=True)
+            q_path.write_text(
+                json.dumps({
+                    "ticket_id": ticket.id,
+                    "type": "text",
+                    "question": "Which architecture pattern should be used?",
+                    "status": "pending",
+                    "created_at": "2026-09-23T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
+        else:
+            ready_path.parent.mkdir(parents=True, exist_ok=True)
+            ready_path.write_text(
+                json.dumps({
+                    "ticket_id": ticket.id,
+                    "status": "ready_for_verification",
+                    "modified_files": ["arch.py"],
+                    "self_review_notes": "Implemented",
+                    "new_gotchas": [],
+                    "timestamp": "2026-09-23T00:00:00+00:00",
+                    "manual_verification": [{"name": "smoke", "setup": "", "steps": "", "expected": ""}],
+                }),
+                encoding="utf-8",
+            )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_q"),
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_q"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+        presence_coordinator=presence_coord,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+    # schedule_escalation called on question signal
+    assert len(presence_coord.schedule_calls) == 1
+    t_id, th_id, d_logger = presence_coord.schedule_calls[0]
+    assert t_id == ticket.id
+    assert th_id == "thread-999"
+    assert d_logger is discord_logger
+
+    # cancel_escalation called after local answer
+    assert presence_coord.cancel_calls == 1
+
+
+def test_local_only_suppresses_all_discord_calls(tmp_path: Path) -> None:
+    """T087 Smoke Scenario: local-only suppresses all Discord calls."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["clean.py"],
+                "self_review_notes": "Done",
+                "new_gotchas": [],
+                "timestamp": "2026-09-23T00:00:00+00:00",
+                "manual_verification": [{"name": "smoke", "setup": "", "steps": "", "expected": ""}],
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_clean"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    # discord_thread_manager=None passed
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        discord_thread_manager=None,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+
+def test_transient_discord_errors_do_not_abort_processing(tmp_path: Path) -> None:
+    """T087 Gotcha 4: DiscordGatewayError on open, update, and close must not abort processing."""
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway()
+    thread_mgr = _FakeDiscordThreadManager(raises_on={"open", "update", "close"})
+    discord_logger = _FakeDiscordLogger()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": ticket.id,
+                "status": "ready_for_verification",
+                "modified_files": ["resilient.py"],
+                "self_review_notes": "Handled",
+                "new_gotchas": [],
+                "timestamp": "2026-09-23T00:00:00+00:00",
+                "manual_verification": [{"name": "resilience", "setup": "", "steps": "", "expected": ""}],
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [
+            WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_resilient"),
+        ],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+
+

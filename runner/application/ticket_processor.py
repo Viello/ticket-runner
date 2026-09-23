@@ -31,9 +31,10 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
     TicketProcessor as TicketProcessorProtocol,
 )
+from runner.adapters.discord.logger import CRITICAL_EVENT_TYPES
 from runner.application.git_operations import GitOperations
 from runner.domain.config import VerificationConfig, WorkerConfig
-from runner.domain.exceptions import SignalFormatError, UserAbortError
+from runner.domain.exceptions import DiscordGatewayError, SignalFormatError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
@@ -68,6 +69,11 @@ class GatekeeperTicketProcessor:
         token_budget: Any | None = None,
         status_publisher: StatusPublisher | None = None,
         git_operations: GitOperations | None = None,
+        discord_thread_manager: Any | None = None,
+        discord_logger: Any | None = None,
+        presence_coordinator: Any | None = None,
+        runner_config: Any | None = None,
+        discord_channel_id: str | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
@@ -75,6 +81,23 @@ class GatekeeperTicketProcessor:
         self._runtime_paths = runtime_paths
         self._token_budget = token_budget
         self._status_publisher = status_publisher
+        self._discord_thread_manager = discord_thread_manager
+        self._discord_logger = discord_logger
+        if self._discord_logger is None and discord_thread_manager is not None:
+            self._discord_logger = getattr(discord_thread_manager, "_logger", None)
+        self._presence_coordinator = presence_coordinator
+        self._runner_config = runner_config
+        self._discord_channel_id = (
+            discord_channel_id
+            if discord_channel_id is not None
+            else (
+                getattr(getattr(runner_config, "discord", None), "channel_id", "")
+                if runner_config is not None
+                else ""
+            )
+        )
+        self._current_thread_id: str = ""
+        self._current_status_card_message_id: str = ""
         if git_operations is not None:
             self._git_operations = git_operations
         elif coordinator is not None and getattr(coordinator, "git_operations", None) is not None:
@@ -180,6 +203,69 @@ class GatekeeperTicketProcessor:
         self._state_coordinator = value
 
     @property
+    def discord_thread_manager(self) -> Any | None:
+        """DiscordThreadManager instance used for thread lifecycle management."""
+        return self._discord_thread_manager
+
+    @discord_thread_manager.setter
+    def discord_thread_manager(self, value: Any | None) -> None:
+        self._discord_thread_manager = value
+        if self._discord_logger is None and value is not None:
+            self._discord_logger = getattr(value, "_logger", None)
+
+    @property
+    def discord_logger(self) -> Any | None:
+        """DiscordLogger instance used for remote event dispatch."""
+        return self._discord_logger
+
+    @discord_logger.setter
+    def discord_logger(self, value: Any | None) -> None:
+        self._discord_logger = value
+
+    @property
+    def presence_coordinator(self) -> Any | None:
+        """PresenceCoordinator instance used for mode transitions and escalation."""
+        return self._presence_coordinator
+
+    @presence_coordinator.setter
+    def presence_coordinator(self, value: Any | None) -> None:
+        self._presence_coordinator = value
+
+    @property
+    def runner_config(self) -> Any | None:
+        """RunnerConfig composite configuration."""
+        return self._runner_config
+
+    @runner_config.setter
+    def runner_config(self, value: Any | None) -> None:
+        self._runner_config = value
+        if value is not None and not self._discord_channel_id:
+            self._discord_channel_id = getattr(getattr(value, "discord", None), "channel_id", "")
+
+    @property
+    def is_discord_enabled(self) -> bool:
+        """Return True if Discord notifications and thread management are enabled."""
+        if self._runner_config is not None:
+            discord_cfg = getattr(self._runner_config, "discord", None)
+            if discord_cfg is not None and not getattr(discord_cfg, "enabled", True):
+                return False
+        if self._discord_thread_manager is None and self._discord_logger is None:
+            return False
+        if self._discord_thread_manager is not None and getattr(self._discord_thread_manager, "discord_enabled", True) is False:
+            return False
+        return True
+
+    @property
+    def current_thread_id(self) -> str:
+        """Discord thread ID for active ticket."""
+        return self._current_thread_id
+
+    @property
+    def current_status_card_message_id(self) -> str:
+        """Discord status card message ID for active ticket."""
+        return self._current_status_card_message_id
+
+    @property
     def supervisor(self) -> Any:
         """Underlying WorkerSupervisor if available through coordinator."""
         if self._coordinator is not None and hasattr(self._coordinator, "supervisor"):
@@ -247,6 +333,95 @@ class GatekeeperTicketProcessor:
         # 2. Build initial Worker prompt
         initial_prompt = self.build_initial_prompt(ticket)
 
+        # Discord ticket thread initialization
+        thread_id = ""
+        status_card_message_id = ""
+        channel_id = (
+            self._discord_channel_id
+            or (
+                getattr(getattr(self._runner_config, "discord", None), "channel_id", "")
+                if self._runner_config is not None
+                else ""
+            )
+        )
+        if self.is_discord_enabled and self._discord_thread_manager is not None:
+            try:
+                thread_id, status_card_message_id = await self._discord_thread_manager.open_ticket_thread(
+                    ticket, channel_id
+                )
+            except (DiscordGatewayError, Exception) as exc:
+                logger.warning("Failed to open Discord ticket thread: %s", exc)
+
+        self._current_thread_id = thread_id
+        self._current_status_card_message_id = status_card_message_id
+
+        async def _on_phase_change(phase: str) -> None:
+            if not self.is_discord_enabled:
+                return
+            status_label = (
+                f"🟡 {phase}"
+                if not phase.startswith("🟡") and not phase.startswith("✅")
+                else phase
+            )
+            presence_mode = (
+                self._presence_coordinator.current_mode
+                if self._presence_coordinator is not None
+                and hasattr(self._presence_coordinator, "current_mode")
+                else "nearby"
+            )
+            if (
+                self._discord_thread_manager is not None
+                and thread_id
+                and status_card_message_id
+            ):
+                try:
+                    await self._discord_thread_manager.update_status_card(
+                        thread_id,
+                        status_card_message_id,
+                        status=status_label,
+                    )
+                except (DiscordGatewayError, Exception) as exc:
+                    logger.warning(
+                        "Failed to update status card on phase transition: %s", exc
+                    )
+
+            if self._discord_logger is not None and thread_id:
+                try:
+                    await self._discord_logger.log(
+                        "phase_transition",
+                        phase,
+                        thread_id,
+                        presence_mode,
+                    )
+                except (DiscordGatewayError, Exception) as exc:
+                    logger.warning(
+                        "Failed to log phase transition to Discord: %s", exc
+                    )
+
+        async def _on_event(event_type: str, payload: str) -> None:
+            if not self.is_discord_enabled or self._discord_logger is None or not thread_id:
+                return
+            presence_mode = (
+                self._presence_coordinator.current_mode
+                if self._presence_coordinator is not None
+                and hasattr(self._presence_coordinator, "current_mode")
+                else "nearby"
+            )
+            try:
+                is_crit = event_type in CRITICAL_EVENT_TYPES
+                await self._discord_logger.log(
+                    event_type,
+                    payload,
+                    thread_id,
+                    presence_mode,
+                    severity="critical" if is_crit else None,
+                )
+            except (DiscordGatewayError, Exception) as exc:
+                logger.warning("Failed to emit Discord event %s: %s", event_type, exc)
+
+        # Transition to initial Working phase
+        await _on_phase_change("Working")
+
         # 3. Create and drive VerificationLoop
         factory = self._loop_factory or VerificationLoop
         loop_kwargs: dict[str, Any] = {
@@ -285,6 +460,34 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["git_operations"] = self._git_operations
+            if "phase_callback" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["phase_callback"] = _on_phase_change
+            if "event_callback" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["event_callback"] = _on_event
+            if "discord_logger" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["discord_logger"] = self._discord_logger
+            if "thread_id" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["thread_id"] = thread_id
+            if "status_card_message_id" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["status_card_message_id"] = status_card_message_id
+            if "presence_coordinator" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["presence_coordinator"] = self._presence_coordinator
+            if "discord_thread_manager" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["discord_thread_manager"] = self._discord_thread_manager
         except (ValueError, TypeError):
             pass
 
@@ -311,10 +514,38 @@ class GatekeeperTicketProcessor:
                     scope = ready_signal.scope
                     if ready_signal.self_review_notes and self._printer is not None:
                         self._printer(f"[{ticket.id}] Self-review notes: {ready_signal.self_review_notes}")
+                    scope_str = scope or "adapters"
+                    file_bullets = "\n".join(
+                        f"- Update {f}"
+                        for f in (ready_signal.modified_files if ready_signal else ())
+                    )
+                    commit_summary = (
+                        f"{scope_str}: {ticket.title}\n{file_bullets}"
+                        if file_bullets
+                        else f"{scope_str}: {ticket.title}"
+                    )
                 else:
                     changes = ()
                     new_gotchas = ()
                     scope = None
+                    commit_summary = f"{ticket.id}: {ticket.title}"
+
+                if (
+                    self.is_discord_enabled
+                    and self._discord_thread_manager is not None
+                    and thread_id
+                    and status_card_message_id
+                ):
+                    try:
+                        await self._discord_thread_manager.close_ticket_thread(
+                            thread_id,
+                            status_card_message_id,
+                            commit_summary,
+                        )
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning(
+                            "Failed to close Discord ticket thread: %s", exc
+                        )
 
                 return TicketOutcome.approved(
                     new_gotchas=new_gotchas,
@@ -360,12 +591,36 @@ class GatekeeperTicketProcessor:
                     pending_prompt = None
                     continue
 
+                # Schedule escalation on question signal
+                if (
+                    self.is_discord_enabled
+                    and self._presence_coordinator is not None
+                    and self._discord_logger is not None
+                ):
+                    try:
+                        schedule_res = self._presence_coordinator.schedule_escalation(
+                            ticket.id, thread_id, self._discord_logger
+                        )
+                        if inspect.iscoroutine(schedule_res):
+                            await schedule_res
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning(
+                            "Failed to schedule escalation on question signal: %s", exc
+                        )
+
                 # Prompt through InterventionGateway.ask_question
                 raw_answer = self._intervention_gateway.ask_question(question)
                 if inspect.iscoroutine(raw_answer):
                     answer = await raw_answer
                 else:
                     answer = raw_answer
+
+                # Cancel escalation on local answer
+                if self._presence_coordinator is not None:
+                    try:
+                        self._presence_coordinator.cancel_escalation()
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning("Failed to cancel escalation: %s", exc)
 
                 # Write answer back by rewriting question Signal (status: answered, answer)
                 self._signal_repository.write_answer(ticket.id, answer)

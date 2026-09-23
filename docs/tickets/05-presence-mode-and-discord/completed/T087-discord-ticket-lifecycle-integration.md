@@ -1,5 +1,6 @@
 # T087 — Integrate Discord into ticket lifecycle (Runner hooks)
-Status: pending
+Status: completed
+Completed: 2026-09-23T06:01:00Z
 Spec: docs/specs/05-presence-mode-and-discord.md
 Blocked by: T086
 
@@ -28,27 +29,27 @@ Blocked by: T086
 
 ### Smoke Scenarios
 **Scenario: Full ticket lifecycle in Discord**
-- Setup: Stub `DiscordThreadManager` (records calls). Stub `DiscordLoggerImpl` (records events). Run a fake ticket through `GatekeeperTicketProcessor` with cycle runner returning immediate pass.
-- Steps: 1. Call `processor.process(ticket)`. 2. Inspect call log on stubs.
-- Expected: `open_ticket_thread` called first. Live Digest started. At least one `update_status_card` call for Working phase. `close_ticket_thread` called with commit summary on pass.
+- Setup: Configure a ticket runner with a mock Discord thread manager and mock Discord event logger. Provide a test ticket and cycle runner that immediately succeeds.
+- Steps: 1. Run the ticket through the processor. 2. Verify recorded method calls on the Discord thread manager and logger.
+- Expected: A dedicated ticket thread is opened first, the Status Card is updated through Working, Reviewing, and Verifying states, phase transition events are logged, and the thread is closed with the commit summary upon Gatekeeper approval.
 
 **Scenario: Circuit Breaker → Discord critical embed**
-- Setup: Cycle runner returns failure 3 times (tripping breaker). `FakeDiscordLogger` records events.
-- Steps: Run ticket through processor until circuit breaker trips.
-- Expected: `FakeDiscordLogger` records a `circuit_breaker_trip` event with critical severity. `presence_mode` irrelevant — event always recorded.
+- Setup: Configure the ticket processor with a mock Discord logger and a cycle runner that fails 3 consecutive times to exhaust attempt budgets.
+- Steps: Run the ticket through the processor until the circuit breaker trips.
+- Expected: The Discord logger records a `circuit_breaker_trip` event with critical severity, bypassing presence mode filtering.
 
-**Scenario: Question signal → escalation timer scheduled**
-- Setup: Cycle runner returns `is_question_pending`. Fake `PresenceCoordinator`.
-- Steps: Run ticket; when `is_question_pending`, inspect coordinator.
-- Expected: `schedule_escalation(ticket_id, thread_id, discord_logger)` called. Local answer → `cancel_escalation()` called.
+**Scenario: Question signal → escalation timer scheduled and cancelled upon local answer**
+- Setup: Configure the ticket processor with a mock presence coordinator and cycle runner that emits a question signal before the ready signal.
+- Steps: Run the ticket through the processor; provide an answer via the intervention gateway.
+- Expected: `schedule_escalation` is called upon receiving the question signal; `cancel_escalation` is called immediately when the answer is returned.
 
-**Scenario: local-only suppresses all Discord calls**
-- Setup: `discord_thread_manager=None` passed to processor constructor.
-- Steps: Run a full ticket through processor.
-- Expected: No exceptions; `TicketOutcome.approved` returned normally. Zero Discord gateway calls.
+**Scenario: Disabled Discord suppresses all Discord calls**
+- Setup: Configure the ticket processor with `discord_thread_manager=None` and `discord_logger=None`.
+- Steps: Run a full ticket through the processor to approval.
+- Expected: Ticket executes and finishes with approval; no Discord thread or logging calls are made.
 
 ### Gotchas
-- `VerificationLoop` may need to surface phase-transition events via a callback or notification sink — check whether `notify` callback already covers phase changes or whether a new `phase_callback` parameter is cleaner.
-- `close_ticket_thread` receives a `commit_summary` string — derive it from the `ReadySignal.scope` + modified files list already available in the approved-path code block.
-- Avoid storing `thread_id` in `RunnerState` (that is Spec 06 territory) — keep it as in-memory state on the ticket processor or pass it through the call chain for the ticket's duration only.
-- All Discord calls in hooks must be wrapped in `try/except DiscordGatewayError` — a transient Discord failure must never abort ticket processing.
+- `VerificationLoop` surfaces phase-transition events and critical notifications via `phase_callback` and `event_callback` parameters passed down from `GatekeeperTicketProcessor`.
+- `close_ticket_thread` receives a `commit_summary` string derived from `ReadySignal.scope` and the list of modified files in the approved path.
+- Keep `thread_id` and `status_card_message_id` as active ticket execution state on `GatekeeperTicketProcessor` rather than persisting in `RunnerState`.
+- All Discord calls in hooks are wrapped in `try ... except (DiscordGatewayError, Exception)` so transient Discord network failures never fail or abort ticket processing.
