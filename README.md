@@ -21,6 +21,7 @@ An external, multi-agent Python orchestrator that coordinates AI coding agents (
   - [Presence Modes: Nearby vs. Away](#presence-modes-nearby-vs-away)
 - [How It Works](#how-it-works)
   - [Execution State Machine](#execution-state-machine)
+  - [Pre-Flight Checks (Doctor)](#pre-flight-checks-doctor)
   - [Gatekeeper & Circuit Breaker](#gatekeeper--circuit-breaker)
   - [Context Handoffs & Token Budgets](#context-handoffs--token-budgets)
   - [Token-Preserving Verification Guardrails](#token-preserving-verification-guardrails)
@@ -504,6 +505,23 @@ Only **one** ticket executes at a time. The loop follows strict transitions:
        └── FAIL (Attempts < verification.max_attempts) → Feed bounded triage excerpt → Retry WORKING
                 (Attempts exhausted) → CIRCUIT BREAKER TRIPPED → Escalate ([R]etry/[S]kip/[A]bort)
 ```
+
+### Pre-Flight Checks (Doctor)
+
+Before any ticket execution begins, `Doctor` inspects the environment, workspace, and configuration to catch missing tools, unconfigured dependencies, and invalid states early:
+
+1. **Target Project Directory & Git Repository**: Validates that `--project-dir` (or `CWD`) exists, is an accessible directory, and is a valid Git worktree (verified via `git rev-parse --is-inside-work-tree`).
+2. **Worker Provider CLI Binary**: Inspects system PATH for the executable corresponding to the configured `worker.provider`:
+   - `opencode`: Verifies `opencode` CLI binary exists in PATH and executes `opencode --version`.
+   - `antigravity`: Verifies `agy` CLI binary exists in PATH.
+3. **Branch Isolation & Clean Working Tree**: Verifies that the repository working tree has zero uncommitted changes and is checked out to the designated isolation branch (`agent/ticket-runner`).
+4. **Ticket Queue Validation**: Verifies `docs/tickets/` exists and contains at least one pending ticket specification.
+5. **Configuration Schema & Model Definitions**: Validates `config.yaml` against schema constraints and confirms at least one selectable model is configured under `model.models`.
+6. **Session Terminal Host**: Verifies configured terminal binary on PATH or prompts for interactive host selection (`wt.exe`, `pwsh.exe`, `powershell.exe`, `cmd.exe`).
+7. **Verification Commands**: Resolves the leading executable of `verification.test_cmd` and `verification.build_cmd` against PATH.
+8. **Pre-Push Hook Guardrail**: Verifies `.git/hooks/pre-push` is installed with blocking signature to prevent upstream pushes.
+9. **Operating Rules & Skills**: Confirms `AGENTS.md` and required skill definitions (`implement`, `code-review`, `diagnosing-bugs`) exist on disk.
+10. **Discord Connectivity & Permissions**: Validates bot credentials and channel permissions unless running with `--local-only`.
 
 ### Gatekeeper & Circuit Breaker
 

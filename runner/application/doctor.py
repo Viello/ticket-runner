@@ -26,6 +26,8 @@ from runner.ports.config_loader import ConfigLoader
 from runner.ports.ticket_repository import TicketRepository
 
 CHECK_OPENCODE = "opencode"
+CHECK_WORKER_BINARY = "worker_binary"
+CHECK_TARGET_GIT_REPO = "target_git_repo"
 CHECK_GIT = "git"
 CHECK_QUEUE = "queue"
 CHECK_CONFIG = "config"
@@ -106,6 +108,7 @@ class Doctor:
         env: Mapping[str, str] | None = None,
         target_branch: str = DEFAULT_BRANCH,
         path_resolver: Callable[[str], str | None] | None = None,
+        which_fn: Callable[[str], str | None] | None = None,
         agents_md_path: Path | str | None = None,
         execution_skill_path: Path | str | None = None,
         terminal_prompt: TerminalHostPrompt | None = None,
@@ -161,7 +164,7 @@ class Doctor:
         self._env = env if env is not None else os.environ
         self._target_branch = target_branch
         self._loaded_config: RunnerConfig | None = None
-        self._path_resolver = path_resolver or shutil.which
+        self._path_resolver = which_fn or path_resolver or shutil.which
         self._terminal_prompt = terminal_prompt or TerminalHostPrompt()
         self._terminal_detector = terminal_detector or TerminalHostDetector
         self._ppid_resolver = ppid_resolver
@@ -172,6 +175,125 @@ class Doctor:
     def loaded_config(self) -> RunnerConfig | None:
         """Loaded RunnerConfig after successful config check."""
         return self._loaded_config
+
+    def _get_worker_provider(self) -> str:
+        """Resolve the configured worker provider name ('opencode' or 'antigravity')."""
+        if self._loaded_config is not None:
+            return getattr(self._loaded_config.worker, "provider", "opencode")
+        if self._config_loader is not None:
+            try:
+                loaded = self._config_loader.load(self._config_path)
+                if loaded is not None:
+                    self._loaded_config = loaded
+                    return getattr(loaded.worker, "provider", "opencode")
+            except Exception:
+                pass
+        return "opencode"
+
+    async def _check_worker_binary(self, name: str = CHECK_WORKER_BINARY) -> CheckResult:
+        """Verify the CLI binary corresponding to the configured worker provider is available on PATH."""
+        provider = self._get_worker_provider()
+        if provider == "antigravity":
+            binary = "agy"
+            resolved = self._path_resolver(binary)
+            if not resolved:
+                return CheckResult(
+                    name=name,
+                    passed=False,
+                    message=f"Antigravity CLI binary '{binary}' was not found in PATH.",
+                    remediation=f"Install Antigravity CLI and ensure '{binary}' is accessible in your PATH.",
+                )
+            return CheckResult(
+                name=name,
+                passed=True,
+                message=f"Antigravity CLI binary '{binary}' verified on PATH.",
+                remediation=None,
+            )
+        else:
+            binary = "opencode"
+            resolved = self._path_resolver(binary)
+            if not resolved:
+                return CheckResult(
+                    name=name,
+                    passed=False,
+                    message=f"OpenCode CLI binary '{binary}' was not found in PATH.",
+                    remediation=f"Install OpenCode CLI and ensure '{binary}' is accessible in your PATH.",
+                )
+            opencode_res = await self.check_opencode()
+            if not opencode_res.passed:
+                return CheckResult(
+                    name=name,
+                    passed=False,
+                    message=opencode_res.message,
+                    remediation=opencode_res.remediation,
+                )
+            return CheckResult(
+                name=name,
+                passed=True,
+                message=opencode_res.message,
+                remediation=None,
+            )
+
+    async def check_worker_binary(self, name: str = CHECK_WORKER_BINARY) -> CheckResult:
+        """Verify the configured worker provider binary is available on PATH."""
+        return await self._check_worker_binary(name=name)
+
+    async def _check_target_git_repo(self, name: str = CHECK_TARGET_GIT_REPO) -> CheckResult:
+        """Verify that target project directory exists, is a directory, and is a valid git repository."""
+        target_dir = self._cwd if self._cwd is not None else Path.cwd()
+
+        if not target_dir.exists():
+            return CheckResult(
+                name=name,
+                passed=False,
+                message=f"Target project directory '{target_dir}' does not exist.",
+                remediation=f"Ensure the target project directory '{target_dir}' exists and is accessible.",
+            )
+
+        if not target_dir.is_dir():
+            return CheckResult(
+                name=name,
+                passed=False,
+                message=f"Target project path '{target_dir}' is not a directory.",
+                remediation=f"Ensure '{target_dir}' is a valid directory path.",
+            )
+
+        is_worktree = False
+        if hasattr(self._git_operations, "is_inside_work_tree"):
+            try:
+                is_worktree = await self._git_operations.is_inside_work_tree(cwd=target_dir)
+            except Exception:
+                is_worktree = False
+        else:
+            try:
+                res = await self._command_runner.run(
+                    ["git", "rev-parse", "--is-inside-work-tree"], cwd=target_dir
+                )
+                if res.success and res.stdout.strip().lower() == "true":
+                    is_worktree = True
+                elif res.success and res.stdout.strip() == "" and not res.stderr and res.exit_code == 0:
+                    is_worktree = True
+            except Exception:
+                is_worktree = False
+
+        if not is_worktree:
+            return CheckResult(
+                name=name,
+                passed=False,
+                message=f"Target project directory '{target_dir}' is not a valid git repository.",
+                remediation=f"Initialize a git repository in '{target_dir}' with 'git init' or provide a path to an existing git repository.",
+            )
+
+        return CheckResult(
+            name=name,
+            passed=True,
+            message=f"Target project directory '{target_dir}' is a valid git repository.",
+            remediation=None,
+        )
+
+    async def check_target_git_repo(self, name: str = CHECK_TARGET_GIT_REPO) -> CheckResult:
+        """Verify target project directory exists, is a directory, and is a valid git repository."""
+        return await self._check_target_git_repo(name=name)
 
     async def check_opencode(self) -> CheckResult:
         """Verify OpenCode CLI binary is available and executable."""
@@ -211,6 +333,10 @@ class Doctor:
 
     async def check_git(self) -> CheckResult:
         """Verify git working tree cleanliness and checkout on designated isolation branch."""
+        target_check = await self._check_target_git_repo(name=CHECK_GIT)
+        if not target_check.passed:
+            return target_check
+
         try:
             is_clean = await self._git_operations.check_clean_working_tree()
         except GitError as exc:
@@ -822,7 +948,7 @@ class Doctor:
             DoctorReport containing all executed check outcomes.
         """
         check_runners = [
-            self.check_opencode,
+            self._check_worker_binary,
             self.check_git,
             self.check_queue,
             self.check_config,

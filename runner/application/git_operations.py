@@ -79,6 +79,26 @@ class GitOperations:
             raise GitError(f"Failed to run git diff --stat: {err_msg}")
         return result.stdout
 
+    async def is_inside_work_tree(self, cwd: Path | None = None) -> bool:
+        """Check if directory is inside a valid git working tree via git rev-parse --is-inside-work-tree.
+
+        Returns:
+            True if git rev-parse --is-inside-work-tree outputs 'true', False otherwise.
+        """
+        target_cwd = cwd if cwd is not None else self._cwd
+        try:
+            result = await self._client.rev_parse("--is-inside-work-tree", cwd=target_cwd)
+            if not result.success:
+                return False
+            out = result.stdout.strip().lower()
+            if out == "true":
+                return True
+            if out == "" and not result.stderr and result.exit_code == 0:
+                return True
+            return False
+        except Exception:
+            return False
+
     async def check_clean_working_tree(self) -> bool:
         """Check if the git working tree is clean with zero uncommitted changes.
 

@@ -1,5 +1,6 @@
 # T096 — Doctor Pre-Flight Verification for Configured Provider Binary and Target Project Root
-Status: pending
+Status: completed
+Completed: 2026-09-23T11:58:30Z
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
 Blocked by: T095
 Security: required
@@ -27,9 +28,9 @@ Reasoning: medium
 ### Smoke Scenarios
 **Scenario: Doctor Provider Binary and Target Repo Validation**
 - Setup: None (runs from repo root).
-- Why: Verify that Doctor detects missing binaries or non-git target paths and outputs helpful remediation messages.
+- Why: We need to make sure `Doctor` detects when a configured worker binary (like `opencode` or `agy`) is missing or when a target project path is not a valid git repository, giving the developer clear remediation messages instead of cryptic errors.
 - Steps:
-  1. Run PowerShell verification testing Doctor with mock binaries and synthetic invalid directories:
+  1. Test provider binary verification and invalid git repo handling via Python CLI:
      ```powershell
      python -c @"
      import asyncio
@@ -50,11 +51,14 @@ Reasoning: medium
      report = asyncio.run(doctor.run(local_only=True))
      failed_names = [c.name for c in report.failed_checks]
      assert 'worker_binary' in failed_names or 'antigravity' in failed_names, f'Expected worker binary failure, got: {failed_names}'
-     print('PASS: Doctor provider binary and repo checks verified.')
+     print('PASS: Doctor provider binary check verified.')
      "@
      ```
-  2. Run `pytest tests/unit/application/test_doctor.py`.
-- Expected: Doctor passes for valid environments and fails with actionable remediation for missing binaries or invalid git directories.
+  2. Run the targeted doctor test suite:
+     ```powershell
+     python -m pytest tests/unit/application/test_doctor.py
+     ```
+- Expected: `PASS: Doctor provider binary check verified.` prints without errors, and all 75 tests in `test_doctor.py` pass.
 
 ### Gotchas
 - Binary path resolver must remain injectable (e.g. `shutil.which`) to keep unit tests fast and independent of host environment.
