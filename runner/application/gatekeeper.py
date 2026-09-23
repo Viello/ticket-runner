@@ -1090,6 +1090,16 @@ class VerificationLoop:
 
             if ready_signal is not None:
                 await self._trigger_phase("Reviewing")
+                if self._discord_thread_manager is not None and self._thread_id:
+                    try:
+                        await self._discord_thread_manager.finish_live_digest(self._thread_id)
+                    except Exception as exc:
+                        logger.warning("Failed to finish live digest: %s", exc)
+                elif self._discord_logger is not None and self._thread_id:
+                    try:
+                        await self._discord_logger.finish_live_digest(self._thread_id)
+                    except Exception as exc:
+                        logger.warning("Failed to finish live digest: %s", exc)
                 # Valid ready signal wins: clean stale question so it cannot re-trigger
                 self._clean_question(self._ticket.id)
                 self._signal_repository.consume_ready(self._ticket.id)

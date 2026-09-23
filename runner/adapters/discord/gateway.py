@@ -49,7 +49,16 @@ class DiscordPyGateway:
 
         try:
             if hasattr(channel, "fetch_message"):
-                return await channel.fetch_message(msg_id_int)
+                try:
+                    return await channel.fetch_message(msg_id_int)
+                except discord.NotFound:
+                    if (
+                        hasattr(channel, "parent")
+                        and channel.parent is not None
+                        and hasattr(channel.parent, "fetch_message")
+                    ):
+                        return await channel.parent.fetch_message(msg_id_int)
+                    raise
             if hasattr(channel, "get_partial_message"):
                 return channel.get_partial_message(msg_id_int)
             raise DiscordGatewayError(f"Channel cannot retrieve messages: {channel}")
@@ -79,9 +88,13 @@ class DiscordPyGateway:
     ) -> str:
         """Post a message to a channel or thread."""
         channel = await self._resolve_channel(channel_or_thread_id)
-        send_kwargs: dict[str, Any] = {"content": content}
+        send_kwargs: dict[str, Any] = {}
         if embed is not None:
             send_kwargs["embed"] = self._to_discord_embed(embed)
+            if content:
+                send_kwargs["content"] = content
+        else:
+            send_kwargs["content"] = content if (content and content.strip()) else "..."
 
         try:
             msg = await channel.send(**send_kwargs)
@@ -102,9 +115,13 @@ class DiscordPyGateway:
         """Edit an existing message in-place."""
         channel = await self._resolve_channel(channel_or_thread_id)
         message = await self._resolve_message(channel, message_id)
-        edit_kwargs: dict[str, Any] = {"content": content}
+        edit_kwargs: dict[str, Any] = {}
         if embed is not None:
             edit_kwargs["embed"] = self._to_discord_embed(embed)
+            if content:
+                edit_kwargs["content"] = content
+        else:
+            edit_kwargs["content"] = content if (content and content.strip()) else "..."
 
         try:
             await message.edit(**edit_kwargs)

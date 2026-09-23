@@ -107,7 +107,10 @@ class DiscordThreadManager:
         )
 
         # 2. Pin Status Card immediately
-        await self._gateway.pin_message(thread_id, starter_msg_id)
+        try:
+            await self._gateway.pin_message(thread_id, starter_msg_id)
+        except DiscordGatewayError as exc:
+            _logger.warning("Failed to pin Status Card in %s: %s", thread_id, exc)
 
         # 3. Start Live Digest
         await self._logger.start_live_digest(thread_id)
@@ -157,6 +160,9 @@ class DiscordThreadManager:
             "color": COLOR_GREEN,
         }
 
+        # Finish live digest if not already finished
+        await self.finish_live_digest(thread_id)
+
         # 1. Post commit summary embed
         if hasattr(self._logger, "post_embed"):
             await self._logger.post_embed(thread_id, commit_embed)
@@ -195,7 +201,8 @@ class DiscordThreadManager:
         """Forward live digest chunk update to logger."""
         if not self.discord_enabled:
             return
-        await self._logger.update_live_digest(content_chunk, thread_id=thread_id)
+        if hasattr(self._logger, "update_live_digest"):
+            await self._logger.update_live_digest(content_chunk, thread_id=thread_id)
 
     async def finish_live_digest(
         self,
@@ -204,4 +211,5 @@ class DiscordThreadManager:
         """Forward live digest finish completion to logger."""
         if not self.discord_enabled:
             return
-        await self._logger.finish_live_digest(thread_id=thread_id)
+        if hasattr(self._logger, "finish_live_digest"):
+            await self._logger.finish_live_digest(thread_id=thread_id)

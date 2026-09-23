@@ -615,10 +615,11 @@ class GatekeeperTicketProcessor:
                 else:
                     answer = raw_answer
 
-                # Cancel escalation on local answer
+                # Cancel escalation and reset presence on local answer
                 if self._presence_coordinator is not None:
                     try:
                         self._presence_coordinator.cancel_escalation()
+                        self._presence_coordinator.set_mode("nearby")
                     except (DiscordGatewayError, Exception) as exc:
                         logger.warning("Failed to cancel escalation: %s", exc)
 

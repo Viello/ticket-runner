@@ -40,6 +40,8 @@ class PresenceCoordinator:
         terminal_display: TerminalDisplay | None = None,
         ui_event_sink: UiEventSink | None = None,
         idle_escalation_minutes: float = 3.0,
+        timer_factory: TimerFactory | None = None,
+        delay_seconds: float | None = None,
     ) -> None:
         self._state_coordinator = state_coordinator
         self._terminal_display = terminal_display
@@ -47,6 +49,8 @@ class PresenceCoordinator:
         self._fallback_mode: str = "nearby"
         self._escalation_task: asyncio.Task[None] | None = None
         self._idle_escalation_minutes = float(idle_escalation_minutes)
+        self._timer_factory = timer_factory
+        self._delay_seconds = delay_seconds
 
     @property
     def current_mode(self) -> str:
@@ -135,9 +139,13 @@ class PresenceCoordinator:
         self.cancel_escalation()
 
         if delay_seconds is None:
-            delay_seconds = self._idle_escalation_minutes * 60.0
+            delay_seconds = (
+                self._delay_seconds
+                if self._delay_seconds is not None
+                else self._idle_escalation_minutes * 60.0
+            )
 
-        factory = timer_factory or _default_timer_factory
+        factory = timer_factory or self._timer_factory or _default_timer_factory
 
         async def _on_escalation() -> None:
             self.set_mode("away")
