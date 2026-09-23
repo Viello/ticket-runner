@@ -1,5 +1,6 @@
 # T102 — Project Heuristics Sniffer and AI Prompt Generator
-Status: pending
+Status: completed
+Completed: 2026-09-23T15:08:00Z
 Spec: docs/specs/12-project-scaffolding-and-skills-distribution.md
 Blocked by: None
 Security: required
@@ -38,8 +39,23 @@ Reasoning: medium
 - Setup: None (runs from repo root with synthetic directories).
 - Why: Ensure `ProjectSniffer` correctly inspects project files without executing code, and `AIPromptGenerator` outputs the expected Markdown structure.
 - Steps:
-  1. Run Python one-liner sniffing a temporary Python project directory and generating the AI prompt:
-     `python -c "import tempfile, pathlib; from runner.application.scaffolding import ProjectSniffer; from runner.application.prompt_generator import AIPromptGenerator; td = pathlib.Path(tempfile.mkdtemp()); (td / 'pyproject.toml').write_text('[project]\nname=\"demo\"\n', encoding='utf-8'); sniffer = ProjectSniffer(); h = sniffer.sniff(td); assert h.test_cmd == 'python -m pytest'; assert h.detected_stack == 'python'; p = AIPromptGenerator.generate(h); assert 'ticket-runner.yaml' in p; print('PASS: ProjectSniffer and AIPromptGenerator verified')"`
+  1. Run Python one-liner in PowerShell sniffing a temporary Python project directory and generating the AI prompt:
+     ```powershell
+     python -c @"
+     import tempfile, pathlib
+     from runner.application.scaffolding import ProjectSniffer
+     from runner.application.prompt_generator import AIPromptGenerator
+     td = pathlib.Path(tempfile.mkdtemp())
+     (td / 'pyproject.toml').write_text('[project]\nname="demo"\n', encoding='utf-8')
+     sniffer = ProjectSniffer()
+     h = sniffer.sniff(td)
+     assert h.test_cmd == 'python -m pytest'
+     assert h.detected_stack == 'python'
+     p = AIPromptGenerator.generate(h)
+     assert 'ticket-runner.yaml' in p
+     print('PASS: ProjectSniffer and AIPromptGenerator verified')
+     "@
+     ```
 - Expected: Output displays `PASS: ProjectSniffer and AIPromptGenerator verified`.
 
 ### Gotchas
