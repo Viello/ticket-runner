@@ -169,6 +169,10 @@ class StateCoordinator:
         self.save_state(new_state)
         return new_state
 
+    def request_pause(self) -> RunnerState:
+        """Request runner to pause execution after the current ticket completes verification."""
+        return self.transition_to_pause_requested()
+
     def transition_to_waiting_for_user(self) -> RunnerState:
         """Transition current state to WAITING_FOR_USER and persist atomically."""
         current = self.get_or_create_state()

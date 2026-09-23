@@ -4,6 +4,7 @@ from runner.application.crash_recovery import (
     CrashRecoveryCoordinator,
     RecoveryResult,
 )
+from runner.application.discord_thread_manager import DiscordThreadManager
 from runner.application.doctor import CheckResult, Doctor, DoctorReport
 from runner.application.gatekeeper import (
     CommandOutcome,
@@ -55,6 +56,7 @@ __all__ = [
     "CommandOutcome",
     "CrashRecoveryCoordinator",
     "DEFAULT_INVARIANTS",
+    "DiscordThreadManager",
     "Doctor",
     "DoctorReport",
     "ESCALATED",

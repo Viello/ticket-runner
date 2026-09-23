@@ -82,7 +82,7 @@ def test_presence_coordinator_toggle_mode_nearby_to_away_and_back() -> None:
     mock_display.update_state.assert_called()
     last_state = mock_display.update_state.call_args[0][0]
     assert last_state.presence_mode == "away"
-    mock_sink.emit.assert_called_with("runner", "Presence mode changed to away")
+    mock_sink.emit.assert_called_with("runner", "Presence mode set to away")
 
     # Toggle 2: away -> nearby
     new_mode_2 = presence_coord.toggle_mode()

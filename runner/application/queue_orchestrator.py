@@ -192,6 +192,10 @@ class QueueOrchestrator:
         clock: Callable[[], float] | None = None,
         state_coordinator: StateCoordinator | None = None,
         ui_event_sink: UiEventSink | None = None,
+        discord_thread_manager: Any | None = None,
+        discord_logger: Any | None = None,
+        presence_coordinator: Any | None = None,
+        runner_config: Any | None = None,
     ) -> None:
         self._cwd = cwd
         self._clock: Callable[[], float] = clock or time.monotonic
@@ -200,6 +204,10 @@ class QueueOrchestrator:
         self._summary_printed: bool = False
         self._state_coordinator = state_coordinator
         self._ui_event_sink = ui_event_sink
+        self._discord_thread_manager = discord_thread_manager
+        self._discord_logger = discord_logger
+        self._presence_coordinator = presence_coordinator
+        self._runner_config = runner_config
         if tickets_dir is not None:
             self._tickets_dir = Path(tickets_dir)
         elif self._cwd:
@@ -233,6 +241,16 @@ class QueueOrchestrator:
             self._git_operations = GitOperations(runner=SubprocessRunner(), cwd=self._cwd)
 
         self._processor = processor
+        if self._processor is not None:
+            if hasattr(self._processor, "discord_thread_manager") and getattr(self._processor, "discord_thread_manager", None) is None:
+                self._processor.discord_thread_manager = discord_thread_manager
+            if hasattr(self._processor, "discord_logger") and getattr(self._processor, "discord_logger", None) is None:
+                self._processor.discord_logger = discord_logger
+            if hasattr(self._processor, "presence_coordinator") and getattr(self._processor, "presence_coordinator", None) is None:
+                self._processor.presence_coordinator = presence_coordinator
+            if hasattr(self._processor, "runner_config") and getattr(self._processor, "runner_config", None) is None:
+                self._processor.runner_config = runner_config
+
         self._commit_scope = commit_scope
         self._spec_slug = spec_slug
         self._is_paused: bool = False
@@ -247,6 +265,26 @@ class QueueOrchestrator:
         self._deferred_clean_slate: bool = False
         self._last_outcome: TicketOutcome | None = None
         self._accumulated_tokens: int = 0
+
+    @property
+    def discord_thread_manager(self) -> Any | None:
+        """DiscordThreadManager instance associated with queue orchestrator."""
+        return self._discord_thread_manager
+
+    @property
+    def discord_logger(self) -> Any | None:
+        """DiscordLogger instance associated with queue orchestrator."""
+        return self._discord_logger
+
+    @property
+    def presence_coordinator(self) -> Any | None:
+        """PresenceCoordinator instance associated with queue orchestrator."""
+        return self._presence_coordinator
+
+    @property
+    def runner_config(self) -> Any | None:
+        """RunnerConfig composite configuration."""
+        return self._runner_config
 
     @property
     def has_deferred_clean_slate(self) -> bool:

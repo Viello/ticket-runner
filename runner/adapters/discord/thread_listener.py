@@ -62,6 +62,7 @@ async def process_thread_reply(
     message_data: Any,
     signal_repository: SignalRepository,
     config: RunnerConfig | DiscordConfig,
+    presence_coordinator: Any | None = None,
 ) -> bool:
     """Pure function implementing the five-step filtering chain for developer thread replies.
 
@@ -153,6 +154,8 @@ async def process_thread_reply(
     # 6 & 7: Write answer and reply
     try:
         signal_repository.write_answer(ticket_id, str(content))
+        if presence_coordinator is not None:
+            presence_coordinator.set_mode("nearby")
         await _send_reply(f"Answer recorded for {ticket_id}.")
         return True
     except Exception as exc:

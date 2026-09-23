@@ -64,7 +64,7 @@ Use as the working spec for diagnosis. On the squash path this draft is in-sessi
 
 ### Ticket Runner / local scratch template
 
-```
+<ticket-runner-template>
 # T<NNN> — Smoke regression: <Scenario Title>
 Status: pending
 Spec: docs/specs/<spec-slug>.md
@@ -85,13 +85,14 @@ Blocked by: None
 
 ### Smoke Scenarios
 **Scenario: <Scenario Title>**
-- Setup: <setup_steps>
-- Steps: <test_steps>
-- Expected: <expected_output>
+- Setup: <setup_steps or "None (runs from repo root)">
+- Why: <1-2 sentences in simple plain English: what was broken and why we are verifying this fix>
+- Steps: <numbered, conversational, spoon-fed instructions with exact copy-pasteable terminal commands or scripts>
+- Expected: <exact success output to look for, and failure cues>
 
 ### Gotchas
 - <Triage insights or quirks noted during failure capture>
-```
+</ticket-runner-template>
 
 ### GitHub / Linear template
 
@@ -111,9 +112,10 @@ Regression observed during smoke testing of <originating_id_or_feature>.
 
 ## Smoke Scenarios
 **Scenario: <Scenario Title>**
-- Setup: <setup_steps>
-- Steps: <test_steps>
-- Expected: <expected_output>
+- Setup: <setup_steps or "None (runs from repo root)">
+- Why: <1-2 sentences in simple plain English: what was broken and why we are verifying this fix>
+- Steps: <numbered, conversational, spoon-fed instructions with exact copy-pasteable terminal commands or scripts>
+- Expected: <exact success output to look for, and failure cues>
 
 ## Jump-start
 - Files to inspect: <files_to_touch>
@@ -181,7 +183,11 @@ Apply the fix. Run the feedback loop green. Then commit:
 
 ## Step 6: Verify smoke scenario
 
-Walk the operator through the `### Smoke Scenarios` steps from the ticket draft. Human eyes required regardless of automated coverage.
+Walk the operator through the `### Smoke Scenarios` using the ELI5 standard. Human eyes required regardless of automated coverage:
+1. State **Why we check this** in 1-2 plain sentences.
+2. State the **Setup** requirements or confirm clean state.
+3. Provide the **Steps** as spoon-fed, numbered instructions with exact copy-pasteable terminal commands or runnable test snippets so the operator never has to write test code.
+4. State the exact **Expected** output (what success looks like) and clear failure cues.
 
 Append a passing entry to the smoke log if the repo maintains one.
 

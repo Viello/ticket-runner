@@ -23,7 +23,7 @@ from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig, VerificationConfig
-from runner.domain.exceptions import NonInteractiveError, SignalFormatError, UserAbortError
+from runner.domain.exceptions import DiscordGatewayError, NonInteractiveError, SignalFormatError, UserAbortError
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
     analyse,
@@ -737,6 +737,13 @@ class VerificationLoop:
         token_budget: int | TokenBudgetConfig | None = None,
         status_publisher: StatusPublisher | None = None,
         git_operations: GitOperations | None = None,
+        phase_callback: Callable[[str], Any | Awaitable[Any]] | None = None,
+        event_callback: Callable[[str, str], Any | Awaitable[Any]] | None = None,
+        discord_logger: Any | None = None,
+        discord_thread_manager: Any | None = None,
+        thread_id: str = "",
+        status_card_message_id: str = "",
+        presence_coordinator: Any | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -761,6 +768,14 @@ class VerificationLoop:
         self._runtime_paths = runtime_paths or RuntimePaths()
         self._status_publisher = status_publisher
         self._git_operations = git_operations
+        self._phase_callback = phase_callback
+        self._event_callback = event_callback
+        self._discord_logger = discord_logger
+        self._discord_thread_manager = discord_thread_manager
+        self._thread_id = thread_id
+        self._status_card_message_id = status_card_message_id
+        self._presence_coordinator = presence_coordinator
+        self._handoff_logged = False
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
         elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
@@ -770,6 +785,44 @@ class VerificationLoop:
         self._last_token_count: int = 0
         if ui_event_sink is not None and getattr(self._executor, "ui_event_sink", None) is None:
             self._executor.ui_event_sink = ui_event_sink
+
+    async def _trigger_phase(self, phase: str) -> None:
+        """Trigger a phase transition notification or callback."""
+        if self._phase_callback is not None:
+            try:
+                res = self._phase_callback(phase)
+                if inspect.iscoroutine(res):
+                    await res
+            except Exception as exc:
+                logger.warning("phase_callback failed: %s", exc)
+
+    async def _trigger_event(self, event_type: str, payload: str) -> None:
+        """Trigger a structured event to event_callback or directly via discord_logger."""
+        if self._event_callback is not None:
+            try:
+                res = self._event_callback(event_type, payload)
+                if inspect.iscoroutine(res):
+                    await res
+            except Exception as exc:
+                logger.warning("event_callback failed: %s", exc)
+        elif self._discord_logger is not None and self._thread_id:
+            presence_mode = "nearby"
+            if self._presence_coordinator is not None and hasattr(self._presence_coordinator, "current_mode"):
+                presence_mode = self._presence_coordinator.current_mode
+            try:
+                from runner.adapters.discord.logger import CRITICAL_EVENT_TYPES
+                is_crit = event_type in CRITICAL_EVENT_TYPES
+                await self._discord_logger.log(
+                    event_type,
+                    payload,
+                    self._thread_id,
+                    presence_mode,
+                    severity="critical" if is_crit else None,
+                )
+            except DiscordGatewayError as exc:
+                logger.warning("Failed to emit Discord event %s: %s", event_type, exc)
+            except Exception as exc:
+                logger.warning("Failed to emit Discord event %s: %s", event_type, exc)
 
     def _publish_status(
         self,
@@ -970,6 +1023,8 @@ class VerificationLoop:
             current_prompt = self._pending_prompt
             current_session = self._active_session_id
 
+            await self._trigger_phase("Working")
+
             # 1. Execute worker cycle run
             kwargs: dict[str, Any] = {}
             try:
@@ -1001,6 +1056,27 @@ class VerificationLoop:
             if hasattr(run_result, "occupancy") and run_result.occupancy:
                 self._last_token_count = run_result.occupancy
 
+            occupancy = getattr(run_result, "occupancy", 0) or 0
+            ceiling = getattr(self._effective_token_budget, "ceiling", self._effective_token_budget)
+            handoff_thresh = getattr(self._effective_token_budget, "handoff", 135000)
+            if not isinstance(handoff_thresh, int):
+                handoff_thresh = 135000
+            if not isinstance(ceiling, int):
+                ceiling = 150000
+
+            if run_result.status == SingleCycleStatus.CEILING or (occupancy and occupancy >= ceiling):
+                await self._trigger_event(
+                    "hard_ceiling",
+                    f"Hard ceiling reached ({occupancy} tokens >= {ceiling}) for ticket '{self._ticket.id}'.",
+                )
+            elif (getattr(run_result, "handoffs", 0) > 0) or (occupancy and occupancy >= handoff_thresh):
+                if not self._handoff_logged or getattr(run_result, "handoffs", 0) > 0:
+                    self._handoff_logged = True
+                    await self._trigger_event(
+                        "handoff",
+                        f"Context handoff triggered ({occupancy} tokens >= {handoff_thresh}) for ticket '{self._ticket.id}'.",
+                    )
+
             # Reset pending prompt since it has been consumed
             self._pending_prompt = None
 
@@ -1013,6 +1089,17 @@ class VerificationLoop:
                 ready_format_error = exc
 
             if ready_signal is not None:
+                await self._trigger_phase("Reviewing")
+                if self._discord_thread_manager is not None and self._thread_id:
+                    try:
+                        await self._discord_thread_manager.finish_live_digest(self._thread_id)
+                    except Exception as exc:
+                        logger.warning("Failed to finish live digest: %s", exc)
+                elif self._discord_logger is not None and self._thread_id:
+                    try:
+                        await self._discord_logger.finish_live_digest(self._thread_id)
+                    except Exception as exc:
+                        logger.warning("Failed to finish live digest: %s", exc)
                 # Valid ready signal wins: clean stale question so it cannot re-trigger
                 self._clean_question(self._ticket.id)
                 self._signal_repository.consume_ready(self._ticket.id)
@@ -1031,6 +1118,7 @@ class VerificationLoop:
                     run_state=RunState.VERIFYING,
                     attempt=self._attempts + 1,
                 )
+                await self._trigger_phase("Verifying")
                 report = await self._executor.verify(self._verification_config)
                 if report.passed:
                     self._attempts += 1
@@ -1121,6 +1209,7 @@ class VerificationLoop:
                     last_step_summary="Verification failed",
                 )
                 diagnostics = "\n\n".join(report.diagnostics)
+                await self._trigger_event("verification_failed", diagnostics)
                 failed_outcome = next((r for r in report.results if not r.passed), None)
                 escalation_result = await self._check_escalation(
                     diagnostics=diagnostics, outcome=failed_outcome
@@ -1322,6 +1411,10 @@ class VerificationLoop:
                 run_state=RunState.IDLE,
                 attempt=self._attempts,
                 last_step_summary="Circuit breaker tripped",
+            )
+            await self._trigger_event(
+                "circuit_breaker_trip",
+                f"Circuit breaker tripped for ticket '{self._ticket.id}' after {self._attempts} attempts.\n{diagnostics}",
             )
             if self._state_coordinator is not None:
                 self._state_coordinator.transition_to_waiting_for_user()

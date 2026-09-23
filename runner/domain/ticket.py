@@ -54,6 +54,7 @@ class Ticket:
     path: Path
     security_required: bool = False
     reasoning: str = ""
+    slug: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not TICKET_ID_PATTERN.match(self.id):
@@ -107,4 +108,15 @@ class Ticket:
             raise TicketFormatError(
                 f"Ticket reasoning must be a str, got: {self.reasoning!r}"
             )
+
+        if not isinstance(self.slug, str):
+            raise TicketFormatError(f"Ticket slug must be a str, got: {self.slug!r}")
+
+        if not self.slug:
+            if isinstance(self.path, Path) and self.path.name:
+                stem = self.path.stem
+                if stem.startswith(self.id + "-"):
+                    object.__setattr__(self, "slug", stem[len(self.id) + 1 :])
+            if not self.slug and self.title:
+                object.__setattr__(self, "slug", self.title.strip().lower().replace(" ", "-"))
 
