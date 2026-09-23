@@ -1,5 +1,6 @@
 # T103 — Remote Skills Catalog Synchronization Client
-Status: pending
+Status: completed
+Completed: 2026-09-23T15:22:00Z
 Spec: docs/specs/12-project-scaffolding-and-skills-distribution.md
 Blocked by: T100
 Security: required
@@ -31,12 +32,26 @@ Reasoning: medium
 
 ### Smoke Scenarios
 **Scenario: Skills Catalog Synchronization and Custom Skill Preservation**
-- Setup: None (runs with synthetic directory containing a custom skill).
-- Why: Ensure remote skills can be downloaded and extracted while strictly preserving existing custom skills and rejecting path traversal attacks.
+- Setup: None (runs with synthetic temporary directory containing a pre-existing custom skill).
+- Why: Confirm that remote skills can be safely downloaded from GitHub and extracted into `.agents/skills/` while strictly preserving custom project-specific skills and rejecting path traversal attacks.
 - Steps:
-  1. Run Python script creating a mock custom skill `.agents/skills/custom-tool/SKILL.md` and executing skills synchronization:
-     `python -c "import tempfile, pathlib; from runner.adapters.skills.skills_client import GitHubSkillsClient; td = pathlib.Path(tempfile.mkdtemp()); custom_skill = td / '.agents' / 'skills' / 'custom-tool'; custom_skill.mkdir(parents=True); (custom_skill / 'SKILL.md').write_text('# Custom Tool', encoding='utf-8'); client = GitHubSkillsClient(); res = client.sync_skills(project_dir=td); assert (custom_skill / 'SKILL.md').exists(); assert (td / '.agents' / 'skills' / 'implement' / 'SKILL.md').exists(); print('PASS: Skills synchronized and custom skill preserved')"`
-- Expected: Custom skill is intact, standard skills are populated, and output reports `PASS: Skills synchronized and custom skill preserved`.
+  1. Execute self-contained Python snippet creating a mock custom skill `.agents/skills/custom-tool/SKILL.md` and invoking `GitHubSkillsClient.sync_skills`:
+     ```powershell
+     python -c @"
+     import tempfile, pathlib
+     from runner.adapters.skills.skills_client import GitHubSkillsClient
+     td = pathlib.Path(tempfile.mkdtemp())
+     custom_skill = td / '.agents' / 'skills' / 'custom-tool'
+     custom_skill.mkdir(parents=True)
+     (custom_skill / 'SKILL.md').write_text('# Custom Tool', encoding='utf-8')
+     client = GitHubSkillsClient()
+     res = client.sync_skills(project_dir=td)
+     assert (custom_skill / 'SKILL.md').exists()
+     assert (td / '.agents' / 'skills' / 'implement' / 'SKILL.md').exists()
+     print('PASS: Skills synchronized and custom skill preserved')
+     "@
+     ```
+- Expected: Custom skill remains intact, standard skills (such as `implement`) are populated, and the process exits with `PASS: Skills synchronized and custom skill preserved`.
 
 ### Gotchas
 - GitHub tarballs nest archive contents inside a root folder like `agent-skills-main/`. The extractor must strip the root directory when copying into `.agents/skills/`.

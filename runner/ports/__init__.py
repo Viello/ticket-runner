@@ -7,6 +7,7 @@ from runner.ports.discord_gateway import DiscordGateway, DiscordGatewayError
 from runner.ports.discord_logger import DiscordLogger
 from runner.ports.intervention import InterventionAction, InterventionDecision, InterventionGateway
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.skills_client import SkillsClient, SkillsSyncError, SkillsSyncResult
 from runner.ports.state_store import StateStore
 from runner.ports.status_publisher import StatusPublisher
 from runner.ports.terminal_display import TerminalDisplay, UiEventSink
@@ -24,10 +25,14 @@ __all__ = [
     "InterventionGateway",
     "ProcessHandle",
     "SignalRepository",
+    "SkillsClient",
+    "SkillsSyncError",
+    "SkillsSyncResult",
     "StateStore",
     "StatusPublisher",
     "TerminalDisplay",
     "TicketRepository",
     "UiEventSink",
 ]
+
 
