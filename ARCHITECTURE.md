@@ -255,8 +255,13 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 1. **Clean Architecture Dependency Rule**:
    Source code dependencies point inward only. Application interactors depend solely on abstract domain entities and port interfaces. Concrete adapters (`OpenCodeWorker`, `AntigravityWorker`, `DiscordGateway`, `SubprocessRunner`) implement ports and are wired at the Composition Root (`runner/container.py`).
 
-2. **External Path Resolution Invariant**:
-   The Runner's CWD is the Target Project. Global binaries and configurations reside independently. All paths within `.agent/`, `docs/tickets/`, `docs/specs/`, and `.agents/skills/` resolve relative to `--project-dir`.
+2. **External Path Resolution Invariant & Composition Root Plumbing**:
+   The Runner operates against an external Target Project resolved via `--project-dir <path>` (defaulting to the current working directory). The Composition Root (`runner/container.py:build_container`) normalizes `project_dir` via `.resolve()` and plumbs it across storage adapters and interactors:
+   - `RuntimePaths(root_dir=project_dir / ".agent")` computes and secures all runtime paths (`signals/`, `questions/`, `checkpoints/`, `logs/`, `state.json`, `status.json`), enforcing allowlists (`TICKET_ID_PATTERN`, `SESSION_ID_PATTERN`) and path traversal rejection.
+   - `DirectoryTicketStore(root_dir=project_dir / "docs" / "tickets")` manages ticket queues, status transitions, and archiving relative to the target project.
+   - `GotchasStore(path=project_dir / "docs" / "tickets" / "gotchas.md")` reads and atomically logs cross-ticket operational knowledge.
+   - `QueueFileLock(lock_path=project_dir / "docs" / "tickets" / ".queue.lock")` coordinates non-blocking sentinel locking on the target queue.
+   - `GitOperations`, `GatekeeperCommandExecutor`, `WorkerSupervisor`, `QueueOrchestrator`, and `TuiCoordinator` set their execution working directory (`cwd`) to `project_dir`.
 
 3. **Two-Tier Configuration Overlay**:
    `yaml_config_loader.py` merges `~/.ticket-runner/config.yaml` (machine-level defaults: Discord credentials, default models, timeouts) with `<project-dir>/ticket-runner.yaml` (project-specific overrides: `test_cmd`, `build_cmd`, `branch`, `worker.provider`) into an immutable domain `RunnerConfig`.

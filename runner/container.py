@@ -103,11 +103,13 @@ class RunnerContainer:
     discord_thread_manager: Any | None = None
     discord_logger: Any | None = None
     agent_worker: AgentWorker | None = None
+    project_dir: Path | None = None
 
 
 def build_container(
     config: RunnerConfig | None = None,
     *,
+    project_dir: Path | str | None = None,
     model_id: str | None = None,
     command_runner: CommandRunner | None = None,
     intervention_gateway: InterventionGateway | None = None,
@@ -150,11 +152,24 @@ def build_container(
     agent_worker: AgentWorker | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
+    effective_dir: Path | None = None
+    if project_dir is not None:
+        effective_dir = Path(project_dir).resolve()
+    elif cwd is not None:
+        effective_dir = Path(cwd).resolve()
+
     resolved_config: RunnerConfig
     if config is not None:
         resolved_config = config
     else:
-        config_file = (cwd / "config.yaml") if cwd else Path("config.yaml")
+        if effective_dir:
+            config_file = effective_dir / "ticket-runner.yaml"
+            if not config_file.is_file():
+                config_file = effective_dir / "config.yaml"
+        else:
+            config_file = Path("ticket-runner.yaml")
+            if not config_file.is_file():
+                config_file = Path("config.yaml")
         if config_file.is_file():
             resolved_config = YamlConfigLoader().load(config_file)
         else:
@@ -163,7 +178,7 @@ def build_container(
     resolved_command_runner = command_runner or SubprocessRunner()
 
     resolved_runtime_paths = runtime_paths or (
-        RuntimePaths(root_dir=cwd / ".agent") if cwd else RuntimePaths()
+        RuntimePaths(root_dir=effective_dir / ".agent") if effective_dir else RuntimePaths()
     )
 
     resolved_signal_repo = signal_repository or FilesystemSignalRepository(
@@ -173,21 +188,21 @@ def build_container(
     resolved_intervention_gateway = intervention_gateway or TerminalInterventionGateway()
 
     resolved_ticket_store = ticket_store or DirectoryTicketStore(
-        root_dir=tickets_dir or (cwd / DEFAULT_TICKETS_DIR if cwd else DEFAULT_TICKETS_DIR)
+        root_dir=tickets_dir or (effective_dir / DEFAULT_TICKETS_DIR if effective_dir else DEFAULT_TICKETS_DIR)
     )
 
     resolved_gotchas_store = gotchas_store or GotchasStore(
-        path=gotchas_path or (cwd / DEFAULT_GOTCHAS_PATH if cwd else DEFAULT_GOTCHAS_PATH)
+        path=gotchas_path or (effective_dir / DEFAULT_GOTCHAS_PATH if effective_dir else DEFAULT_GOTCHAS_PATH)
     )
 
     resolved_lock = lock or QueueFileLock(
-        lock_path=lock_path or (cwd / DEFAULT_LOCK_PATH if cwd else DEFAULT_LOCK_PATH)
+        lock_path=lock_path or (effective_dir / DEFAULT_LOCK_PATH if effective_dir else DEFAULT_LOCK_PATH)
     )
 
     resolved_git_ops = git_operations or GitOperations(
         runner=resolved_command_runner,
         commit_prefix=resolved_config.git.commit_prefix,
-        cwd=cwd,
+        cwd=effective_dir,
     )
 
     resolved_terminal_display = terminal_display or RichTerminalDisplay(console=console)
@@ -195,7 +210,7 @@ def build_container(
 
     resolved_executor = executor or GatekeeperCommandExecutor(
         command_runner=resolved_command_runner,
-        cwd=cwd,
+        cwd=effective_dir,
         ui_event_sink=resolved_event_sink,
     )
     if hasattr(resolved_executor, "ui_event_sink") and resolved_executor.ui_event_sink is None and resolved_event_sink is not None:
@@ -233,7 +248,7 @@ def build_container(
         runtime_paths=resolved_runtime_paths,
         budget_config=resolved_config.tokens,
         notify=notify,
-        cwd=cwd,
+        cwd=effective_dir,
         clock=clock or time.monotonic,
         signal_repository=resolved_signal_repo,
         default_reasoning=resolved_config.model.default_reasoning,
@@ -294,12 +309,12 @@ def build_container(
         gotchas_store=resolved_gotchas_store,
         git_operations=resolved_git_ops,
         processor=resolved_processor,
-        tickets_dir=tickets_dir,
-        lock_path=lock_path,
-        gotchas_path=gotchas_path,
+        tickets_dir=tickets_dir or (effective_dir / DEFAULT_TICKETS_DIR if effective_dir else None),
+        lock_path=lock_path or (effective_dir / DEFAULT_LOCK_PATH if effective_dir else None),
+        gotchas_path=gotchas_path or (effective_dir / DEFAULT_GOTCHAS_PATH if effective_dir else None),
         commit_scope=commit_scope,
         spec_slug=spec_slug,
-        cwd=cwd,
+        cwd=effective_dir,
         clean_slate_archiver=clean_slate_archiver,
         clock=clock,
         state_coordinator=resolved_state_coordinator,
@@ -374,7 +389,7 @@ def build_container(
         terminal_host=resolved_terminal_host,
         supervisor=resolved_supervisor,
         ui_event_sink=resolved_event_sink,
-        cwd=cwd,
+        cwd=effective_dir,
     )
 
     if resolved_supervisor.tui_coordinator is None:
@@ -407,6 +422,7 @@ def build_container(
         discord_thread_manager=discord_thread_manager,
         discord_logger=discord_logger,
         agent_worker=resolved_agent_worker,
+        project_dir=effective_dir,
     )
 
 
@@ -419,11 +435,13 @@ class BotContainer:
     signal_repository: SignalRepository
     discord_client: DiscordClient
     state_store: StateStore | None = None
+    project_dir: Path | None = None
 
 
 def build_bot_container(
     config: RunnerConfig | None = None,
     *,
+    project_dir: Path | str | None = None,
     config_path: Path | str | None = None,
     runtime_paths: RuntimePaths | None = None,
     signal_repository: SignalRepository | None = None,
@@ -432,18 +450,34 @@ def build_bot_container(
     cwd: Path | None = None,
 ) -> BotContainer:
     """Build and wire a minimal container for standalone bot operations (T075)."""
+    effective_dir: Path | None = None
+    if project_dir is not None:
+        effective_dir = Path(project_dir).resolve()
+    elif cwd is not None:
+        effective_dir = Path(cwd).resolve()
+
     resolved_config: RunnerConfig
     if config is not None:
         resolved_config = config
     else:
-        path = Path(config_path) if config_path else ((cwd / "config.yaml") if cwd else Path("config.yaml"))
+        if config_path:
+            path = Path(config_path)
+        elif effective_dir:
+            path = effective_dir / "ticket-runner.yaml"
+            if not path.is_file():
+                path = effective_dir / "config.yaml"
+        else:
+            path = Path("ticket-runner.yaml")
+            if not path.is_file():
+                path = Path("config.yaml")
+
         if path.is_file():
             resolved_config = YamlConfigLoader().load(path)
         else:
             resolved_config = _default_config()
 
     resolved_runtime_paths = runtime_paths or (
-        RuntimePaths(root_dir=cwd / ".agent") if cwd else RuntimePaths()
+        RuntimePaths(root_dir=effective_dir / ".agent") if effective_dir else RuntimePaths()
     )
 
     resolved_signal_repo = signal_repository or FilesystemSignalRepository(
@@ -466,6 +500,7 @@ def build_bot_container(
         signal_repository=resolved_signal_repo,
         discord_client=resolved_discord_client,
         state_store=resolved_state_store,
+        project_dir=effective_dir,
     )
 
 

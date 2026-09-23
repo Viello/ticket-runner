@@ -1,5 +1,6 @@
 # T097 — External Project Root Plumbing in Container and Storage Adapters
-Status: pending
+Status: completed
+Completed: 2026-09-23T12:53:22Z
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
 Blocked by: T094
 Security: required
@@ -30,10 +31,10 @@ Reasoning: medium
 
 ### Smoke Scenarios
 **Scenario: Container External Path Resolution**
-- Setup: A temporary directory outside the repository representing a target project.
-- Why: Ensure `build_container` routes all runtime signals, locks, gotchas, and ticket queries to the target directory without touching the runner's workspace.
+- Setup: None (creates an isolated temporary directory outside the runner repository).
+- Why: Test that passing an external `--project-dir` to the Composition Root (`build_container`) configures all storage paths (runtime signals, ticket repository, gotchas knowledge log, queue sentinel lock) and interactor working directories (`cwd`) to operate strictly inside the external target folder without writing files to the runner repository.
 - Steps:
-  1. Run PowerShell verification script creating a temporary directory structure and instantiating `build_container(project_dir=temp_dir)`:
+  1. Run the Python verification script in PowerShell:
      ```powershell
      python -c @"
      import tempfile
@@ -46,11 +47,17 @@ Reasoning: medium
          assert container.ticket_store.root_dir == target / 'docs' / 'tickets'
          assert container.gotchas_store.path == target / 'docs' / 'tickets' / 'gotchas.md'
          assert container.lock.lock_path == target / 'docs' / 'tickets' / '.queue.lock'
+         assert container.git_operations.cwd == target
+         assert container.executor.cwd == target
+         assert container.supervisor.cwd == target
          print('PASS: Container resolves all paths relative to external project_dir.')
      "@
      ```
-  2. Run `pytest tests/unit/domain/test_runtime_paths.py tests/unit/container/test_container.py`.
-- Expected: All components resolve inside `temp_dir`, zero files created in runner workspace, tests pass with exit code 0.
+  2. Run the targeted unit test suite:
+     ```powershell
+     python -m pytest tests/unit/domain/test_runtime_paths.py tests/unit/container/test_container.py
+     ```
+- Expected: Both commands complete with exit code 0, printing `PASS: Container resolves all paths relative to external project_dir.` and passing 43 tests with zero failures.
 
 ### Gotchas
 - Ensure both relative and absolute paths passed as `project_dir` are resolved via `.resolve()` to avoid ambiguity during subprocess cwd changes.

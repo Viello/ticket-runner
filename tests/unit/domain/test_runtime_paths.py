@@ -240,3 +240,66 @@ def test_smoke_log_path_containment_security(tmp_path: Path) -> None:
     assert abs_traversal.resolve().is_relative_to(abs_paths.root_dir.resolve())
 
 
+def test_ready_signal_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.ready_signal_path("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.ready_signal_path("T001/../../escape")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.ready_signal_path("T001\\evil")
+
+
+def test_question_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.question_path("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.question_file_path("../../evil")
+
+
+def test_checkpoint_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.checkpoint_dir("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.checkpoint_path("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.ensure_checkpoint_dir("../../evil")
+
+
+def test_session_log_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.session_log_path("../../evil", "ses_valid123")
+    with pytest.raises(ValueError, match="Invalid session identifier or path traversal"):
+        paths.session_log_path("T001", "../../evil")
+    with pytest.raises(ValueError, match="Invalid session identifier or path traversal"):
+        paths.session_stderr_path("T001", "ses_../evil")
+
+
+def test_diagnostic_log_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.diagnostic_log_path("../../evil")
+
+
+def test_external_root_dir_resolution(tmp_path: Path) -> None:
+    target_project = tmp_path / "custom_project"
+    agent_dir = target_project / ".agent"
+    paths = RuntimePaths(root_dir=agent_dir)
+
+    assert paths.root_dir == agent_dir
+    assert paths.signals_dir == agent_dir / "signals"
+    assert paths.questions_dir == agent_dir / "questions"
+    assert paths.checkpoints_dir == agent_dir / "checkpoints"
+    assert paths.logs_dir == agent_dir / "logs"
+    assert paths.state_path == agent_dir / "state.json"
+    assert paths.status_file == agent_dir / "status.json"
+    assert paths.ready_signal_path("T097") == agent_dir / "signals" / "T097_ready.json"
+    assert paths.question_path("T097") == agent_dir / "questions" / "T097.json"
+    assert paths.checkpoint_path("T097") == agent_dir / "checkpoints" / "T097" / "handoff.md"
+    assert paths.session_log_path("T097", "ses_abc123") == agent_dir / "logs" / "T097_session_ses_abc123.jsonl"
+
+
+

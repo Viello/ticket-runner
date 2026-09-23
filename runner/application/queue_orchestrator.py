@@ -267,6 +267,11 @@ class QueueOrchestrator:
         self._accumulated_tokens: int = 0
 
     @property
+    def cwd(self) -> Path | None:
+        """Configured working directory for queue orchestration."""
+        return self._cwd
+
+    @property
     def discord_thread_manager(self) -> Any | None:
         """DiscordThreadManager instance associated with queue orchestrator."""
         return self._discord_thread_manager

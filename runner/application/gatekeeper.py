@@ -322,6 +322,11 @@ class GatekeeperCommandExecutor:
         self._clock = clock or time.monotonic
 
     @property
+    def cwd(self) -> Path | None:
+        """Configured working directory for gatekeeper execution."""
+        return self._cwd
+
+    @property
     def ui_event_sink(self) -> UiEventSink | None:
         """Configured UiEventSink for verification telemetry."""
         return self._ui_event_sink
