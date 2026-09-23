@@ -1,5 +1,6 @@
 # T089 — Update ARCHITECTURE.md Clean Architecture Layout for External Runner
-Status: pending
+Status: completed
+Completed: 2026-09-23T07:45:00Z
 Spec: docs/specs/10b-living-documentation-and-roadmap.md
 Blocked by: None
 Reasoning: medium
@@ -17,6 +18,7 @@ Reasoning: medium
 - `ARCHITECTURE.md` illustrates the `--project-dir` separation between runner binaries/global config and the target repository.
 - `ARCHITECTURE.md` describes the Verification Subsystem and evidence artifact storage.
 - All references adhere strictly to the project's Clean Architecture conventions.
+
 ### Suggested Skills
 - `writing-for-agents`: Guidelines for writing documents an agent consumes (progressive disclosure, high completion bounds, lean hierarchy).
 - `clean-architecture`: Layer boundaries, dependency rule, and port/adapter contracts.
@@ -24,12 +26,35 @@ Reasoning: medium
 ### Smoke Scenarios
 **Scenario: Verify Architecture Layout and Symbols**
 - Setup: None (runs from repo root).
-- Why: Ensure the updated architecture document is syntactically valid markdown, includes all new ports and adapters, and maintains Clean Architecture layer integrity.
+- Why: We need to make sure that the architecture documentation correctly shows our external runner layout, includes all required ports, adapters, and ecosystem boundaries, and doesn't miss any critical design components.
 - Steps:
-  1. Open `ARCHITECTURE.md` and verify that `AgentWorker` is listed under `runner/ports/`.
-  2. Verify that `runner/adapters/antigravity/` is listed under `runner/adapters/`.
-  3. Verify that the ecosystem triad and `--project-dir` boundaries are visually mapped in the text diagram.
-- Expected: All sections are present, formatted correctly in markdown, and contain no broken relative links or missing layers.
+  1. Run the Python verification script in PowerShell to assert that all required architecture symbols exist:
+     ```powershell
+     python -c @"
+     with open('ARCHITECTURE.md', 'r', encoding='utf-8') as f:
+         content = f.read()
+     required = [
+         'AgentWorker',
+         'runner/ports/agent_worker.py',
+         'runner/adapters/antigravity/',
+         'runner/adapters/opencode/',
+         '--project-dir',
+         '~/.ticket-runner/config.yaml',
+         'ticket-runner.yaml',
+         'Viello/agent-skills',
+         'verify-<app>',
+         '.agent/evidence/',
+         'ADRs 0001 to 0022',
+     ]
+     missing = [t for t in required if t not in content]
+     if missing:
+         print('MISSING SYMBOLS:', missing)
+         exit(1)
+     print('PASS: All required architecture symbols present.')
+     "@
+     ```
+  2. Inspect `ARCHITECTURE.md` lines 1 to 45 to confirm the Triad Ecosystem diagram and `--project-dir` boundaries are visually formatted.
+- Expected: Terminal prints `PASS: All required architecture symbols present.` with exit code 0, and the document renders Clean Architecture layers without broken structure.
 
 ### Gotchas
 - Do not remove existing Spec 01–10 components that remain active (Doctor, Queue, Signal Repository, Discord Gateway, Rich Terminal Display).

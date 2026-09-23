@@ -133,5 +133,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Starter messages posted in a parent channel to create a public thread (`msg.create_thread()`) cannot be retrieved via `thread.fetch_message()` on the thread object itself, raising 404 `Unknown Message`. Additionally, attempting to send or edit a Discord message with empty content when no embed is provided causes Discord API error 50006 `Cannot send an empty message`. Pinning starter messages in parent channels may also trigger 403 `Missing Permissions` if the bot lacks channel-wide manage messages permissions. Furthermore, in end-to-end integration tests, signals seeded in repositories before `processor.process(ticket)` are purged by the isolation layer at the start of the ticket, leading to missing ready signal errors.
 - **Solution:** In `DiscordPyGateway._resolve_message`, catch `discord.NotFound` on thread message fetching and fall back to `channel.parent.fetch_message(msg_id)` when `channel` is a thread. In `post_message` and `edit_message`, default empty content to `"..."` whenever `embed` is `None` to satisfy Discord API constraints. In `open_ticket_thread`, wrap `pin_message` in a guarded `try/except DiscordGatewayError` block so missing channel-level pin permissions do not abort thread opening. In integration test suites, seed signals dynamically inside the cycle runner callback so they are written during cycle execution rather than wiped by the initial ticket purge.
 
+---
+
+## External Runner Architecture Synchronization & Living Documentation Updates
+
+- **Problem:** When evolving a monolithic or local repository orchestrator into an external multi-agent runner targeting `--project-dir`, living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`) can quickly drift out of date. Outdated references to superseded active specs (e.g. referencing specs 04–06 when specs 01–10 are archived), missing architectural layers (such as `tests/integration/`, `clean_slate.py`, `crash_recovery.py`), or obsolete ADR counters degrade developer and AI context.
+- **Solution:** Maintain living documents as strict authoritative reflections of both the current working codebase and planned architectural boundaries. When updating `ARCHITECTURE.md`, verify that active spec lists, ADR indices, test directory trees, and adapter implementations reflect actual repository state alongside newly introduced ports (`AgentWorker`) and contracts (Verification Subsystem, `--project-dir` runtime separation).
+
+
 
 
