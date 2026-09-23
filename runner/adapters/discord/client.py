@@ -19,6 +19,7 @@ from runner.ports.state_store import StateStore
 
 if TYPE_CHECKING:
     from runner.application.presence_coordinator import PresenceCoordinator
+    from runner.application.state_coordinator import StateCoordinator
 
 
 class DiscordClient:
@@ -32,6 +33,7 @@ class DiscordClient:
         state_store: StateStore | None = None,
         signal_repository: SignalRepository | None = None,
         presence_coordinator: PresenceCoordinator | None = None,
+        state_coordinator: StateCoordinator | None = None,
     ) -> None:
         if config is not None:
             self.config: DiscordConfig = (
@@ -51,6 +53,7 @@ class DiscordClient:
         self.state_store = state_store
         self.signal_repository = signal_repository
         self.presence_coordinator = presence_coordinator
+        self.state_coordinator = state_coordinator
         self.ready_event = asyncio.Event()
         self.ready_error: Exception | None = None
 
@@ -60,7 +63,12 @@ class DiscordClient:
         self.client.event(self.on_error)
 
         # Register slash commands on the command tree
-        register_commands(self.tree, self.state_store)
+        register_commands(
+            self.tree,
+            state_store=self.state_store,
+            presence_coordinator=self.presence_coordinator,
+            state_coordinator=self.state_coordinator,
+        )
 
     async def on_error(self, event_method: str, *args: Any, **kwargs: Any) -> None:
         """Handle errors in discord.py event dispatchers."""
@@ -212,6 +220,7 @@ def init_client(
     state_store: StateStore | None = None,
     signal_repository: SignalRepository | None = None,
     presence_coordinator: PresenceCoordinator | None = None,
+    state_coordinator: StateCoordinator | None = None,
 ) -> DiscordClient:
     """Initialize and set the global default DiscordClient instance."""
     global _default_client
@@ -222,6 +231,7 @@ def init_client(
         state_store=state_store,
         signal_repository=signal_repository,
         presence_coordinator=presence_coordinator,
+        state_coordinator=state_coordinator,
     )
     return _default_client
 

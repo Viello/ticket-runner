@@ -190,6 +190,18 @@ def test_transition_to_pause_requested() -> None:
     assert persisted["status"] == "PAUSE_REQUESTED"
 
 
+def test_request_pause() -> None:
+    store = FakeStateStore(None)
+    coordinator = StateCoordinator(state_store=store)
+    coordinator.transition_to_working(ticket_id="T053")
+
+    paused = coordinator.request_pause()
+    assert paused.status == StateStatus.PAUSE_REQUESTED
+
+    persisted = store.write_calls[-1]
+    assert persisted["status"] == "PAUSE_REQUESTED"
+
+
 def test_transition_to_waiting_for_user() -> None:
     store = FakeStateStore(None)
     coordinator = StateCoordinator(state_store=store)

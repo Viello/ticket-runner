@@ -354,3 +354,36 @@ async def test_on_message_delegates_to_process_thread_reply(
         presence_coordinator=None,
     )
 
+
+def test_client_init_with_coordinators(
+    sample_discord_config: DiscordConfig,
+    mock_client: MagicMock,
+    mock_tree: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DiscordClient passes presence_coordinator and state_coordinator to register_commands."""
+    mock_register = MagicMock()
+    monkeypatch.setattr("runner.adapters.discord.client.register_commands", mock_register)
+
+    mock_presence = MagicMock()
+    mock_state = MagicMock()
+    mock_store = MagicMock()
+
+    dc = DiscordClient(
+        sample_discord_config,
+        client=mock_client,
+        tree=mock_tree,
+        state_store=mock_store,
+        presence_coordinator=mock_presence,
+        state_coordinator=mock_state,
+    )
+
+    assert dc.presence_coordinator is mock_presence
+    assert dc.state_coordinator is mock_state
+    mock_register.assert_called_once_with(
+        mock_tree,
+        state_store=mock_store,
+        presence_coordinator=mock_presence,
+        state_coordinator=mock_state,
+    )
+
