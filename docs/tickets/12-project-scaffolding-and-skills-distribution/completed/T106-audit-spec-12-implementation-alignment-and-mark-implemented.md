@@ -1,5 +1,6 @@
 # T106 — Audit Spec 12 Implementation Alignment and Update Living Documentation
-Status: pending
+Status: completed
+Completed: 2026-09-23T16:11:30Z
 Spec: docs/specs/12-project-scaffolding-and-skills-distribution.md
 Blocked by: T105
 Security: None
@@ -34,7 +35,9 @@ Reasoning: medium
      `python -m pytest tests/`
   2. Verify Spec 12 status in `AGENTS.md`:
      `python -c "content = open('AGENTS.md', encoding='utf-8').read(); assert 'Specs 01–12' in content; print('PASS: AGENTS.md marks Spec 12 implemented')"`
-- Expected: All tests pass; `AGENTS.md` reflects Specs 01–12 implemented.
+  3. Verify Spec 12 status in `README.md`:
+     `python -c "content = open('README.md', encoding='utf-8').read(); assert '| **Spec 12** | **Project Scaffolding & Skills Distribution** | Completed |' in content; print('PASS: README.md marks Spec 12 completed')"`
+- Expected: All tests pass; `AGENTS.md` and `README.md` reflect Specs 01–12 implemented and completed.
 
 ### Gotchas
 - Root living documents (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) require explicit user confirmation before committing per AGENTS.md invariants.

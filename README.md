@@ -156,7 +156,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 | :--- | :--- | :--- | :--- |
 | **Spec 10b** | **Living Documentation & Roadmap** | Completed | Reconcile root living documents (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`), lock in domain glossary, establish external path invariants, and define the roadmap. |
 | **Spec 11** | **Decoupled Project Root & Multi-Agent** | Completed | Introduce `--project-dir <path>` CLI plumbing, abstract `AgentWorker` port (`runner/ports/agent_worker.py`), and multi-agent adapters for OpenCode and Antigravity CLI (`agy`). |
-| **Spec 12** | **Project Scaffolding & Skills Distribution** | Planned | Implement two-tier configuration merging (`~/.ticket-runner/config.yaml` + `ticket-runner.yaml`), `ticket-runner init` heuristics, `ticket-runner init --ai-prompt`, and `ticket-runner skills sync`. |
+| **Spec 12** | **Project Scaffolding & Skills Distribution** | Completed | Implement two-tier configuration merging (`~/.ticket-runner/config.yaml` + `ticket-runner.yaml`), `ticket-runner init` heuristics, `ticket-runner init --ai-prompt`, and `ticket-runner skills sync`. |
 | **Spec 13** | **Token-Guarded Verification & Human Gate** | Planned | Behavioral verification harness contracts (`verify-<app>`), out-of-band evidence capture, token-preserving triage extractor (`evidence_triage.py`), and dual-mode Evidence Card human approval gate. |
 
 ### Specification Highlights
