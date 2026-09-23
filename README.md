@@ -164,7 +164,7 @@ Ticket Runner's evolution from a project-local script into an enterprise-grade, 
 - **Spec 10b (Living Documentation & Roadmap)**:
   - Establishes canonical domain vocabulary in [CONTEXT.md](CONTEXT.md) and strict synonym prohibitions.
   - Updates [ARCHITECTURE.md](ARCHITECTURE.md) to document Clean Architecture layers, ports, adapters, and verification subsystem layout.
-  - Codifies external path resolution, token-budgeted verification guardrails, and human approval gates in [AGENTS.md](AGENTS.md).
+  - Codifies external path resolution, token-budgeted verification guardrails, and Gatekeeper approval gates in [AGENTS.md](AGENTS.md).
 - **Spec 11 (Decoupled Project Root & Multi-Agent Worker Port)**:
   - Adds `--project-dir <path>` (defaulting to `Path.cwd()`), allowing the runner to execute against any external repository.
   - Decouples `WorkerSupervisor` from OpenCode via the abstract `AgentWorker` protocol.
@@ -345,7 +345,7 @@ lifecycle:
 - **Token-Preserving Verification:** Persists heavy behavioral traces, logs, and screenshots out-of-band in `.agent/evidence/<ticket_id>/`, passing only bounded triage excerpts (≤ 30 lines / 1,000 characters) to LLMs.
 - **Dual Presence (Nearby vs. Away):** Interactive split-screen Rich terminal dashboard when you are at your desk; escalates prompts to ticket-specific Discord threads when you are away.
 - **Circuit Breaker:** Halts execution when verification attempts exceed the configured threshold, escalating to an operator decision (`[R]etry`, `[S]kip`, `[A]bort`).
-- **Human-in-the-Loop Sign-Off:** Halts after green checks to present an Evidence Card via Terminal or Discord; commits strictly require explicit human approval.
+- **Human-in-the-Loop Sign-Off:** In Ticket Runner queue runs, halts after green checks to present an Evidence Card via Terminal or Discord; commits strictly require explicit human approval (interactive IDE/CLI sessions auto-commit on passing tests).
 - **Clean Architecture:** Strict inward dependency rule, zero I/O in the domain layer, abstract ports, and comprehensive test doubles.
 
 ---

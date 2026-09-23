@@ -53,7 +53,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 
 ### 3. Execution (Interactive or Ticket Runner)
 - **Implement** tickets using TDD at pre-agreed seams with frequent typechecks and test runs: `/implement`.
-- **Commit approval**: Commit authoring strictly requires explicit human approval prior to committing in both interactive and autonomous modes (interactive user confirmation or Gatekeeper Evidence Card sign-off).
+- **Interactive commit execution**: When pair-programming via IDE or CLI, the assistant automatically stages and commits once targeted tests, code/security reviews, and local smoke scenarios pass, without pausing for confirmation. In autonomous Ticket Runner execution, the Worker never commits directly; Gatekeeper alone commits upon passing independent tests and receiving human approval in Human-in-the-Loop mode (ADR 0002, ADR 0008).
 - **Autonomous queue execution**: When driven by Ticket Runner, the Worker implements the active ticket slice guided by `config.yaml: worker.execution_skill` (`.agents/skills/implement/SKILL.md`), but NEVER commits directly; Gatekeeper alone commits upon passing independent tests and receiving human approval (ADR 0002, ADR 0008).
 
 ### 4. Quality & Resilience

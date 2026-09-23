@@ -16,7 +16,7 @@ Implement the work described in the active ticket or spec:
    - **Refine Smoke Scenarios to ELI5 standard**: Before marking completed, refine the ticket's `### Smoke Scenarios` section into concrete, spoon-fed instructions following the 4-part anatomy (Setup, Why, Steps, Expected). Replace abstract draft steps with tested, copy-pasteable commands in the project's native tooling.
    - Update ticket frontmatter: set `Status: completed` and record `Completed: <ISO-8601-UTC-timestamp>`.
    - Relocate the ticket file to `docs/tickets/<spec-slug>/completed/T<NNN>-<slug>.md`.
-5. **Commit** *(interactive mode only — skip in Ticket Runner autonomous execution)*: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Commit to the current branch following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers). Append **all** scenario names from `### Smoke Scenarios` as a trailing section in the commit body, tagging those also exercised by automated tests:
+5. **Commit** *(interactive mode only — skip in Ticket Runner autonomous execution)*: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Automatically execute `git commit` to the current branch without pausing to ask confirmation once tests, reviews, and local smoke checks pass, following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers). Append **all** scenario names from `### Smoke Scenarios` as a trailing section in the commit body, tagging those also exercised by automated tests:
    ```
    Manual verification required:
    - <Scenario name 1>

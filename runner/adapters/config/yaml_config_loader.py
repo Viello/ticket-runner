@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 import re
 from typing import Any
@@ -46,9 +47,222 @@ FORBIDDEN_DISCORD_CREDENTIAL_KEYS = (
 ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 DISCORD_CHANNEL_ID_PATTERN = re.compile(r"^\d+$")
 
+DEFAULT_GLOBAL_CONFIG_PATH = Path.home() / ".ticket-runner" / "config.yaml"
+
+DEFAULT_MACHINE_CONFIG: dict[str, Any] = {
+    "project": {
+        "branch": "agent/ticket-runner",
+    },
+    "worker": {
+        "execution_skill": ".agents/skills/implement/SKILL.md",
+        "provider": "opencode",
+    },
+    "verification": {
+        "build_cmd": "",
+        "max_attempts": 3,
+        "timeout_seconds": 300,
+        "silence_window_seconds": 60,
+        "per_test_timeout_seconds": 0,
+        "isolation_cmd": "",
+        "bug_escalation_at": 1,
+    },
+    "tokens": {
+        "warn": 120000,
+        "handoff": 135000,
+        "ceiling": 150000,
+    },
+    "presence": {
+        "default_mode": "nearby",
+        "idle_escalation_minutes": 3,
+    },
+    "discord": {
+        "enabled": False,
+        "token_env": "DISCORD_BOT_TOKEN",
+        "channel_id": "",
+        "guild_id": "",
+        "notify_user_id": "",
+    },
+    "lifecycle": {
+        "queue_completion": "standby",
+        "clean_slate": "interactive",
+        "poll_interval": 5.0,
+    },
+    "git": {
+        "auto_push": False,
+        "commit_prefix": "feat",
+        "enforce_pre_push_hook": True,
+    },
+    "model": {
+        "default_reasoning": "",
+        "models": [],
+    },
+    "ui": {
+        "session_terminal": "",
+    },
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge override dictionary into base dictionary.
+
+    Dictionaries are recursively merged.
+    Lists and scalar values in override replace values in base.
+    """
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+    return base
+
 
 class YamlConfigLoader(ConfigLoader):
     """Loads and validates runner configuration from YAML files or strings."""
+
+    def load_two_tier(
+        self,
+        project_dir: Path | str,
+        global_path: Path | str | None = None,
+        project_config_path: Path | str | None = None,
+    ) -> RunnerConfig:
+        """Load and merge two-tier configuration (global user defaults + project overlay).
+
+        Args:
+            project_dir: Root directory of the project.
+            global_path: Optional filepath to global user configuration.
+                Defaults to ~/.ticket-runner/config.yaml.
+            project_config_path: Optional filepath to project configuration overlay.
+                Defaults to <project_dir>/ticket-runner.yaml (fallback: <project_dir>/config.yaml).
+
+        Returns:
+            Strongly-typed RunnerConfig domain object.
+
+        Raises:
+            ConfigError: If paths are invalid, files are unreadable, or configuration validation fails.
+        """
+        if not isinstance(project_dir, (str, Path)):
+            raise ConfigError(f"project_dir must be a Path or str, got: {type(project_dir).__name__}")
+        str_project_dir = str(project_dir)
+        if "\0" in str_project_dir:
+            raise ConfigError("Invalid project_dir: contains null byte")
+
+        try:
+            resolved_project_dir = Path(project_dir).resolve()
+        except (ValueError, RuntimeError) as exc:
+            raise ConfigError(f"Invalid project_dir '{project_dir}': {exc}") from exc
+
+        if not resolved_project_dir.exists():
+            raise ConfigError(f"Project directory not found: '{project_dir}'")
+        if not resolved_project_dir.is_dir():
+            raise ConfigError(f"Project directory is not a directory: '{project_dir}'")
+
+        resolved_project_cfg: Path
+        if project_config_path is not None:
+            if not isinstance(project_config_path, (str, Path)):
+                raise ConfigError(
+                    f"project_config_path must be a Path or str, got: {type(project_config_path).__name__}"
+                )
+            str_project_cfg = str(project_config_path)
+            if "\0" in str_project_cfg:
+                raise ConfigError("Invalid project_config_path: contains null byte")
+
+            raw_cfg_path = Path(project_config_path)
+            if not raw_cfg_path.is_absolute():
+                resolved_project_cfg = (resolved_project_dir / raw_cfg_path).resolve()
+            else:
+                resolved_project_cfg = raw_cfg_path.resolve()
+
+            try:
+                if not resolved_project_cfg.is_relative_to(resolved_project_dir):
+                    raise ConfigError(
+                        f"Path traversal detected: project configuration '{project_config_path}' escapes project directory '{resolved_project_dir}'"
+                    )
+            except (ValueError, RuntimeError) as exc:
+                raise ConfigError(
+                    f"Path traversal detected: project configuration '{project_config_path}' escapes project directory '{resolved_project_dir}'"
+                ) from exc
+
+            if not resolved_project_cfg.is_file():
+                raise ConfigError(f"Project configuration file not found: '{project_config_path}'")
+        else:
+            primary_candidate = (resolved_project_dir / "ticket-runner.yaml").resolve()
+            fallback_candidate = (resolved_project_dir / "config.yaml").resolve()
+
+            try:
+                if not primary_candidate.is_relative_to(resolved_project_dir) or not fallback_candidate.is_relative_to(resolved_project_dir):
+                    raise ConfigError(f"Path traversal detected in project directory '{resolved_project_dir}'")
+            except (ValueError, RuntimeError) as exc:
+                raise ConfigError(f"Path traversal detected in project directory '{resolved_project_dir}': {exc}") from exc
+
+            if primary_candidate.is_file():
+                resolved_project_cfg = primary_candidate
+            elif fallback_candidate.is_file():
+                resolved_project_cfg = fallback_candidate
+            else:
+                raise ConfigError(
+                    f"Project configuration file not found in '{resolved_project_dir}' (looked for 'ticket-runner.yaml' and 'config.yaml')"
+                )
+
+        resolved_global_path: Path
+        if global_path is not None:
+            if not isinstance(global_path, (str, Path)):
+                raise ConfigError(f"global_path must be a Path or str, got: {type(global_path).__name__}")
+            str_global = str(global_path)
+            if "\0" in str_global:
+                raise ConfigError("Invalid global_path: contains null byte")
+            raw_global = Path(global_path)
+            if not raw_global.is_absolute() and ".." in raw_global.parts:
+                raise ConfigError(f"Path traversal detected in global_path: '{global_path}'")
+            try:
+                resolved_global_path = raw_global.resolve()
+            except (ValueError, RuntimeError) as exc:
+                raise ConfigError(f"Invalid global_path '{global_path}': {exc}") from exc
+        else:
+            resolved_global_path = DEFAULT_GLOBAL_CONFIG_PATH.resolve()
+
+        if resolved_global_path.exists() and resolved_global_path.is_dir():
+            raise ConfigError(f"Global configuration path is a directory: '{resolved_global_path}'")
+
+        merged_dict: dict[str, Any] = copy.deepcopy(DEFAULT_MACHINE_CONFIG)
+
+        if resolved_global_path.is_file():
+            try:
+                global_content = resolved_global_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ConfigError(f"Failed to read global configuration file '{resolved_global_path}': {exc}") from exc
+
+            try:
+                global_data = yaml.safe_load(global_content)
+            except yaml.YAMLError as exc:
+                raise ConfigError(f"YAML parsing error in global configuration file '{resolved_global_path}': {exc}") from exc
+
+            if global_data is not None:
+                if not isinstance(global_data, dict):
+                    raise ConfigError(
+                        f"Global configuration root must be a mapping/dictionary, got: {type(global_data).__name__}"
+                    )
+                _deep_merge(merged_dict, global_data)
+
+        try:
+            project_content = resolved_project_cfg.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"Failed to read project configuration file '{resolved_project_cfg}': {exc}") from exc
+
+        try:
+            project_data = yaml.safe_load(project_content)
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"YAML parsing error in project configuration file '{resolved_project_cfg}': {exc}") from exc
+
+        if project_data is None:
+            project_data = {}
+        elif not isinstance(project_data, dict):
+            raise ConfigError(
+                f"Project configuration root must be a mapping/dictionary, got: {type(project_data).__name__}"
+            )
+
+        _deep_merge(merged_dict, project_data)
+
+        return self.load_from_dict(merged_dict)
 
     def load(self, path: Path | str) -> RunnerConfig:
         """Load and validate configuration from a YAML file.

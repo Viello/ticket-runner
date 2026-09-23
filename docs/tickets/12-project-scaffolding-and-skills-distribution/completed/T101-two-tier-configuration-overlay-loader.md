@@ -1,5 +1,6 @@
 # T101 — Two-Tier Configuration Overlay Loader
-Status: pending
+Status: completed
+Completed: 2026-09-23T14:43:00Z
 Spec: docs/specs/12-project-scaffolding-and-skills-distribution.md
 Blocked by: None
 Security: required
@@ -32,12 +33,16 @@ Reasoning: medium
 
 ### Smoke Scenarios
 **Scenario: Two-Tier Configuration Overlay Merging**
-- Setup: None (runs from repo root with temporary directories).
-- Why: Verify that `load_two_tier` deep-merges global preferences and project-level overrides into a valid `RunnerConfig`.
+- Setup: None (runs from repository root).
+- Why: Test that Ticket Runner can read machine-wide defaults and combine them with project-specific settings so you don't have to re-type Discord tokens, token budgets, or model settings in every new repo.
 - Steps:
-  1. Run Python one-liner creating temporary global config with custom token limit and temporary project overlay with custom `test_cmd`:
-     `python -c "import tempfile, pathlib; from runner.adapters.config.yaml_config_loader import YamlConfigLoader; td = pathlib.Path(tempfile.mkdtemp()); (td / 'ticket-runner.yaml').write_text('project:\n  name: demo\n  branch: agent/ticket-runner\n  base_branch: main\nverification:\n  test_cmd: pytest -v\n', encoding='utf-8'); cfg = YamlConfigLoader().load_two_tier(project_dir=td); assert cfg.project.name == 'demo'; assert cfg.verification.test_cmd == 'pytest -v'; assert cfg.tokens.ceiling == 150000; print('PASS: Two-tier config successfully loaded and merged')"`
-- Expected: Output displays `PASS: Two-tier config successfully loaded and merged`.
+  1. Run this self-contained Python command to create an isolated test directory, write a minimal project overlay (`ticket-runner.yaml`), and load it via `load_two_tier()`:
+     ```powershell
+     python -c "import tempfile, pathlib; from runner.adapters.config.yaml_config_loader import YamlConfigLoader; td = pathlib.Path(tempfile.mkdtemp()); (td / 'ticket-runner.yaml').write_text('project:\n  name: demo\n  branch: agent/ticket-runner\n  base_branch: main\nverification:\n  test_cmd: pytest -v\n', encoding='utf-8'); cfg = YamlConfigLoader().load_two_tier(project_dir=td); assert cfg.project.name == 'demo'; assert cfg.verification.test_cmd == 'pytest -v'; assert cfg.tokens.ceiling == 150000; print('PASS: Two-tier config successfully loaded and merged')"
+     ```
+- Expected:
+  - Command executes cleanly with exit code 0.
+  - Console prints: `PASS: Two-tier config successfully loaded and merged`.
 
 ### Gotchas
 - When performing a deep merge, dictionaries should be recursively merged, while lists or scalar values in the project overlay should replace the global counterpart rather than appending or colliding.

@@ -26,6 +26,27 @@ class ConfigLoader(Protocol):
         """
         ...
 
+    def load_two_tier(
+        self,
+        project_dir: Path | str,
+        global_path: Path | str | None = None,
+        project_config_path: Path | str | None = None,
+    ) -> RunnerConfig:
+        """Load and merge two-tier configuration (global user defaults + project overlay).
+
+        Args:
+            project_dir: Root directory of the project.
+            global_path: Optional path to global user configuration file.
+            project_config_path: Optional path to project overlay configuration file.
+
+        Returns:
+            RunnerConfig domain object.
+
+        Raises:
+            ConfigError: If configuration files cannot be read or validation fails.
+        """
+        ...
+
     def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
         """Persist the selected session terminal to configuration storage.
 

@@ -75,6 +75,16 @@ class FakeConfigLoader:
             raise self.error
         return self.config
 
+    def load_two_tier(
+        self,
+        project_dir: Path | str,
+        global_path: Path | str | None = None,
+        project_config_path: Path | str | None = None,
+    ):
+        if self.error:
+            raise self.error
+        return self.config
+
     def persist_session_terminal(self, path: Path | str, session_terminal: str) -> None:
         self.persisted_terminals.append((path, session_terminal))
         if self.config is not None:
