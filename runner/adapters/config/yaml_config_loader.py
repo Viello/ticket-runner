@@ -94,7 +94,10 @@ DEFAULT_MACHINE_CONFIG: dict[str, Any] = {
     },
     "model": {
         "default_reasoning": "",
-        "models": [],
+        "models": [
+            {"id": "deepseek/deepseek-chat", "label": "DeepSeek Chat"},
+            {"id": "qwen/qwen-plus", "label": "Qwen Plus"},
+        ],
     },
     "ui": {
         "session_terminal": "",

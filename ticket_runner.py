@@ -11,6 +11,7 @@ import signal
 import sys
 from typing import Any, Awaitable, Callable
 
+from runner.adapters.cli.scaffolder import ProjectScaffolder
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.discord.gateway import DiscordPyGateway
 from runner.adapters.discord.smoke import (
@@ -26,13 +27,16 @@ from runner.application.doctor import Doctor, DoctorReport
 from runner.application.hotkey_dispatch import HotkeyDispatcher
 from runner.application.model_selection import ModelSelectionInteractor
 from runner.application.presence_coordinator import PresenceCoordinator
+from runner.application.prompt_generator import AIPromptGenerator
 from runner.application.queue_orchestrator import QueueOrchestrator
+from runner.application.scaffolding import ProjectSniffer
 from runner.application.tui_coordinator import TuiCoordinator
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
 from runner.container import BotContainer, RunnerContainer, build_bot_container, build_container
 from runner.domain.exceptions import NonInteractiveError, UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
 from runner.ports.discord_gateway import DiscordGateway
+from runner.ports.skills_client import SkillsClient
 from runner.ports.state_store import StateStore
 
 
@@ -66,11 +70,65 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
-        help="Path to configuration YAML file (default: config.yaml).",
+        default=None,
+        help="Path to configuration YAML file (default: ticket-runner.yaml or config.yaml).",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    # init command
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize and scaffold Ticket Runner in a target project.",
+    )
+    init_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    init_parser.add_argument(
+        "--ai-prompt",
+        action="store_true",
+        help="Print the generated Markdown prompt for AI assistants to stdout and exit 0 immediately.",
+    )
+    init_parser.add_argument(
+        "--yes",
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        help="Automatically accept detected defaults without prompting.",
+    )
+    init_parser.add_argument(
+        "--no-skills",
+        action="store_true",
+        help="Bypass skills synchronization during scaffolding.",
+    )
+
+    # skills command
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Manage Ticket Runner skills catalog.",
+    )
+    skills_subparsers = skills_parser.add_subparsers(
+        dest="skills_action",
+        help="Skills action to execute",
+    )
+    skills_sync_parser = skills_subparsers.add_parser(
+        "sync",
+        help="Synchronize skills catalog into target project.",
+    )
+    skills_sync_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    skills_sync_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force overwrite existing skills even if local modifications exist.",
+    )
 
     # doctor command
     doctor_parser = subparsers.add_parser(
@@ -192,8 +250,8 @@ def _configure_console_encoding() -> tuple[str, str]:
 
 
 async def run_doctor(
-    config_path: Path,
-    local_only: bool,
+    config_path: Path | None = None,
+    local_only: bool = False,
     doctor_instance: Doctor | None = None,
     terminal_detector: Any | None = None,
     live: bool = False,
@@ -241,8 +299,8 @@ async def run_doctor(
 
 
 async def run_start(
-    config_path: Path,
-    local_only: bool,
+    config_path: Path | None = None,
+    local_only: bool = False,
     doctor_instance: Doctor | None = None,
     orchestrator_instance: QueueOrchestrator | None = None,
     poll_interval: float | None = None,
@@ -295,12 +353,16 @@ async def run_start(
     config = doctor.loaded_config
     if config is None:
         loader = YamlConfigLoader()
-        effective_cfg = (
-            resolved_project_dir / config_path
-            if resolved_project_dir and not config_path.is_absolute()
-            else config_path
+        effective_project_dir = resolved_project_dir or Path.cwd().resolve()
+        explicit_overlay = (
+            config_path
+            if config_path is not None and getattr(doctor, "_config_path_explicit", False)
+            else None
         )
-        config = loader.load(effective_cfg)
+        config = loader.load_two_tier(
+            project_dir=effective_project_dir,
+            project_config_path=explicit_overlay,
+        )
 
     supervisor: WorkerSupervisor | None = supervisor_instance
     crash_recovery: CrashRecoveryCoordinator | None = crash_recovery_instance
@@ -745,6 +807,81 @@ async def run_bot(
 
 
 
+def run_init(
+    project_dir: Path,
+    ai_prompt: bool = False,
+    non_interactive: bool = False,
+    no_skills: bool = False,
+    scaffolder: ProjectScaffolder | None = None,
+    sniffer: ProjectSniffer | None = None,
+) -> int:
+    """Scaffold target project directory structure or output AI prompt."""
+    resolved_dir = Path(project_dir).resolve()
+    if ai_prompt:
+        sn = sniffer or ProjectSniffer()
+        try:
+            heuristics = sn.sniff(resolved_dir)
+        except Exception:
+            heuristics = None
+        prompt = AIPromptGenerator.generate(heuristics)
+        print(prompt)
+        return 0
+
+    scaff = scaffolder or ProjectScaffolder()
+    try:
+        report = scaff.scaffold(
+            project_dir=resolved_dir,
+            interactive=not non_interactive,
+            sync_skills=not no_skills,
+        )
+        print(f"\n[Runner] Project initialized successfully at '{resolved_dir}'.")
+        print(f"  Created configuration: {report.config_path}")
+        return 0
+    except ValueError as exc:
+        print(f"\n[Runner] Error: {exc}")
+        return 1
+    except Exception as exc:
+        print(f"\n[Runner] Error during initialization: {exc}")
+        return 1
+
+
+def run_skills_sync(
+    project_dir: Path,
+    force: bool = False,
+    skills_client: SkillsClient | None = None,
+) -> int:
+    """Synchronize remote skills catalog into <project_dir>/.agents/skills/."""
+    resolved_dir = Path(project_dir).resolve()
+    if not resolved_dir.exists():
+        print(f"\n[Runner] Error: Project directory '{resolved_dir}' does not exist.")
+        return 1
+    if not resolved_dir.is_dir():
+        print(f"\n[Runner] Error: Project path '{resolved_dir}' is not a directory.")
+        return 1
+
+    client = skills_client
+    if client is None:
+        from runner.adapters.skills.skills_client import GitHubSkillsClient
+
+        client = GitHubSkillsClient()
+
+    try:
+        result = client.sync_skills(project_dir=resolved_dir, force=force)
+        print(f"\n[Runner] Skills synchronized successfully for '{resolved_dir}'.")
+        print(f"  Installed: {len(result.installed_skills)}")
+        print(f"  Updated:   {len(result.updated_skills)}")
+        print(f"  Preserved: {len(result.preserved_skills)}")
+        if result.errors:
+            print(f"  Errors:    {len(result.errors)}")
+            for err in result.errors:
+                print(f"    - {err}")
+            return 1
+        return 0
+    except Exception as exc:
+        print(f"\n[Runner] Error: Skills synchronization failed: {exc}")
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point returning status exit code."""
     parser = create_parser()
@@ -752,13 +889,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     raw_project_dir = getattr(args, "project_dir", None)
     if raw_project_dir is not None:
-        project_dir = Path(raw_project_dir).resolve()
-        if not project_dir.exists():
-            print(f"\n[Runner] Error: Project directory '{project_dir}' does not exist.")
+        if "\0" in str(raw_project_dir):
+            print("\n[Runner] Error: Invalid project_dir: contains null byte")
             return 1
-        if not project_dir.is_dir():
-            print(f"\n[Runner] Error: Project path '{project_dir}' is not a directory.")
+        try:
+            project_dir = Path(raw_project_dir).resolve()
+        except (ValueError, RuntimeError) as exc:
+            print(f"\n[Runner] Error: Invalid project directory '{raw_project_dir}': {exc}")
             return 1
+
+        if args.command != "init":
+            if not project_dir.exists():
+                print(f"\n[Runner] Error: Project directory '{project_dir}' does not exist.")
+                return 1
+            if not project_dir.is_dir():
+                print(f"\n[Runner] Error: Project path '{project_dir}' is not a directory.")
+                return 1
+        else:
+            if project_dir.exists() and not project_dir.is_dir():
+                print(f"\n[Runner] Error: Project path '{project_dir}' is not a directory.")
+                return 1
     else:
         project_dir = Path.cwd().resolve()
 
@@ -767,10 +917,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     local_only = getattr(args, "local_only", False)
-    config_path = getattr(args, "config", Path("config.yaml"))
+    config_path = getattr(args, "config", None)
 
     try:
-        if args.command == "doctor":
+        if args.command == "init":
+            return run_init(
+                project_dir=project_dir,
+                ai_prompt=getattr(args, "ai_prompt", False),
+                non_interactive=getattr(args, "non_interactive", False),
+                no_skills=getattr(args, "no_skills", False),
+            )
+        elif args.command == "skills":
+            action = getattr(args, "skills_action", None)
+            if action == "sync":
+                return run_skills_sync(
+                    project_dir=project_dir,
+                    force=getattr(args, "force", False),
+                )
+            parser.print_help()
+            return 0
+        elif args.command == "doctor":
             return asyncio.run(
                 run_doctor(
                     config_path=config_path,

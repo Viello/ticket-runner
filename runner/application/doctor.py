@@ -133,6 +133,7 @@ class Doctor:
         self._config_loader = config_loader or YamlConfigLoader()
         self._hook_installer = hook_installer or PrePushHookInstaller
 
+        self._config_path_explicit = config_path is not None
         if config_path is not None:
             self._config_path = Path(config_path)
             if self._cwd and not self._config_path.is_absolute():
@@ -443,19 +444,49 @@ class Doctor:
         )
 
     async def check_config(self) -> CheckResult:
-        """Load and validate config.yaml using ConfigLoader."""
+        """Load and validate configuration using ConfigLoader."""
         try:
-            self._loaded_config = self._config_loader.load(self._config_path)
-            return CheckResult(
-                name=CHECK_CONFIG,
-                passed=True,
-                message=f"Configuration valid: loaded from '{self._config_path}'.",
-                remediation=None,
-            )
+            if hasattr(self._config_loader, "load_two_tier"):
+                target_project_dir = self._cwd if self._cwd is not None else (
+                    self._config_path.parent if self._config_path.is_absolute() else Path.cwd().resolve()
+                )
+                overlay_path = self._config_path if getattr(self, "_config_path_explicit", False) else None
+                try:
+                    self._loaded_config = self._config_loader.load_two_tier(
+                        project_dir=target_project_dir,
+                        project_config_path=overlay_path,
+                    )
+                    return CheckResult(
+                        name=CHECK_CONFIG,
+                        passed=True,
+                        message=f"Configuration valid: loaded via two-tier resolution for '{target_project_dir}'.",
+                        remediation=None,
+                    )
+                except Exception as two_tier_exc:
+                    if self._config_path.is_file():
+                        try:
+                            self._loaded_config = self._config_loader.load(self._config_path)
+                            return CheckResult(
+                                name=CHECK_CONFIG,
+                                passed=True,
+                                message=f"Configuration valid: loaded from '{self._config_path}'.",
+                                remediation=None,
+                            )
+                        except Exception:
+                            pass
+                    raise two_tier_exc
+            else:
+                self._loaded_config = self._config_loader.load(self._config_path)
+                return CheckResult(
+                    name=CHECK_CONFIG,
+                    passed=True,
+                    message=f"Configuration valid: loaded from '{self._config_path}'.",
+                    remediation=None,
+                )
         except (ConfigError, OSError, Exception) as exc:
             self._loaded_config = None
             remediation = f"Verify that '{self._config_path}' exists and satisfies the RunnerConfig schema."
-            if "Configuration file not found" in str(exc):
+            if "configuration file not found" in str(exc).lower() or "not found" in str(exc).lower():
                 remediation = (
                     f"Configuration file '{self._config_path}' not found. "
                     "Copy the template configuration using 'cp config.example.yaml config.yaml' "

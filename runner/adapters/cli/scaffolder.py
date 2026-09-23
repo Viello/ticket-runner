@@ -163,7 +163,7 @@ class ProjectScaffolder:
             name = heuristics.name
             base_branch = heuristics.base_branch
             branch = heuristics.branch
-            test_cmd = heuristics.test_cmd
+            test_cmd = heuristics.test_cmd or "python -m pytest"
             build_cmd = heuristics.build_cmd
             provider = heuristics.provider
         else:
@@ -179,7 +179,7 @@ class ProjectScaffolder:
             base_branch = Prompt.ask("Base branch", default=heuristics.base_branch, console=self.console)
             branch = Prompt.ask("Agent branch", default=heuristics.branch, console=self.console)
             test_cmd = Prompt.ask(
-                "Verification test command", default=heuristics.test_cmd, console=self.console
+                "Verification test command", default=heuristics.test_cmd or "python -m pytest", console=self.console
             )
             build_cmd = Prompt.ask(
                 "Verification build command (optional)",

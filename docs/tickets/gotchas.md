@@ -237,4 +237,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When appending entries such as `.agent/` to existing `.gitignore` files, missing trailing newlines can concatenate strings onto existing lines (corrupting previous ignore rules). Furthermore, naive filesystem scaffolding without un-resolved symlink inspection allows symlink traversal or overwriting linked files if a target path is an existing symlink pointing outside or inside the project directory.
 - **Solution:** Check the trailing newline of `.gitignore` content before appending (`prefix = "" if (not content or content.endswith("\n") or content.endswith("\r\n")) else "\n"`), and validate raw un-resolved paths (`raw_target.is_symlink()`) as well as resolved relative containment (`target.resolve().is_relative_to(resolved_root)`) before creating files or directories during scaffolding.
 
+---
+
+## CLI Two-Tier Configuration Resolution, Subparser Defaults & Scaffolding Fallbacks
+
+- **Problem:** When integrating two-tier configuration resolution (`~/.ticket-runner/config.yaml` + `<project-dir>/ticket-runner.yaml`) into CLI commands (`doctor`, `start`), top-level `--config` arguments with defaults (like `default=Path("config.yaml")`) clobber two-tier resolution, treating every invocation as an explicit config request and preventing automated fallback to `ticket-runner.yaml`. In addition, scaffolding un-manifested or empty repositories produces an empty `test_cmd: ""`, causing subsequent `VerificationConfig` and doctor pre-flight validation to immediately fail. Finally, omitting default models from `DEFAULT_MACHINE_CONFIG` causes initialized repositories to fail `Doctor.check_model` before a global user configuration is created.
+- **Solution:** In `ticket_runner.py:create_parser`, declare top-level `--config` with `default=None` and subparser `--config` flags with `default=argparse.SUPPRESS` so `main()` can cleanly detect when `--config` is explicitly specified by the user (overriding `project_config_path` while still merging over global configuration). In `ProjectScaffolder.scaffold`, fallback empty detected test commands to `"python -m pytest"` so generated overlays are immediately valid and executable on Windows PATH. In `DEFAULT_MACHINE_CONFIG`, seed baseline default models (`deepseek/deepseek-chat` and `qwen/qwen-plus`) matching `config.example.yaml` so two-tier pre-flight checks pass cleanly out of the box.
+
+
+
 
