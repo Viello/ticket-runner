@@ -154,3 +154,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Adding new operational invariants and guardrails to root living documents like `AGENTS.md` can inadvertently bloat always-loaded agent context windows if written as multi-sentence explanatory prose. Excessive prose increases context consumption across every subsequent turn and degrades prompt adherence.
 - **Solution:** Apply the `writing-for-agents` discipline strictly: lead with tight capitalized labels and positive prompts, formulate hard bounds numerically (e.g. 30 lines / 1,000 characters), prune explanatory commentary already covered in detailed specs, and keep statements checkable and dense.
 
+---
+
+## Nested Markdown Code Blocks in Setup Prompts & Two-Tier Configuration Clarity
+
+- **Problem:** When providing standalone copy-pasteable Markdown setup prompts containing inner fenced code blocks (` ```yaml `, ` ```powershell `) within top-level documentation like `README.md`, standard 3-backtick delimiters prematurely close the outer container block, corrupting markdown rendering on GitHub and CLI viewers. Furthermore, conflating machine-level infrastructure settings (Discord bot tokens, global token limits) with repository-level settings in configuration templates confuses developers and AI assistants configuring new projects.
+- **Solution:** Always enclose markdown templates containing inner fenced blocks in 4-backtick (` ````markdown ` ... ` ```` `) boundaries to guarantee clean parsing and syntax highlighting. Explicitly structure configuration documentation around the two-tier hierarchy: global machine settings in `~/.ticket-runner/config.yaml` vs minimal project overrides in `ticket-runner.yaml`, keeping the project overlay template lightweight and focused strictly on test commands, build commands, and branch names.
+
+
