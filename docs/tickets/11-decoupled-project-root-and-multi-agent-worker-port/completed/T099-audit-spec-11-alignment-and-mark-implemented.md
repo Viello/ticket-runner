@@ -1,5 +1,6 @@
 # T099 — Audit Spec 11 Alignment and Mark Spec Implemented
-Status: pending
+Status: completed
+Completed: 2026-09-23T14:04:30Z
 Spec: docs/specs/11-decoupled-project-root-and-multi-agent-worker-port.md
 Blocked by: T098
 Reasoning: medium

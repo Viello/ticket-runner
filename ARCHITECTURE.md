@@ -192,7 +192,8 @@ ticket-runner/
         ├── test_spec_03_worker.py
         ├── test_spec_04_gatekeeper.py
         ├── test_spec_06_state_ui.py
-        └── test_spec_07_model_selection.py
+        ├── test_spec_07_model_selection.py
+        └── test_spec_11_decoupled_runner.py
 ```
 
 ---
