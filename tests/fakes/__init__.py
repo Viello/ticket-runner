@@ -1,6 +1,7 @@
 """Test doubles and in-memory fakes for isolated testing."""
 
 from tests.fakes.fake_agent_worker import FakeAgentWorker
+from tests.fakes.fake_approval_gateway import FakeApprovalGateway
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_discord_gateway import DiscordCall, FakeDiscordGateway
 from tests.fakes.fake_discord_logger import DiscordLogCall, FakeDiscordLogger
@@ -15,6 +16,7 @@ __all__ = [
     "DiscordCall",
     "DiscordLogCall",
     "FakeAgentWorker",
+    "FakeApprovalGateway",
     "FakeCommandRunner",
     "FakeDiscordGateway",
     "FakeDiscordLogger",

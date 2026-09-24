@@ -1,6 +1,7 @@
 """Port definitions (protocols and interfaces) for external seams."""
 
 from runner.ports.agent_worker import AgentWorker
+from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.command_runner import CommandRunner, ProcessHandle
 from runner.ports.config_loader import ConfigLoader
 from runner.ports.discord_gateway import DiscordGateway, DiscordGatewayError
@@ -15,6 +16,7 @@ from runner.ports.ticket_repository import TicketRepository
 
 __all__ = [
     "AgentWorker",
+    "ApprovalGateway",
     "CommandRunner",
     "ConfigLoader",
     "DiscordGateway",

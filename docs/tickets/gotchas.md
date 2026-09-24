@@ -251,6 +251,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Verification and harness logs can contain multi-megabyte transcripts, terminal color escape codes, and binary noise. Dumping raw logs into Worker prompts rapidly blows up LLM context budgets, while truncating characters before stripping ANSI codes miscalculates token size and risks slicing escape sequences mid-byte. Furthermore, standard Python `Enum` singletons cannot attach runtime instance attributes (like rejection reasons) without mutating global enum state across concurrent checks.
 - **Solution:** In `EvidenceTriage`, isolate the first failing test and error trace, strip ANSI escape sequences before bounding to `<=` 30 lines and `<=` 1,000 characters, and write `summary.json` atomically via `atomic_write_text`. In `ApprovalDecision`, implement a pure callable clone pattern (`ApprovalDecision.REJECT(reason="...")`) using `object.__new__` with custom `__eq__` and `__hash__`, preserving enum member identity while carrying immutable decision reasons. Defensively validate ticket IDs in `RuntimePaths.evidence_dir(ticket_id)` against `TICKET_ID_PATTERN` to block path traversal.
 
+---
+
+## ApprovalGateway Async Protocol Port & Fake Test Double Exhaustion Fail-Fast
+
+- **Problem:** Human verification adapters (both interactive terminal prompts and Discord bot notifications) perform asynchronous I/O (blocking stdin, event waits, or network dispatches). Defining synchronous port methods would block the event loop or require threading workarounds. Additionally, if test doubles silently return `None` or default approvals when scripted decisions run out, tests with configuration bugs or runaway approval loops can pass erroneously or loop indefinitely.
+- **Solution:** Define `ApprovalGateway` with an `async def request_approval(card: EvidenceCard) -> ApprovalDecision` method marked with `@runtime_checkable Protocol`. In `FakeApprovalGateway`, store scripted decisions in a list, record all incoming `EvidenceCard` instances in `.received_cards`, and raise `IndexError` immediately if `request_approval` is invoked with no remaining decisions, ensuring test setups fail fast.
+
 
 
 
