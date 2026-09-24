@@ -258,6 +258,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Human verification adapters (both interactive terminal prompts and Discord bot notifications) perform asynchronous I/O (blocking stdin, event waits, or network dispatches). Defining synchronous port methods would block the event loop or require threading workarounds. Additionally, if test doubles silently return `None` or default approvals when scripted decisions run out, tests with configuration bugs or runaway approval loops can pass erroneously or loop indefinitely.
 - **Solution:** Define `ApprovalGateway` with an `async def request_approval(card: EvidenceCard) -> ApprovalDecision` method marked with `@runtime_checkable Protocol`. In `FakeApprovalGateway`, store scripted decisions in a list, record all incoming `EvidenceCard` instances in `.received_cards`, and raise `IndexError` immediately if `request_approval` is invoked with no remaining decisions, ensuring test setups fail fast.
 
+---
+
+## Gatekeeper Human Approval Fail-Closed Authorization, EvidenceCard Sourcing & Rejection Prompt Sanitization
+
+- **Problem:** When introducing a human approval gate to `VerificationLoop`, naive implementations risk leaking commits if verification passes while the approval gateway is unconfigured, or if an unexpected/null decision is received. In addition, sourcing smoke scenarios from ephemeral signals rather than parsed ticket markdown causes inconsistencies between what the human verified and what was specified. Furthermore, un-sanitized operator rejection feedback passed directly into worker prompts can leak secrets or inject adversarial directives, while unbounded feedback can degrade worker context tokens.
+- **Solution:** In `VerificationLoop`, enforce strict fail-closed authorization: in `"human"` mode, no commit or pass result is reachable without an explicit `ApprovalDecision.APPROVE`; missing gateways, unhandled decisions, or operator errors raise `UserAbortError` immediately. Source `smoke_scenarios` on `EvidenceCard` directly from the ticket's parsed markdown (`Ticket.smoke_scenarios`). Sanitize operator rejection reasons in `_format_rejection_hint` by stripping ANSI escape sequences, masking secret tokens/passwords, bounding text to `<= 400` characters and `<= 15` lines, and framing the hint cleanly as operator feedback for the worker retry prompt.
+
 
 
 

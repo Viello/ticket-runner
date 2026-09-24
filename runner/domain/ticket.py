@@ -55,6 +55,7 @@ class Ticket:
     security_required: bool = False
     reasoning: str = ""
     slug: str = ""
+    smoke_scenarios: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not TICKET_ID_PATTERN.match(self.id):
@@ -119,4 +120,10 @@ class Ticket:
                     object.__setattr__(self, "slug", stem[len(self.id) + 1 :])
             if not self.slug and self.title:
                 object.__setattr__(self, "slug", self.title.strip().lower().replace(" ", "-"))
+
+        if not isinstance(self.smoke_scenarios, tuple):
+            try:
+                object.__setattr__(self, "smoke_scenarios", tuple(self.smoke_scenarios))
+            except TypeError:
+                object.__setattr__(self, "smoke_scenarios", ())
 

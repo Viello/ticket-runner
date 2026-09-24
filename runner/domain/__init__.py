@@ -11,6 +11,7 @@ from runner.domain.config import (
     RunnerConfig,
     TokenBudgetConfig,
     UIConfig,
+    VALID_APPROVAL_MODES,
     VerificationConfig,
     WorkerConfig,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "TokenUsage",
     "UIConfig",
     "UserAbortError",
+    "VALID_APPROVAL_MODES",
     "VALID_RING_BUFFER_SOURCES",
     "VerificationConfig",
     "WorkerConfig",

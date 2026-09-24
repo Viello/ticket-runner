@@ -446,6 +446,7 @@ class YamlConfigLoader(ConfigLoader):
         lifecycle_kwargs: dict[str, Any] = {
             "queue_completion": lifecycle_dict.get("queue_completion", "standby"),
             "clean_slate": lifecycle_dict.get("clean_slate", "interactive"),
+            "approval_mode": lifecycle_dict.get("approval_mode", "autonomous"),
         }
         if "poll_interval" in lifecycle_dict:
             lifecycle_kwargs["poll_interval"] = lifecycle_dict["poll_interval"]

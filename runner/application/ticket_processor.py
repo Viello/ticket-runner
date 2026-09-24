@@ -38,6 +38,7 @@ from runner.domain.exceptions import DiscordGatewayError, SignalFormatError, Use
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket
+from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.status_publisher import StatusPublisher
@@ -74,6 +75,9 @@ class GatekeeperTicketProcessor:
         presence_coordinator: Any | None = None,
         runner_config: Any | None = None,
         discord_channel_id: str | None = None,
+        approval_gateway: ApprovalGateway | None = None,
+        approval_mode: str | None = None,
+        tui_coordinator: Any | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._notify_sink = notify
@@ -87,6 +91,17 @@ class GatekeeperTicketProcessor:
             self._discord_logger = getattr(discord_thread_manager, "_logger", None)
         self._presence_coordinator = presence_coordinator
         self._runner_config = runner_config
+        self._approval_gateway = approval_gateway
+        self._approval_mode = (
+            approval_mode
+            if approval_mode is not None
+            else (
+                getattr(getattr(runner_config, "lifecycle", None), "approval_mode", "autonomous")
+                if runner_config is not None
+                else "autonomous"
+            )
+        )
+        self._tui_coordinator = tui_coordinator
         self._discord_channel_id = (
             discord_channel_id
             if discord_channel_id is not None
@@ -488,6 +503,18 @@ class GatekeeperTicketProcessor:
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             ):
                 loop_kwargs["discord_thread_manager"] = self._discord_thread_manager
+            if "approval_gateway" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["approval_gateway"] = self._approval_gateway
+            if "approval_mode" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["approval_mode"] = self._approval_mode
+            if "tui_coordinator" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                loop_kwargs["tui_coordinator"] = self._tui_coordinator
         except (ValueError, TypeError):
             pass
 

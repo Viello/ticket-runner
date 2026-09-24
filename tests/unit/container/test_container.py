@@ -246,3 +246,31 @@ def test_build_bot_container_external_project_dir(tmp_path: Path) -> None:
 
     assert bot_container.project_dir == target
     assert bot_container.runtime_paths.root_dir == target / ".agent"
+
+
+def test_build_container_approval_gateway_none_in_autonomous_mode(tmp_path: Path) -> None:
+    from tests.fakes.fake_approval_gateway import FakeApprovalGateway
+
+    fake_gw = FakeApprovalGateway()
+    container = build_container(cwd=tmp_path, approval_gateway=fake_gw)
+
+    # In autonomous mode (default), approval_gateway is None
+    assert container.approval_gateway is None
+    assert container.processor._approval_gateway is None
+
+
+def test_build_container_approval_gateway_wired_in_human_mode(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from runner.container import _default_config
+    from runner.domain.config import LifecycleConfig
+    from tests.fakes.fake_approval_gateway import FakeApprovalGateway
+
+    base_cfg = _default_config()
+    cfg = replace(base_cfg, lifecycle=LifecycleConfig(approval_mode="human"))
+    fake_gw = FakeApprovalGateway()
+
+    container = build_container(config=cfg, cwd=tmp_path, approval_gateway=fake_gw)
+
+    assert container.approval_gateway is fake_gw
+    assert container.processor._approval_gateway is fake_gw
+    assert container.processor._approval_mode == "human"
