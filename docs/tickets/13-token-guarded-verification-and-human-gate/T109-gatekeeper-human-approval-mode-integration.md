@@ -2,6 +2,7 @@
 Status: pending
 Spec: docs/specs/13-token-guarded-verification-and-human-gate.md
 Blocked by: T107, T108
+Security: required
 
 ### Requirements
 - Extend `LifecycleConfig` with `approval_mode: str` field accepting `"autonomous"` (default) or `"human"`. Validate against an allowlist in `__post_init__`.
@@ -12,6 +13,7 @@ Blocked by: T107, T108
   4. On `REJECT`: loop back into Worker retry with the rejection reason as operator hint.
   5. On `DIAGNOSE`: open a diagnostic session (existing TUI session mechanism).
 - In `"autonomous"` mode, the approval gate is skipped entirely (existing behavior).
+- Enforce fail-closed authorization: in `"human"` mode, no commit can occur without an explicit `ApprovalDecision.APPROVE`.
 - Wire `ApprovalGateway` into the Composition Root (`runner/container.py`) — pass `None` in autonomous mode.
 - Jump-start: Work at the seam in `runner/application/gatekeeper.py` (`VerificationLoop.run()`). Read existing `VerificationLoopResult` factory methods. Modify `runner/domain/config.py` `LifecycleConfig`. Update `runner/container.py` to plumb the gateway. Anchor against the `InterventionGateway` plumbing pattern for how ports flow through the container.
 
@@ -22,7 +24,9 @@ Blocked by: T107, T108
 - `REJECT` → Worker retry with rejection reason injected as operator hint.
 - `DIAGNOSE` → existing diagnostic session flow triggered.
 - In autonomous mode, no `ApprovalGateway` call occurs.
-- Unit tests in `tests/unit/application/test_gatekeeper_human_approval.py` using `FakeApprovalGateway` cover: approve, reject-then-approve, autonomous bypass.
+- Security verification: in `"human"` mode, `VerificationLoop` enforces fail-closed authorization (no code commit or pass result is reachable without explicit `ApprovalDecision.APPROVE`; unhandled or missing decisions fail closed to reject/abort).
+- Security verification: operator rejection reason is bounded and safely formatted when constructing worker retry hints to prevent prompt injection or credential leakage.
+- Unit tests in `tests/unit/application/test_gatekeeper_human_approval.py` using `FakeApprovalGateway` cover: approve, reject-then-approve, autonomous bypass, and fail-closed handling.
 - Spec test in `tests/specs/test_spec_13_verification_and_approval.py` simulates a full ticket lifecycle with evidence triage, verification, and mock human approval.
 
 ### Smoke Scenarios
