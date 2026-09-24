@@ -6,6 +6,7 @@ from runner.application.crash_recovery import (
 )
 from runner.application.discord_thread_manager import DiscordThreadManager
 from runner.application.doctor import CheckResult, Doctor, DoctorReport
+from runner.application.evidence_triage import EvidenceTriage, TriageResult
 from runner.application.gatekeeper import (
     CommandOutcome,
     GatekeeperCommandExecutor,
@@ -61,6 +62,7 @@ __all__ = [
     "DoctorReport",
     "ESCALATED",
     "EscalationNotice",
+    "EvidenceTriage",
     "GatekeeperCommandExecutor",
     "GatekeeperTicketProcessor",
     "GatekeeperVerificationLoop",
@@ -76,6 +78,7 @@ __all__ = [
     "TicketOutcome",
     "TicketOutcomeStatus",
     "TicketProcessor",
+    "TriageResult",
     "VerificationLoop",
     "VerificationLoopResult",
     "VerificationLoopStatus",

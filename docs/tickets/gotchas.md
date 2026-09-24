@@ -244,6 +244,14 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When integrating two-tier configuration resolution (`~/.ticket-runner/config.yaml` + `<project-dir>/ticket-runner.yaml`) into CLI commands (`doctor`, `start`), top-level `--config` arguments with defaults (like `default=Path("config.yaml")`) clobber two-tier resolution, treating every invocation as an explicit config request and preventing automated fallback to `ticket-runner.yaml`. In addition, scaffolding un-manifested or empty repositories produces an empty `test_cmd: ""`, causing subsequent `VerificationConfig` and doctor pre-flight validation to immediately fail. Finally, omitting default models from `DEFAULT_MACHINE_CONFIG` causes initialized repositories to fail `Doctor.check_model` before a global user configuration is created.
 - **Solution:** In `ticket_runner.py:create_parser`, declare top-level `--config` with `default=None` and subparser `--config` flags with `default=argparse.SUPPRESS` so `main()` can cleanly detect when `--config` is explicitly specified by the user (overriding `project_config_path` while still merging over global configuration). In `ProjectScaffolder.scaffold`, fallback empty detected test commands to `"python -m pytest"` so generated overlays are immediately valid and executable on Windows PATH. In `DEFAULT_MACHINE_CONFIG`, seed baseline default models (`deepseek/deepseek-chat` and `qwen/qwen-plus`) matching `config.example.yaml` so two-tier pre-flight checks pass cleanly out of the box.
 
+---
+
+## Evidence Triage ANSI Stripping, Bounded Excerpts & Dynamic Enum Annotation
+
+- **Problem:** Verification and harness logs can contain multi-megabyte transcripts, terminal color escape codes, and binary noise. Dumping raw logs into Worker prompts rapidly blows up LLM context budgets, while truncating characters before stripping ANSI codes miscalculates token size and risks slicing escape sequences mid-byte. Furthermore, standard Python `Enum` singletons cannot attach runtime instance attributes (like rejection reasons) without mutating global enum state across concurrent checks.
+- **Solution:** In `EvidenceTriage`, isolate the first failing test and error trace, strip ANSI escape sequences before bounding to `<=` 30 lines and `<=` 1,000 characters, and write `summary.json` atomically via `atomic_write_text`. In `ApprovalDecision`, implement a pure callable clone pattern (`ApprovalDecision.REJECT(reason="...")`) using `object.__new__` with custom `__eq__` and `__hash__`, preserving enum member identity while carrying immutable decision reasons. Defensively validate ticket IDs in `RuntimePaths.evidence_dir(ticket_id)` against `TICKET_ID_PATTERN` to block path traversal.
+
+
 
 
 

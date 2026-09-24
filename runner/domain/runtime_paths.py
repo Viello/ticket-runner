@@ -53,6 +53,11 @@ class RuntimePaths:
         return self.root_dir / "logs"
 
     @property
+    def evidence_base_dir(self) -> Path:
+        """Base directory for verification evidence (.agent/evidence)."""
+        return self.root_dir / "evidence"
+
+    @property
     def state_path(self) -> Path:
         """Path to the runner state file (.agent/state.json)."""
         return self.root_dir / "state.json"
@@ -104,6 +109,12 @@ class RuntimePaths:
     def checkpoint_path(self, ticket_id: str) -> Path:
         """Path to a ticket's handoff checkpoint (.agent/checkpoints/{ticket_id}/handoff.md)."""
         return self.checkpoint_dir(ticket_id) / "handoff.md"
+
+    def evidence_dir(self, ticket_id: str) -> Path:
+        """Directory for a ticket's verification evidence (.agent/evidence/{ticket_id})."""
+        self._validate_ticket_id(ticket_id)
+        target = self.evidence_base_dir / ticket_id
+        return self._check_containment(target, self.evidence_base_dir)
 
     def session_log_path(self, ticket_id: str, session_id: str) -> Path:
         """Path to a worker session's JSONL telemetry log (.agent/logs/{ticket_id}_session_{session_id}.jsonl)."""
@@ -199,6 +210,17 @@ class RuntimePaths:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def ensure_evidence_base_dir(self) -> Path:
+        """Create and return the base evidence directory."""
+        self.evidence_base_dir.mkdir(parents=True, exist_ok=True)
+        return self.evidence_base_dir
+
+    def ensure_evidence_dir(self, ticket_id: str) -> Path:
+        """Create and return the ticket-specific evidence directory."""
+        d = self.evidence_dir(ticket_id)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def ensure_logs_dir(self) -> Path:
         """Create and return the logs directory."""
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -219,6 +241,8 @@ class RuntimePaths:
         self.ensure_signals_dir()
         self.ensure_questions_dir()
         self.ensure_checkpoints_dir()
+        self.ensure_evidence_base_dir()
         if ticket_id is not None:
             self.ensure_checkpoint_dir(ticket_id)
+            self.ensure_evidence_dir(ticket_id)
         self.ensure_logs_dir()
