@@ -1,6 +1,7 @@
 """Discord remote notification adapters."""
 
-from runner.adapters.discord import client, commands, logger, thread_listener
+from runner.adapters.discord import approval, client, commands, logger, thread_listener
+from runner.adapters.discord.approval import DiscordApprovalAdapter
 from runner.adapters.discord.client import DiscordClient
 from runner.adapters.discord.commands import register_commands
 from runner.adapters.discord.gateway import DiscordPyGateway
@@ -21,9 +22,11 @@ __all__ = [
     "COLOR_GREEN",
     "COLOR_RED",
     "COLOR_YELLOW",
+    "DiscordApprovalAdapter",
     "DiscordClient",
     "DiscordLoggerImpl",
     "DiscordPyGateway",
+    "approval",
     "chunk_payload",
     "client",
     "commands",

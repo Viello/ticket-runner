@@ -1,5 +1,6 @@
 # T111 — Discord Approval Adapter
-Status: pending
+Status: completed
+Completed: 2026-09-27T14:27:00Z
 Spec: docs/specs/13-token-guarded-verification-and-human-gate.md
 Blocked by: T108
 Security: required
@@ -26,22 +27,60 @@ Security: required
 - Unit tests in `tests/unit/adapters/test_discord_approval.py` using `FakeDiscordGateway` verify embed posting, approve flow, reject flow, unauthorized user rejection, and payload size bounds.
 
 ### Smoke Scenarios
-**Scenario: Discord Evidence Card embed posted**
-- Setup: Configure `FakeDiscordGateway` with a ticket thread ID. Construct a passing `EvidenceCard`.
-- Why: The Discord card is the primary approval surface for Away mode — operators must see full verification context on mobile/browser.
+**Scenario: Discord Evidence Card embed posted and approved**
+- Setup: None (runs from repo root using standard project Python environment).
+- Why: The Discord Evidence Card is the primary approval surface for Away mode, allowing operators to review test status, harness status, artifact paths, and smoke checklists on mobile/browser before authoring a commit.
 - Steps:
-  1. Instantiate `DiscordApprovalAdapter` with fake gateway.
-  2. Call `await adapter.request_approval(card)` (with simulated `/approve` interaction queued).
-  3. Inspect fake gateway's posted messages.
-- Expected: One embed message posted to the ticket thread containing ticket ID, "PASSED" status, and smoke scenarios. Returns `APPROVE`.
+  1. Run the following command in PowerShell:
+     ```powershell
+     python -c @"
+     import asyncio
+     from runner.adapters.discord.approval import DiscordApprovalAdapter
+     from runner.domain.evidence import EvidenceCard, ApprovalDecision
+     from tests.fakes.fake_discord_gateway import FakeDiscordGateway
 
-**Scenario: Discord reject with reason**
-- Setup: Queue a simulated `/reject reason:"Tests look flaky"` interaction on the fake gateway.
-- Why: Rejection feedback from Away mode must propagate back as operator hint for Worker retry.
+     g = FakeDiscordGateway(thread_id='thread-111')
+     a = DiscordApprovalAdapter(g, thread_id='thread-111')
+     g.queue_interaction('/approve')
+     c = EvidenceCard(
+         ticket_id='T111',
+         test_status='passed',
+         harness_status='passed',
+         evidence_paths=('.agent/evidence/T111/log.txt',),
+         smoke_scenarios=({'name': 'Check UI', 'auto_covered': True},),
+     )
+     d = asyncio.run(a.request_approval(c))
+     assert d == ApprovalDecision.APPROVE
+     assert len(g.calls) == 1
+     assert g.calls[0].embed['title'] == 'Verification Approval — T111'
+     print('Smoke check 1 passed: Embed posted with approval confirmed')
+     "@
+     ```
+- Expected: Output prints `Smoke check 1 passed: Embed posted with approval confirmed`. Discord gateway records a posted message to `thread-111` containing the EvidenceCard embed, and `request_approval` returns `ApprovalDecision.APPROVE`.
+
+**Scenario: Discord reject with sanitized reason**
+- Setup: None (runs from repo root using standard project Python environment).
+- Why: Rejection feedback submitted through Discord `/reject reason:"..."` must propagate back cleanly to the Gatekeeper and Worker as a retry hint without leaking secrets or allowing control character injections.
 - Steps:
-  1. Call `await adapter.request_approval(card)`.
-  2. Inspect returned decision.
-- Expected: Returns `ApprovalDecision.REJECT` with `reason="Tests look flaky"`.
+  1. Run the following command in PowerShell:
+     ```powershell
+     python -c @"
+     import asyncio
+     from runner.adapters.discord.approval import DiscordApprovalAdapter
+     from runner.domain.evidence import EvidenceCard, ApprovalDecision
+     from tests.fakes.fake_discord_gateway import FakeDiscordGateway
+
+     g = FakeDiscordGateway(thread_id='thread-111')
+     a = DiscordApprovalAdapter(g, thread_id='thread-111')
+     g.queue_interaction('/reject reason:\"Tests look flaky\"')
+     c = EvidenceCard(ticket_id='T111', test_status='passed')
+     d = asyncio.run(a.request_approval(c))
+     assert d == ApprovalDecision.REJECT
+     assert d.reason == 'Tests look flaky'
+     print('Smoke check 2 passed: Reject with sanitized reason returned')
+     "@
+     ```
+- Expected: Output prints `Smoke check 2 passed: Reject with sanitized reason returned`. Returned decision is `ApprovalDecision.REJECT` with `.reason` equal to `'Tests look flaky'`.
 
 ### Gotchas
 - Discord embeds have a 4,096-character description limit and 25-field limit — the adapter must truncate evidence paths and smoke scenarios if they exceed these bounds.

@@ -34,6 +34,7 @@ class DiscordClient:
         signal_repository: SignalRepository | None = None,
         presence_coordinator: PresenceCoordinator | None = None,
         state_coordinator: StateCoordinator | None = None,
+        approval_adapter: Any | None = None,
     ) -> None:
         if config is not None:
             self.config: DiscordConfig = (
@@ -54,6 +55,7 @@ class DiscordClient:
         self.signal_repository = signal_repository
         self.presence_coordinator = presence_coordinator
         self.state_coordinator = state_coordinator
+        self.approval_adapter = approval_adapter
         self.ready_event = asyncio.Event()
         self.ready_error: Exception | None = None
 
@@ -69,6 +71,10 @@ class DiscordClient:
             presence_coordinator=self.presence_coordinator,
             state_coordinator=self.state_coordinator,
         )
+        if self.approval_adapter is not None:
+            from runner.adapters.discord.approval import register_approval_commands
+
+            register_approval_commands(self.tree, self.approval_adapter)
 
     async def on_error(self, event_method: str, *args: Any, **kwargs: Any) -> None:
         """Handle errors in discord.py event dispatchers."""
