@@ -3,7 +3,7 @@
 Ticket Runner: an external multi-agent Python orchestrator that drives AI coding agents (OpenCode, Antigravity CLI) through a sequential directory queue under Target Project's `docs/tickets/` with independent verification, context handoffs, and Discord/terminal interaction.
 
 ## Implementation status
-Specs 01–12 (Doctor, Queue, Worker, Signal Protocol, Gatekeeper, Telemetry, Handoff, Dual Presence, Discord Bot, Config & Packaging, Living Documentation & Roadmap, Decoupled Root & Multi-Agent, Scaffolding & Skills Distribution) are implemented and tested. Spec 13 (Verification Subsystem & Human Gate) forms the planned roadmap.
+Specs 01–13 (Doctor, Queue, Worker, Signal Protocol, Gatekeeper, Telemetry, Handoff, Dual Presence, Discord Bot, Config & Packaging, Living Documentation & Roadmap, Decoupled Root & Multi-Agent, Scaffolding & Skills Distribution, Verification Subsystem & Human Gate) are implemented and tested.
 
 ## Read before designing
 - `ARCHITECTURE.md` — target Clean Architecture directory tree.
@@ -36,8 +36,8 @@ Specs 01–12 (Doctor, Queue, Worker, Signal Protocol, Gatekeeper, Telemetry, Ha
 ## Environment
 - Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
 - Dependencies: `discord.py`, `rich`, `pyyaml`, `pytest` (see `requirements.txt`). Discord token comes from the `DISCORD_BOT_TOKEN` env var — `config.yaml` stores only the var name, never the token.
-- Discord and terminal-UI adapters are not yet implemented.
-- No git hooks are installed yet (only `.sample` files in `.git/hooks/`).
+- Discord and terminal-UI adapters are implemented under `runner/adapters/discord/` and `runner/adapters/ui/`.
+- Pre-push hook guardrail is installed via `runner/adapters/git/pre_push_hook.py` reading `scripts/pre-push.sh`.
 
 ## Development workflow
 The project moves across four rungs. The human–agent pair drives all four interactively; the planned Ticket Runner automates the Queue Execution rung.

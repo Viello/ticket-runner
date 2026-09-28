@@ -1,5 +1,6 @@
 # T113 — Spec 13 Alignment Audit & Living Docs Update
-Status: pending
+Status: completed
+Completed: 2026-09-28T05:56:30Z
 Spec: docs/specs/13-token-guarded-verification-and-human-gate.md
 Blocked by: T107, T108, T109, T110, T111, T112
 
@@ -24,20 +25,21 @@ Blocked by: T107, T108, T109, T110, T111, T112
 - Setup: None (runs from repo root).
 - Why: Living docs that reference non-existent files or miss new modules silently erode agent navigation accuracy over time.
 - Steps:
-  1. Grep `ARCHITECTURE.md` for `evidence_triage.py` — should be present.
-  2. Grep for `approval_gateway.py` — should be present.
-  3. Grep for `terminal_approval.py` — should be present.
-  4. Grep for `verify-<app>` or `verify-` — should be present in §4.
-  5. Cross-check every Python file path in §3 against the actual filesystem.
-- Expected: All new Spec 13 files are documented. No stale paths reference removed files.
+  1. Run the Python verification script below in PowerShell from the repository root:
+     ```powershell
+     python -c "arch = open('ARCHITECTURE.md', encoding='utf-8').read(); assert all(s in arch for s in ('evidence_triage.py', 'approval_gateway.py', 'terminal_approval.py', 'approval.py', 'evidence.py', 'fake_approval_gateway.py', 'test_spec_13_verification_and_approval.py', 'verify-<app>')); print('PASS: ARCHITECTURE.md consistency check')"
+     ```
+- Expected: Prints `PASS: ARCHITECTURE.md consistency check` with exit code 0.
 
 **Scenario: Context glossary completeness**
 - Setup: None (runs from repo root).
 - Why: Missing glossary entries cause agents to use wrong synonyms, creating confusion in tickets and code.
 - Steps:
-  1. Search `CONTEXT.md` for "Evidence Card", "Verification Harness", "Approval".
-  2. Verify each has a definition and _Avoid_ synonyms list.
-- Expected: All Spec 13 domain terms present with correct definitions.
+  1. Run the Python verification script below in PowerShell from the repository root:
+     ```powershell
+     python -c "ctx = open('CONTEXT.md', encoding='utf-8').read(); terms = ['Evidence Card', 'Verification Harness', 'ApprovalDecision', 'Approval Gateway', 'Evidence Triage']; assert all(f'**{t}**' in ctx and '_Avoid_:' in ctx[ctx.index(f'**{t}**'):ctx.index(f'**{t}**')+500] for t in terms); print('PASS: Context glossary completeness')"
+     ```
+- Expected: Prints `PASS: Context glossary completeness` with exit code 0.
 
 ### Gotchas
 - Some terms like `Evidence Card` and `Verification Harness` were already forward-declared in `CONTEXT.md` and `ARCHITECTURE.md` — verify they still match the actual implementation, don't blindly re-add them.

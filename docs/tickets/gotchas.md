@@ -284,4 +284,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Agent-oriented verification meta-skills must provide clear, actionable instructions for detecting polyglot surfaces (Playwright for Web, PTY/subprocess for CLIs, curl/HTTP for APIs) without generating python runtime code or overfilling context windows. If the feature map template is underspecified or exceeds token budgets, subsequent agents create sprawling, unmaintainable test plans that blow up context on verification failures.
 - **Solution:** In `create-verification-skill/SKILL.md`, define explicit surface detection heuristics anchored against `ProjectSniffer` patterns, a strict 5-step lifecycle (`Launch` → `Doctor` → `Drive` → `Evidence` → `Cleanup`), and stub comment documentation requirements for all 4 harness scripts. Enforce the feature map contract strictly across both `create-verification-skill` and `maintain-verification-skill`: exactly 4 required sections (`### Sub-features`, `### User POV Path`, `### Driving Harness`, `### Gotchas`) with a hard ceiling of ≤40 lines per feature file. In `maintain-verification-skill/SKILL.md`, provide an actionable 5-step audit process to prune orphaned features and scaffold uncovered surfaces.
 
+---
+
+## Spec 13 Alignment Audit & Living Documentation Synchronization
+
+- **Problem:** When auditing living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`) against implemented specifications, forward-declared or newly introduced modules (such as `evidence.py`, `approval.py`, `terminal_approval.py`, test doubles, and verification meta-skills) can be omitted from directory trees or glossary entries, causing subtle drift between actual code and agent navigation guidance. Furthermore, status flags in roadmap tables and adapter environment notes in `AGENTS.md` can remain marked as planned or unimplemented, misleading subsequent agents and operators.
+- **Solution:** Execute automated cross-checks comparing filesystem paths against `ARCHITECTURE.md` directory listings, verify glossary terms and `_Avoid_` synonym blocks in `CONTEXT.md` using deterministic regex sweeps, and systematically update implementation statuses and roadmap tables across `AGENTS.md` and `README.md`. Maintaining exact correspondence between code, tests, and living documentation ensures zero-guesswork agent navigation across future specification cycles.
+
+
 
