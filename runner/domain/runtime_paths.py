@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_AGENT_DIR = Path(".agent")
-SESSION_ID_PATTERN = re.compile(r"^ses_[A-Za-z0-9]+$")
+SESSION_ID_PATTERN = re.compile(
+    r"^(?:ses_[A-Za-z0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
 TICKET_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def is_valid_session_id(session_id: object) -> bool:
-    """Return True if session_id matches the OpenCode session allowlist (^ses_[A-Za-z0-9]+$)."""
+    """Return True if session_id matches the session allowlist (^ses_[A-Za-z0-9]+$ or UUID)."""
     if not isinstance(session_id, str):
         return False
     return bool(SESSION_ID_PATTERN.match(session_id))
