@@ -1,0 +1,153 @@
+# Spec 15 — Multi-Agent Hardening & External Live-Test Site
+
+## Destination
+
+Close the Antigravity integration gaps AND land a four-part external live-test
+site cluster:
+
+1. **`D:\Sandbox\ticket-runner-live-target\`** — disposable external sandbox for one-off
+   experiments.
+2. **`D:\Projects\live-test-target/`** — in-repo debugging harness for self-test
+   (git-ignored from `D:\Projects`).
+3. **`D:\Repos\agent-runner-driver\`** → driving **`D:\Repos\agent-skills\`** (a clone of
+   `https://github.com/Viello/agent-skills`) — a real upstream Target Project where the
+   agentic-coding workflow operates against a live skills catalog, with the option of
+   replacing `scripts/publish_agent_skills.py` with a ticket-driven publication flow.
+4. **(TBD)** — a completely-empty starter directory used to exercise the runner's
+   scaffolding and startup against a fresh slate.
+
+### Antigravity scope (revised after T002 research)
+
+The originally proposed "three hardening gaps" turned out to be one critical fix
+plus two hardening items:
+
+- **T018 (critical fix)** — the existing
+  `runner/adapters/antigravity/antigravity_worker.py:55` hardcodes
+  `cmd = ["agy", "run", "--auto", prompt]` but `agy` has no `run` subcommand and
+  no `--auto` flag. Every existing call fails immediately with exit code 2.
+  T018 rewrites the adapter to the empirical surface captured by T002
+  (`agy -p "<prompt>" --output-format stream-json --effort <level> --model <slug>
+  --conversation <uuid> --print-timeout <dur>`).
+- **T003 (hardening)** — add `test_live_antigravity_smoke.py` gated on
+  `TICKET_RUNNER_LIVE=1` (post-T018).
+- **T001 + T004 (hardening)** — env-var path override `AGENT_ANTIGRAVITY_BIN`
+  (and symmetric `AGENT_OPENCODE_BIN`) through Doctor pre-flight.
+
+When this map's last ticket (the spec-closing alignment ticket, T099) closes, a
+developer should be able to:
+
+- Run `pytest tests/unit/adapters/test_live_antigravity_smoke.py` (gated on
+  `TICKET_RUNNER_LIVE=1`) against a real `agy` binary and get a green signal.
+- Set `AGENT_ANTIGRAVITY_BIN=/custom/path/to/agy` and have the Doctor pre-flight use it.
+- Set `AGENT_OPENCODE_BIN=/custom/path/to/opencode` symmetrically.
+- Point the runner at any of the four live-test sites and watch the full scaffolding →
+  doctor → ticket-loop → gatekeeper → commit pipeline execute end-to-end.
+
+## Notes
+
+- **Domain**: Ticket Runner's multi-agent adapter layer (`runner/adapters/antigravity/`,
+  `runner/adapters/opencode/`), the `Doctor` pre-flight (`runner/application/doctor.py`),
+  the external `--project-dir` mechanism (Spec 11), and the live-test scaffolding
+  discipline (Spec 12).
+- **Skills every session should consult**: `grilling`, `domain-modeling`, `implement`,
+  `create-verification-skill` (if T012 resolves "yes"), `maintain-verification-skill`
+  (post-creation).
+- **Standing preferences** (per `AGENTS.md` invariants):
+  - No commit-numbered titles; `<type>(<scope>): <Title>` only.
+  - Single commit per ticket authored by the Gatekeeper.
+  - `.agent/` is untracked runtime state — git-ignore it when implementing.
+  - Source-of-truth hierarchy: working code + tests + CLI interfaces > markdown
+    documentation.
+  - Spec-closing alignment ticket (T099) audits and updates root living documents
+    (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) only if architectural details shifted.
+  - Never `git push`; `.git/hooks/pre-push` blocks pushes on `agent/ticket-runner`.
+  - Worker never commits directly; Gatekeeper alone commits.
+- **External project root resolution**: all `.agent/`, `docs/tickets/`,
+  `.agents/skills/`, and `ticket-runner.yaml` paths resolve relative to the Target
+  Project root, not to the Runner source repo.
+
+## Decisions so far
+
+<!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
+
+- [T001 — Confirm `AGENT_ANTIGRAVITY_BIN` and write ADR-0023](T001-confirm-agent-antigravity-bin-env-var-and-adr-0023.md):
+  locked single-underscore family convention `AGENT_ANTIGRAVITY_BIN` (and symmetric
+  `AGENT_OPENCODE_BIN`); rejected double-underscore (`__`) per Rails/pydantic-settings
+  nested-key precedent being inapplicable to flat category:provider:field triples;
+  resolution priority is env-var → `shutil.which`; case-sensitive (POSIX); fail loud
+  if env-var points at invalid path. Research: branch `research/agent-backend-env-var-convention`
+  (commit `652b209`).
+- [T002 — Empirical `agy` CLI flag surface](T002-empirical-agy-cli-flag-surface.md):
+  `agy` 1.2.16 has no `run` subcommand and no `--auto` flag; canonical invocation is
+  `agy -p "<prompt>" --output-format stream-json [--effort low|medium|high|xhigh|max]
+  [--model <slug>] [--continue|--conversation <uuid>] [--print-timeout <dur>]`;
+  NDJSON envelope is `event: {init, step_update, result}`; usage at
+  `step_update.usage` / `result.usage` with keys `input_tokens` / `output_tokens` /
+  `thinking_tokens` / `cache_read_tokens` / `total_tokens`; session id is
+  `conversation_id` (UUID, not `ses_*`); exit codes 0/1/2/3. **Comprehensive drift
+  between adapter and reality → new ticket T018.** Research: branch
+  `research/agy-flag-surface` (commit `0c30f9a`).
+
+## Not yet specified
+
+<!-- in-scope fog that can't yet be ticket-sized; graduates as the frontier advances -->
+
+- ~~Whether `AGENT_OPENCODE_BIN` ships symmetrically in T004 alongside
+  `AGENT_ANTIGRAVITY_BIN`~~ — resolved by T001: yes, both.
+- Whether the agent-skills driver becomes the canonical live-test site documented in
+  `live-test-sites.md`, or whether all four sites are presented equally.
+- Whether `scripts/publish_agent_skills.py` (current manual one-off publication to
+  Viello/agent-skills) is replaced by a ticket-driven publication flow in the agent-skills
+  driver, or whether the two coexist.
+- Whether the empty starter lives alongside `D:\Repos\agent-runner-driver\` or in a
+  separate scratch location.
+- Whether the agent-skills driver needs its own `.gitignore` in
+  `D:\Repos\agent-runner-driver\.gitignore` or relies on the runner's defaults.
+- Whether the agent-skills driver's `--project-dir` setup is replicated via a
+  `ticket-runner.yaml` `project_dir:` key (per Spec 11) instead of a CLI flag.
+- Whether the empty starter needs its own `verify-<app>` skill or rides on tier-0 smoke.
+- **Session-id allowlist decision (T018 internal)**: agy emits UUIDs as
+  `conversation_id`, not the `ses_<alphanumeric>` shape. Two options surfaced —
+  relax `SESSION_ID_PATTERN` to accept both, or translate inside the adapter.
+  Needs a grilling ticket if T018 cannot resolve it inline.
+- **T018 timing relative to live-test work**: T018 must land before any Antigravity
+  smoke test (T003) or live-test execution. Live-test site work (T005-T017) can
+  proceed in parallel with T018 since their scaffolds do not depend on a working
+  Antigravity backend.
+
+## Out of scope
+
+<!-- scope, not sharpness — ruled beyond the destination -->
+
+- A third agent backend (Claude Code, Aider, Cursor, etc.) — separate effort.
+- Refactoring the `AgentWorker` port or the `WorkerSupervisor` interactor.
+- Replacing Ticket Runner's `docs/tickets/` queue with the wayfinder skill's
+  `.scratch/` local-markdown tracker.
+- Publishing the live-test sites or making them reproducible across machines.
+- Adding CI to publish jobs; running the agent-skills driver in continuous integration.
+- Migrating `scripts/publish_agent_skills.py`'s caller code paths wholesale — T016 may
+  flag it as a target but the migration itself is out of scope.
+
+<!-- ticket index: every ticket carries a Type label per ADR-0023; maps are untyped -->
+
+<!-- T001 — Confirm `AGENT_ANTIGRAVITY_BIN` and write ADR-0023 — CLOSED — wayfinder:grilling (HITL)
+- T002 — Empirical `agy` CLI flag surface — CLOSED — wayfinder:research (AFK)
+- T003 — Add `test_live_antigravity_smoke.py` — wayfinder:task (AFK) — blocked by T018
+- T004 — Plumb `AGENT_ANTIGRAVITY_BIN` and `AGENT_OPENCODE_BIN` through Doctor — wayfinder:task (HITL) — blocked by T001 (unblocked)
+- T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\` — wayfinder:grilling (HITL)
+- T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005
+- T007 — Lock the in-repo harness layout and `.gitignore` rules — wayfinder:grilling (HITL)
+- T008 — Scaffold the in-repo harness at `D:\Projects\live-test-target/` — wayfinder:task (AFK) — blocked by T007
+- T009 — Lock the empty-starter design — wayfinder:grilling (HITL)
+- T010 — Create the empty starter — wayfinder:task (AFK) — blocked by T009
+- T011 — Write `docs/agents/live-test-sites.md` describing all four sites — wayfinder:task (HITL) — blocked by T006, T008, T010, T015
+- T012 — Does each live-test site need a `verify-<app>` skill? — wayfinder:grilling (HITL) — blocked by T006, T008, T015
+- T013 — Lock the agent-skills cluster layout — wayfinder:grilling (HITL)
+- T014 — Clone `https://github.com/Viello/agent-skills` to `D:\Repos\agent-skills\`, install pre-push hook — wayfinder:task (AFK) — blocked by T013
+- T015 — Scaffold `D:\Repos\agent-runner-driver\` — wayfinder:task (AFK) — blocked by T013
+- T016 — Decide: ship a starter ticket queue in the agent-skills driver — wayfinder:grilling (HITL)
+- T017 — (Conditional) Seed the demo ticket queue — wayfinder:task (AFK) — blocked by T016 = yes
+- T018 — Rewrite Antigravity adapter to match empirical CLI surface — wayfinder:task (HITL) — blocked by T002 (unblocked); critical-path
+- T019 — Push the wayfinder skill fix to Viello/agent-skills main — wayfinder:grilling (HITL) — blocked by T014, T018
+- T099 — Spec-closing alignment ticket — wayfinder:task (HITL) — blocked by all (incl. T019)
+-->
