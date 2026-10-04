@@ -1,5 +1,6 @@
 # T117 — Root living documents re-pointed at the live-qa ritual
-Status: pending
+Status: completed
+Completed: 2026-10-04T07:06:00Z
 Spec: docs/specs/14-live-qa-replacement.md
 Blocked by: T116
 

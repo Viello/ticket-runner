@@ -120,8 +120,12 @@ _Avoid_: State manager, DB, cache
 The local terminal user interface built with Rich Live that renders the pinned status header, token gauge, scrolling telemetry ring buffer, and hotkey legends during execution.
 _Avoid_: Dashboard, console UI, terminal viewer
 
-**Smoke Scenarios**:
-The named, human-executable verification scripts embedded in each ticket under `### Smoke Scenarios`. Each scenario specifies Setup (synthetic conditions to manufacture), Steps (numbered operator actions), and Expected (observable outcome). Populated during ticket drafting; audited for automated coverage by the Worker at Smoke Scenarios Handoff; human-action scenarios forwarded to the operator via terminal and ready signal.
+**Live QA Session**:
+The human-driven verification ritual invoked via `/live-qa` after green checks where the operator drives the live running application through interactive scenarios while the assistant records timestamped verdicts into `.agent/live-qa_log_<slug>.md` and optionally streams them to Discord via `ticket-runner notify`. Completely decoupled from the automated Gatekeeper.
+_Avoid_: Smoke test session, manual testing, human verification run, smoke run
+
+**Smoke Scenarios (Superseded)**:
+The historical, pre-Spec 14 human-executable verification scripts embedded in tickets under `### Smoke Scenarios` and logged by the Gatekeeper. Superseded by the out-of-band `Live QA Session` ritual; legacy headings are tolerated by the parser as inert markdown.
 _Avoid_: Manual Verification, Human Verification, Operator Checklist, manual tests
 
 **Target Project**:

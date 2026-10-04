@@ -1262,6 +1262,40 @@ def test_cli_main_project_dir_forwarded_to_run_start(
     assert captured_args["local_only"] is True
 
 
+def test_parser_notify_help() -> None:
+    """--help on notify subcommand exits 0."""
+    parser = ticket_runner.create_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["notify", "--help"])
+    assert exc_info.value.code == 0
+
+
+def test_parser_notify_requires_message() -> None:
+    """notify without message argument raises argument error (code 2)."""
+    parser = ticket_runner.create_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["notify"])
+    assert exc_info.value.code == 2
+
+
+def test_parser_notify_with_message() -> None:
+    """notify subcommand parses message argument correctly."""
+    parser = ticket_runner.create_parser()
+    args = parser.parse_args(["notify", "live-qa: scenario 1 — verified"])
+    assert args.command == "notify"
+    assert args.message == "live-qa: scenario 1 — verified"
+
+
+def test_parser_notify_with_project_dir_and_config() -> None:
+    """notify subcommand supports --project-dir and --config."""
+    parser = ticket_runner.create_parser()
+    args = parser.parse_args(["--project-dir", "custom_dir", "notify", "hello", "--config", "custom_config.yaml"])
+    assert args.command == "notify"
+    assert args.message == "hello"
+    assert args.project_dir == Path("custom_dir")
+    assert args.config == Path("custom_config.yaml")
+
+
 
 
 

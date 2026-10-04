@@ -57,6 +57,5 @@ Remove the smoke-scenario data path end to end — Ticket entity, ready Signal f
 
 ## Further Notes
 
-- **Migration overlap**: between this spec's ticket `live-qa` skill publication (done: catalog commit `ca62e3e`) and the last replacement ticket landing, both mechanisms nominally exist; in-flight Spec 13-era tickets keep their scenario sections as harmless inert text. This is expected, not a bug.
 - The live-qa log path `.agent/live-qa_log_<slug>.md` is authored solely by the skill session, keeping durable-verification authorship with the human.
-- Domain vocabulary per CONTEXT.md: Runner, Worker, Ticket, Queue, Gatekeeper, Evidence Card, Presence Mode (Nearby/Away), Circuit Breaker, Gotchas.
+- Domain vocabulary per CONTEXT.md: Runner, Worker, Ticket, Queue, Gatekeeper, Evidence Card, Presence Mode (Nearby/Away), Circuit Breaker, Gotchas, Live QA Session.

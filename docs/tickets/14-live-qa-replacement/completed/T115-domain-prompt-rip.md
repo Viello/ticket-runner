@@ -1,5 +1,6 @@
 # T115 — Domain and Worker prompt rip: scenario data dies at the source
-Status: pending
+Status: completed
+Completed: 2026-10-04T06:42:00Z
 Spec: docs/specs/14-live-qa-replacement.md
 Blocked by: None
 Security: required
@@ -21,11 +22,20 @@ Security: required
 - Security verification: signal-parsing hardening that survives (ANSI stripping, path/traversal guards, git-header injection protections on surviving fields) remains covered by tests; removing the validator must not widen the trusted surface of any remaining field.
 
 ### Smoke Scenarios
-**Scenario: legacy ticket parses inertly**
-- Setup: An old Spec-13 ticket file with a populated `### Smoke Scenarios` section, copied into a scratch `docs/tickets/` fixture dir.
-- Why: Completed tickets from earlier specs must remain readable by the Doctor/Queue once the field is gone.
-- Steps: 1. Parse the legacy file with `TicketMarkdownParser`. 2. Inspect the resulting `Ticket`. 3. Write a ready signal JSON that still carries `manual_verification` and load it with the signal parser.
-- Expected: No exceptions; no scenario data on the `Ticket`; the legacy signal loads with the unknown key tolerated.
+**Scenario: legacy ticket parses inertly** [also auto-covered]
+- Setup: A completed ticket from earlier specs (`docs/tickets/14-live-qa-replacement/completed/T114-discord-notify-one-shot-cli.md`) that carries a populated `### Smoke Scenarios` section.
+- Why: Completed tickets and legacy signals from earlier specs must remain readable by the Doctor, Queue, and Gatekeeper without raising exceptions or populating non-existent scenario attributes.
+- Steps:
+  1. Open a PowerShell terminal in the repository root (`d:\Projects`).
+  2. Run the legacy parser and signal compatibility verification one-liner:
+     ```powershell
+     python -c "from pathlib import Path; from runner.adapters.markdown.parser import TicketMarkdownParser; from runner.domain.signal import ReadySignal; t = TicketMarkdownParser().parse(Path('docs/tickets/14-live-qa-replacement/completed/T114-discord-notify-one-shot-cli.md')); assert not hasattr(t, 'smoke_scenarios'); payload = dict(ticket_id='T114', status='ready_for_verification', modified_files=[], self_review_notes='ok', new_gotchas=[], timestamp='2026-10-04T00:00:00Z', manual_verification=[dict(name='old')]); s = ReadySignal.parse(payload, 'T114'); assert not hasattr(s, 'manual_verification'); print('Legacy compatibility verified: clean parse and unknown-key tolerance confirmed.')"
+     ```
+- Expected:
+  - The command exits with return code 0.
+  - Output displays: `Legacy compatibility verified: clean parse and unknown-key tolerance confirmed.`.
+  - The parsed `Ticket` object has no `smoke_scenarios` attribute.
+  - The parsed `ReadySignal` object tolerates the legacy `manual_verification` key without error and does not expose a `manual_verification` attribute.
 
 ### Gotchas
 - The empty-manual-verification warning in the Gatekeeper (lines 1255–1264) and `EvidenceCard` construction read these fields — coordinate so the suite never goes red mid-queue.

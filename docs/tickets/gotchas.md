@@ -291,5 +291,45 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When auditing living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`) against implemented specifications, forward-declared or newly introduced modules (such as `evidence.py`, `approval.py`, `terminal_approval.py`, test doubles, and verification meta-skills) can be omitted from directory trees or glossary entries, causing subtle drift between actual code and agent navigation guidance. Furthermore, status flags in roadmap tables and adapter environment notes in `AGENTS.md` can remain marked as planned or unimplemented, misleading subsequent agents and operators.
 - **Solution:** Execute automated cross-checks comparing filesystem paths against `ARCHITECTURE.md` directory listings, verify glossary terms and `_Avoid_` synonym blocks in `CONTEXT.md` using deterministic regex sweeps, and systematically update implementation statuses and roadmap tables across `AGENTS.md` and `README.md`. Maintaining exact correspondence between code, tests, and living documentation ensures zero-guesswork agent navigation across future specification cycles.
 
+---
 
+## Discord One-Shot Notification Lifecycle & Token Redaction Guardrails
+
+- **Problem:** Executing a one-shot notification CLI command (`ticket_runner.py notify <msg>`) without an injected gateway requires establishing a minimal connection with `discord.py`'s client (`client.start()`) to authenticate the HTTP session before resolving channels and posting messages. Awaiting readiness indefinitely or failing to handle errors can hang the CLI process. Furthermore, if network or Discord API exceptions happen to contain the secret bot token, echoing raw exceptions to stderr would compromise bot credentials.
+- **Solution:** In `run_notify`, await `client.ready_event.wait()` with a 30-second timeout guard, inspect `client.ready_error` for fast failure reporting, and ensure `client.close()` and task cleanup unconditionally execute in a `finally` block. Defensively sanitize all error outputs by redacting `token_val` if present in exception strings, and validate that `channel_id` is a numeric snowflake before initiating connection tasks.
+
+---
+
+## Domain Scenario Data Rip & Legacy Unknown-Key Tolerance at the Signal Boundary
+
+- **Problem:** Removing the smoke scenario data path from `Ticket` and `ReadySignal` risks runtime crashes when loading historical ticket markdown files or processing in-flight ready signals that still include legacy `manual_verification` payloads. If `ReadySignal.parse` strictly enforces a schema without unknown-key tolerance, legacy signals from earlier specifications or other workers cannot be loaded. Furthermore, downstream components like `Gatekeeper` and `TicketProcessor` that access `ready_signal.manual_verification` or `ready_signal.manual_verification_is_default` directly will raise `AttributeError` when those fields are deleted from domain dataclasses.
+- **Solution:** Remove `smoke_scenarios` from `Ticket` and remove `_parse_smoke_scenarios` from `TicketMarkdownParser`, treating `### Smoke Scenarios` sections as inert ignored text. Remove `manual_verification` from `ReadySignal` dataclass and validator; decode payloads purely through required fields so extra/legacy keys like `manual_verification` pass through tolerated without error. In `Gatekeeper` and `TicketProcessor`, defensively guard legacy scenario access with `getattr(..., "manual_verification", ())` and `getattr(..., "manual_verification_is_default", True)` during intermediate migration states. In `PromptBuilder`, filter legacy invariant lines and instruct the human-driven `/live-qa` discipline directly.
+
+---
+
+## Evidence Card Scenario Rip & Surviving Field Limits Clamping
+
+- **Problem:** Removing smoke scenarios from `EvidenceCard` and approval adapters (`TerminalApprovalAdapter`, `DiscordApprovalAdapter`) risks breaking shared field limit enforcement and secret redaction. In Discord approval embeds, scenario checklist rendering previously drove multi-field pagination (`Smoke Scenarios (cont. N)`) alongside 1024-character value truncation and 25-field caps. Stripping the scenario loop could accidentally remove the 1024/25 limit enforcement on surviving fields (`Evidence Paths`, `Test Status`, `Harness Status`) or miss secret scrubbing on paths. In `Gatekeeper`, dropping scenario sourcing, checklist printing, and commit-body injection must not bypass the fail-closed human approval gate (`ApprovalDecision.APPROVE` required to proceed).
+- **Solution:** In `runner/adapters/discord/approval.py`, remove only the scenario formatting loop and field-chunking closure while retaining the 1024-character truncation on `Evidence Paths`, secret scrubbing (`_scrub_secrets`), and the final `fields[:MAX_DISCORD_FIELDS_COUNT]` clamp. In `EvidenceCard`, eliminate `smoke_scenarios` while preserving immutable tuple coercion for `evidence_paths`. In `VerificationLoop`, strip out `_append_smoke_log`, scenario fallback sourcing, warning logs, and commit-body injection while keeping the fail-closed human approval decision gate completely intact.
+
+---
+
+## Living Document Alignment for Human-Driven Live-QA & Invariants Mirroring
+
+- **Problem:** When replacing an automated or worker-generated verification discipline (smoke scenarios) with a human-driven verification ritual (`/live-qa`), living documents (`AGENTS.md`, `README.md`) can retain stale instructions commanding agents to author, echo, or log scenarios. Because `PromptBuilder` dynamically extracts invariants from `AGENTS.md` under `## Invariants`, any leftover scenario rules in `AGENTS.md` silently re-inject obsolete completion gates into future worker prompts.
+- **Solution:** Re-point `AGENTS.md` and `README.md` at the `/live-qa` verification contract using surgical edits guided by `/writing-for-agents` principles: front-load leading words (`live-qa`, `Evidence Card`, `Gatekeeper`), state target human verification behavior positively, explicitly state log path (`.agent/live-qa_log_<slug>.md`) and refusal-in-absence semantics, and ensure no lines command agents to author, embed, echo, or log scenarios. Verify with case-insensitive pattern searches that only legitimate survivors (such as transport checks or recovery skills like `/smoke-fail`) remain.
+
+---
+
+## Skill Catalog Retargeting & Vendor Sync Guardrails
+
+- **Problem:** When re-targeting skill catalogs (`smoke-fail`, `to-tickets`, `implement`) from legacy smoke-scenario mechanisms to human-driven verification (`/live-qa`), unit tests like `test_smoke_fail_recovery_skill_ticket_runner_template_is_valid` that dynamically parse skill markdown templates will fail if their assertions expect legacy section headings or requirements text. Additionally, syncing skills to external catalogs (`Viello/agent-skills`) requires careful handling of project-specific queue sections without introducing personal paths or leaking internal references.
+- **Solution:** Align parser unit test assertions with the updated live-qa regression ticket template (`# T<NNN> — Regression: <Scenario Title>` and live-qa session reference). Apply `/writing-for-agents` principles to frame requirements positively without prescriptive negative phrases. Ensure identical synchronization between vendored skills in `.agents/skills/` and the canonical `Viello/agent-skills` repository, verifying that public repos contain clean, portable Markdown without internal paths or personal environment leaks.
+
+---
+
+## Spec 14 Closing Alignment Audit, Glossary Synchronization & Living Document Parity
+
+- **Problem:** When retiring legacy verification mechanisms (smoke scenarios) across multiple implementation tickets, residual references can linger in secondary documentation (`ARCHITECTURE.md` directory trees, Spec "migration overlap" notes, and `CONTEXT.md` glossary definitions). Deleting obsolete glossary entries outright violates the repository rule that historical entries must be marked superseded rather than deleted, while leaving them active misleads future agents into generating dead artifacts.
+- **Solution:** In `CONTEXT.md`, retain `Smoke Scenarios (Superseded)` while introducing `Live QA Session` with explicit `_Avoid_` synonyms (`Smoke test session`, `manual testing`, `human verification run`, `smoke run`). In `ARCHITECTURE.md`, synchronize CLI entry points to include `bot` and `notify`, and update the runtime state tree from `smoke_log_<spec-slug>.md` to `live-qa_log_<spec-slug>.md`. In Spec 14 (`docs/specs/14-live-qa-replacement.md`), retire the "migration overlap" note now that both code, signals, adapters, and prompt invariants fully operate under the unified live-qa verification discipline.
 

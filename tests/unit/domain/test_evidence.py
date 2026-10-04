@@ -76,13 +76,13 @@ def test_evidence_card_frozen_dataclass() -> None:
         test_status="passed",
         harness_status="passed",
         evidence_paths=("evidence/T107/harness.log", "evidence/T107/screenshot.png"),
-        smoke_scenarios=({"name": "Large log stays bounded"},),
     )
     assert card.ticket_id == "T107"
     assert card.test_status == "passed"
     assert card.harness_status == "passed"
     assert card.evidence_paths == ("evidence/T107/harness.log", "evidence/T107/screenshot.png")
-    assert len(card.smoke_scenarios) == 1
+    assert not hasattr(card, "smoke_scenarios")
+    assert "smoke_scenarios" not in EvidenceCard.__dataclass_fields__
 
     with pytest.raises(FrozenInstanceError):
         card.ticket_id = "T999"  # type: ignore[misc]
@@ -94,11 +94,9 @@ def test_evidence_card_coercion_and_defaults() -> None:
         ticket_id="T107",
         test_status="failed",
         evidence_paths=["file1.log", "file2.png"],  # type: ignore[arg-type]
-        smoke_scenarios=["scenario 1"],  # type: ignore[arg-type]
     )
     assert card.harness_status is None
     assert card.evidence_paths == ("file1.log", "file2.png")
-    assert card.smoke_scenarios == ("scenario 1",)
 
 
 def test_evidence_card_validation() -> None:

@@ -46,10 +46,6 @@ def sample_card() -> EvidenceCard:
         test_status="passed",
         harness_status="passed",
         evidence_paths=(".agent/evidence/T110/output.log",),
-        smoke_scenarios=(
-            {"name": "Terminal approve via keystroke", "auto_covered": True},
-            {"name": "Terminal reject with reason", "auto_covered": False},
-        ),
     )
 
 
@@ -70,8 +66,7 @@ def test_render_card_contents(sample_card: EvidenceCard) -> None:
     assert "T110" in rendered
     assert "PASSED" in rendered
     assert ".agent/evidence/T110/output.log" in rendered
-    assert "Terminal approve via keystroke" in rendered
-    assert "Terminal reject with reason" in rendered
+    assert "Smoke Scenarios" not in rendered
     assert "[y]" in rendered
     assert "[n]" in rendered
     assert "[d]" in rendered
@@ -201,13 +196,12 @@ async def test_request_approval_sync_inside_running_loop(sample_card: EvidenceCa
     assert decision == ApprovalDecision.APPROVE
 
 
-def test_render_card_empty_paths_and_scenarios() -> None:
+def test_render_card_empty_paths() -> None:
     card = EvidenceCard(
         ticket_id="T110",
         test_status="failed",
         harness_status="failed",
         evidence_paths=(),
-        smoke_scenarios=(),
     )
     out = io.StringIO()
     console = Console(file=out, width=80, force_terminal=False)
@@ -218,27 +212,9 @@ def test_render_card_empty_paths_and_scenarios() -> None:
     rendered = out.getvalue()
 
     assert ".agent/evidence/T110/" in rendered
-    assert "(none)" in rendered
     assert "FAILED" in rendered
     assert "Harness Status:" in rendered
-
-
-def test_render_card_string_scenarios() -> None:
-    card = EvidenceCard(
-        ticket_id="T110",
-        test_status="passed",
-        smoke_scenarios=("Manual Smoke Step 1", "Manual Smoke Step 2"),
-    )
-    out = io.StringIO()
-    console = Console(file=out, width=80, force_terminal=False)
-    adapter = TerminalApprovalAdapter(console=console)
-
-    panel = adapter.render_card(card)
-    console.print(panel)
-    rendered = out.getvalue()
-
-    assert "Manual Smoke Step 1" in rendered
-    assert "Manual Smoke Step 2" in rendered
+    assert "Smoke Scenarios" not in rendered
 
 
 @pytest.mark.anyio

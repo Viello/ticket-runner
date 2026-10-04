@@ -126,14 +126,6 @@ async def test_full_discord_lifecycle_with_fake_gateway() -> None:
                     new_gotchas=(),
                     timestamp=datetime.now(timezone.utc),
                     scope="adapters",
-                    manual_verification=(
-                        {
-                            "name": "Full lifecycle check",
-                            "setup": "None",
-                            "steps": "Observe Discord thread",
-                            "expected": "Thread created, card updated, thread archived",
-                        },
-                    ),
                 )
             )
             return WorkerRunResult(
@@ -229,9 +221,6 @@ async def test_local_only_flag_suppresses_all_discord_calls() -> None:
                 self_review_notes="Done",
                 new_gotchas=(),
                 timestamp=datetime.now(timezone.utc),
-                manual_verification=(
-                    {"name": "Local smoke", "setup": "None", "steps": "Run", "expected": "Pass"},
-                ),
             )
         )
         return WorkerRunResult(
@@ -285,9 +274,6 @@ async def test_transient_gateway_error_does_not_abort_ticket() -> None:
                 self_review_notes="Done",
                 new_gotchas=(),
                 timestamp=datetime.now(timezone.utc),
-                manual_verification=(
-                    {"name": "Transient check", "setup": "None", "steps": "Run", "expected": "Pass"},
-                ),
             )
         )
         return WorkerRunResult(
@@ -411,14 +397,6 @@ async def test_actual_discord_lifecycle_live() -> None:
                         new_gotchas=(),
                         timestamp=datetime.now(timezone.utc),
                         scope="adapters",
-                        manual_verification=(
-                            {
-                                "name": "Live smoke check",
-                                "setup": "None",
-                                "steps": "Check Discord",
-                                "expected": "Thread created, card updated, thread archived",
-                            },
-                        ),
                     )
                 )
                 return WorkerRunResult(

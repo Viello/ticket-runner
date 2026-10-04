@@ -13,25 +13,9 @@ Implement the work described in the active ticket or spec:
    - Append newly discovered runtime lessons and ticket-specified gotchas to `docs/tickets/gotchas.md` as a chronological log with problem and solution sub-bullets:
      - Log non-obvious platform quirks, hidden runtime pitfalls, unwritten repo conventions, and non-trivial TDD diagnosis findings.
      - State positive target behaviors and actionable solutions; prune trivial syntax errors and CLI reference lookups.
-   - **Refine Smoke Scenarios to ELI5 standard**: Before marking completed, refine the ticket's `### Smoke Scenarios` section into concrete, spoon-fed instructions following the 4-part anatomy (Setup, Why, Steps, Expected). Replace abstract draft steps with tested, copy-pasteable commands in the project's native tooling.
    - Update ticket frontmatter: set `Status: completed` and record `Completed: <ISO-8601-UTC-timestamp>`.
    - Relocate the ticket file to `docs/tickets/<spec-slug>/completed/T<NNN>-<slug>.md`.
-5. **Commit** *(interactive mode only — skip in Ticket Runner autonomous execution)*: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Automatically execute `git commit` to the current branch without pausing to ask confirmation once tests, reviews, and local smoke checks pass, following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers). Append **all** scenario names from `### Smoke Scenarios` as a trailing section in the commit body, tagging those also exercised by automated tests:
-   ```
-   Manual verification required:
-   - <Scenario name 1>
-   - <Scenario name 2> [also auto-covered]
-   ```
-6. **Smoke Scenarios Handoff**:
-   - **Completeness gate**: if the ticket has no `### Smoke Scenarios` section, flag it as incomplete and do not emit a ready signal. Every ticket must define at least one human-verifiable scenario.
-   - **ELI5 Refinement Standard**: Every scenario must be dead-simple and executable with zero guesswork:
-     - **Setup**: Exact prerequisites or "None (runs from repo root)".
-     - **Why**: 1-2 sentences in simple plain English explaining what this feature does and why we are checking it, as if explaining to a beginner.
-     - **Steps**: Numbered, conversational, spoon-fed instructions including exact copy-pasteable terminal commands, CLI invocations, or self-contained runner snippets in the project's native tooling (e.g. `python -c @"..."@`, `npm run ...`, `node -e "..."`). Verify locally that the command runs cleanly before documenting.
-     - **Expected**: Exact observable output / success markers to look for, and clear signs of failure.
-   - **Coverage audit**: read the test suite and reason — using agent judgment — about which scenarios the automated suite also exercises end-to-end. Tag those `[also auto-covered]`. This is informative metadata only; tagged scenarios remain in the checklist.
-   - **All scenarios are `[needs human]`**: the `[also auto-covered]` tag is additive, never a gate. Every scenario appears in the human checklist verbatim.
-   - **Interactive mode**: print the full checklist (Setup / Why / Steps / Expected verbatim) for every scenario, appending `[also auto-covered]` where applicable. Emit nothing if the section is absent (completeness gate already blocked this path).
-   - **Ticket Runner autonomous mode**: embed every scenario in `manual_verification` in `.agent/signals/<ticket_id>_ready.json` as a JSON array of `{"name", "setup", "steps", "expected", "auto_covered": true|false, "update_notes": "", "why": ""}` objects. The Gatekeeper reads this array, appends all entries to `.agent/smoke_log_<spec-slug>.md`, includes `[also auto-covered]` tags in the Discord summary, and re-surfaces the full checklist to the operator after committing.
-7. **Smoke Log Note** *(autonomous mode only)*: if any scenario in this ticket supersedes or updates a prior ticket's scenario (same feature area, revised behaviour), set `"update_notes": "Updates: T0NN — <prior scenario name>"` on that entry in the ready signal. The Gatekeeper renders it as `> Updates: ...` beneath the scenario block in the smoke log. Leave `update_notes` empty if no prior entry is affected.
-
+5. **Commit** *(interactive mode only — skip in Ticket Runner autonomous execution)*: Stage code changes, the relocated ticket file, and `docs/tickets/gotchas.md` together in the feature commit. Automatically execute `git commit` to the current branch without pausing to ask confirmation once tests and reviews pass, following the repository convention (`<type>(<scope>): <Title>` with bulleted imperative changes and no ticket numbers).
+6. **Readiness & Live QA**: Human verification happens post-green via a human-invoked `/live-qa` session. The implementer drafts no scenarios and self-reports no manual verification. Readiness is strictly: all targeted tests pass, broad test suite passes, `/code-review` passes (plus `/security-review` if required), and the ticket is relocated with frontmatter updated.
+   - **Interactive mode**: report completed tests, reviews, and git commit; remind the operator that live verification can be driven via `/live-qa`.
+   - **Ticket Runner autonomous mode**: emit `.agent/signals/<ticket_id>_ready.json` with `{"ticket_id": "<ticket_id>"}`. The Gatekeeper performs independent test/build checks and human approval without relying on worker self-reports.

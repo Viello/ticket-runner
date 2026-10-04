@@ -146,23 +146,6 @@ class RuntimePaths:
         target = self.logs_dir / f"{ticket_id}_diagnostic.md"
         return self._check_containment(target, self.logs_dir)
 
-    def smoke_log_path(self, spec_slug: str) -> Path:
-        """Path to a spec's smoke log (.agent/smoke_log_{safe_slug}.md).
-
-        Sanitizes spec_slug against directory traversal by replacing non-alphanumeric,
-        non-hyphen characters with underscores and ensuring containment within root_dir.
-        """
-        safe_slug = re.sub(r"[^\w\-]", "_", spec_slug)
-        target = self.root_dir / f"smoke_log_{safe_slug}.md"
-        try:
-            root_resolved = self.root_dir.resolve()
-            if not target.resolve().is_relative_to(root_resolved):
-                raise ValueError(f"Path traversal detected escaping root_dir: {spec_slug!r}")
-        except (ValueError, RuntimeError) as exc:
-            raise ValueError(f"Path traversal detected escaping root_dir: {spec_slug!r}") from exc
-        return target
-
-
     def safe_session_paths(
         self, ticket_id: str, session_id: str
     ) -> tuple[Path, Path] | None:

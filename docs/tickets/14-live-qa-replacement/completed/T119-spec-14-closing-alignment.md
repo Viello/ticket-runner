@@ -1,5 +1,6 @@
 # T119 — Spec 14 closing alignment audit
-Status: pending
+Status: completed
+Completed: 2026-10-04T07:34:00Z
 Spec: docs/specs/14-live-qa-replacement.md
 Blocked by: T114, T115, T116, T117, T118
 
@@ -11,6 +12,22 @@ Blocked by: T114, T115, T116, T117, T118
 - Jump-start:
   - Files to touch: `docs/specs/14-live-qa-replacement.md`, `CONTEXT.md`, `ARCHITECTURE.md` (only if the directory tree drifted from reality); root-doc edits require and already carry user approval from the spec-14 conversation — surgical only.
   - Verification: full suite `python -m pytest`; repo-wide scenario-mechanism grep as defined in T117.
+
+### Audit Evidence
+1. **User Story 1 (Human-driven verification)**: Shipped in `.agents/skills/live-qa/` where the operator acts as sensor driving real scenarios interactively.
+2. **User Story 2 (Durable timestamped log)**: Shipped via append-only `.agent/live-qa_log_<slug>.md` recording ISO-8601 timestamps and exact human observation words.
+3. **User Story 3 (Refusal in absence)**: Shipped in `live-qa` guardrails explicitly refusing or skipping verification when the human is not present at the machine.
+4. **User Story 4 (Per-scenario Discord stream)**: Shipped via `.agent/live-qa.json` `notify_cmd` invoking `ticket-runner notify <message>`.
+5. **User Story 5 (Evidence Card without checklist)**: Shipped in T116; `EvidenceCard` and approval adapters (terminal and Discord) omit scenario fields and render strictly machine-verified results.
+6. **User Story 6 (No mandatory smoke scenarios in ticket authoring)**: Shipped in T118; `to-tickets` dropped mandatory smoke scenarios sections and quiz checks.
+7. **User Story 7 (Ready signal schema freed of manual verification)**: Shipped in T115; `ReadySignal` dataclass and validator dropped `manual_verification`, with unknown-key tolerance for historical signals.
+8. **User Story 8 (Gatekeeper stops smoke logging)**: Shipped in T116; `VerificationLoop` dropped `_append_smoke_log` and `smoke_log_path`.
+9. **User Story 9 (Fail-closed human approval intact)**: Shipped in T116; `VerificationLoop` requires explicit `ApprovalDecision.APPROVE` in human mode to reach commit.
+10. **User Story 10 (One-shot notify CLI)**: Shipped in T114; `ticket_runner.py notify <message>` subcommand posts single message and exits cleanly.
+11. **User Story 11 (Triage via smoke-fail)**: Shipped in T118; `smoke-fail` skill parses `[failed]` entries from `.agent/live-qa_log_<slug>.md`.
+12. **User Story 12 (Templates teach live-qa discipline)**: Shipped in T115 & T118; `PromptBuilder` invariants and skills teach post-green `/live-qa`.
+13. **User Story 13 (Living documents reflect live-qa gate)**: Shipped in T117 & T119; `AGENTS.md`, `README.md`, `CONTEXT.md`, and `ARCHITECTURE.md` aligned with zero contradictions.
+14. **User Story 14 (Parser tolerates legacy headings)**: Shipped in T115; `TicketMarkdownParser` treats `### Smoke Scenarios` as inert markdown without error.
 
 ### Acceptance Criteria
 - Every Spec 14 user story is checked off against observed behavior (evidence noted in the ticket body before relocation).

@@ -20,8 +20,7 @@ DEFAULT_INVARIANTS = """## Invariants
 - Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (`Status: completed`); never record commit SHA in ticket frontmatter (ADR 0012).
 - Source of truth: Working code, unit tests, and CLI interfaces are authoritative over markdown documentation. Specifications and tickets are ephemeral scaffolding; never modify root living documents (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) without explicit user approval.
 - `.agent/` is untracked runtime state; git-ignore it when implementing.
-- Every ticket must define at least one `### Smoke Scenarios` entry; a ticket with no smoke scenarios is incomplete and the Worker must not emit a ready signal.
-- Every LLM-generated smoke scenario always requires human verification; automated test coverage is recorded as `[also auto-covered]` metadata only, never a substitute for human eyes. The Gatekeeper appends all scenarios to `.agent/smoke_log_<spec-slug>.md` after each passing cycle."""
+- Human verification happens after green checks via a `/live-qa` session the human runs; the Worker drafts no scenarios and self-reports no manual verification."""
 
 INVARIANTS_HEADING_PATTERN = re.compile(r"^##\s+Invariants\s*$", re.IGNORECASE)
 ANY_H2_HEADING_PATTERN = re.compile(r"^##\s+", re.IGNORECASE)
@@ -56,7 +55,24 @@ def extract_invariants(agents_path: str | Path = "AGENTS.md") -> str:
 
         invariants_lines.append(line)
 
-    extracted = "\n".join(invariants_lines).strip()
+    if not found_heading or not any(line.strip() for line in invariants_lines):
+        return DEFAULT_INVARIANTS
+
+    filtered_lines: list[str] = []
+    for line in invariants_lines:
+        lower = line.lower()
+        if "smoke scenario" in lower or "smoke_log" in lower or "manual_verification" in lower:
+            continue
+        filtered_lines.append(line)
+
+    live_qa_invariant = (
+        "- Human verification happens after green checks via a `/live-qa` session the human runs; "
+        "the Worker drafts no scenarios and self-reports no manual verification."
+    )
+    if not any("live-qa" in l for l in filtered_lines):
+        filtered_lines.append(live_qa_invariant)
+
+    extracted = "\n".join(filtered_lines).strip()
     if not extracted:
         return DEFAULT_INVARIANTS
 
@@ -190,18 +206,11 @@ Full specification reference: `{resolved_spec_path}`
    - `modified_files`: array of strings containing repository-relative paths modified during this ticket (e.g. `["runner/application/foo.py"]`)
    - `self_review_notes`: string summarizing findings, verification results, and standards compliance
    - `new_gotchas`: array of newly discovered runtime gotchas or lessons learned strings (empty array `[]` if none)
-   - `manual_verification`: array of scenario objects `[{{"name": "...", "setup": "...", "steps": "...", "expected": "...", "auto_covered": true|false, "update_notes": ""}}]`
-     - `name`: string scenario name
-     - `setup`: string prerequisites and setup instructions
-     - `steps`: string reproduction or execution steps
-     - `expected`: string expected outcome
-     - `auto_covered`: boolean (`true` if existing automated tests also exercise this scenario end-to-end, `false` otherwise). Automated test coverage is additive metadata and never allows omitting a scenario.
-     - `update_notes`: string note when superseding an earlier ticket's scenario (e.g. `"Updates: T0NN — <prior scenario name>"`), or empty string `""` if no prior scenario is affected.
    - `timestamp`: current ISO-8601 UTC timestamp string
    - `scope`: optional lowercase architectural layer token (e.g. "application", "domain", "adapters"; omit or null to use the default queue scope; never use a ticket number)
-   **Smoke Scenario Invariants & Completeness Contract**:
-   - Completeness gate: Every ticket must define at least one `### Smoke Scenarios` entry. If a ticket lacks `### Smoke Scenarios`, the ticket is incomplete and the Worker must not emit a ready signal.
-   - Human verification required: Every LLM-generated smoke scenario always requires human verification. Automated test coverage (`auto_covered: true`) is additive metadata, never a gate or a reason to omit a scenario from `manual_verification`.
+   **Live QA Verification Contract**:
+   - Human verification happens after green checks via a `/live-qa` session the human runs.
+   - The Worker drafts no scenarios and self-reports no manual verification.
 5. **Question Protocol (Clarification / Blocked)**:
    If blocked, requirements are ambiguous, or an architectural decision is required:
    - Write a question Signal to `.agent/questions/{ticket.id}.json` and **stop working immediately**. Do not guess or continue working while blocked.

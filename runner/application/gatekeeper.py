@@ -973,73 +973,6 @@ class VerificationLoop:
         if hasattr(self._signal_repository, "clean_question"):
             self._signal_repository.clean_question(ticket_id)
 
-    def _append_smoke_log(
-        self,
-        ready_signal: ReadySignal,
-        ticket: Ticket,
-        runtime_paths: RuntimePaths | None = None,
-    ) -> None:
-        """Append smoke scenario entries to the per-spec-slug smoke log file.
-
-        The log lives at ``.agent/smoke_log_{spec_slug}.md`` and is append-only.
-        Each passing verification cycle contributes a dated section. The human
-        reviews the log after all tickets for a spec are complete.
-
-        Args:
-            ready_signal: The passing ready signal carrying manual_verification entries.
-            ticket: The active ticket.
-            runtime_paths: RuntimePaths instance; defaults to self._runtime_paths.
-        """
-        from datetime import datetime, timezone
-
-        paths = runtime_paths or self._runtime_paths
-        spec_slug = ready_signal.scope if ready_signal.scope else ticket.id
-        log_path = paths.smoke_log_path(spec_slug)
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        lines: list[str] = []
-        lines.append(f"## {ticket.id} — {ticket.title}")
-        lines.append(f"_Appended: {timestamp}_")
-        lines.append("")
-
-        for scenario in ready_signal.manual_verification:
-            name = scenario.get("name", "")
-            setup = scenario.get("setup", "")
-            steps = scenario.get("steps", "")
-            expected = scenario.get("expected", "")
-            auto_covered = bool(scenario.get("auto_covered", False))
-            update_notes = scenario.get("update_notes", "")
-
-            auto_tag = " [also auto-covered]" if auto_covered else ""
-            lines.append(f"### {name}{auto_tag}")
-            lines.append("")
-            if setup:
-                lines.append(f"**Setup**: {setup}")
-            if steps:
-                lines.append(f"**Steps**: {steps}")
-            if expected:
-                lines.append(f"**Expected**: {expected}")
-            if update_notes:
-                lines.append("")
-                lines.append(f"> {update_notes}")
-            lines.append("")
-
-        lines.append("---")
-        lines.append("")
-
-        block = "\n".join(lines)
-
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            if not log_path.exists():
-                header = f"# Smoke Log — {spec_slug}\n\n"
-                atomic_write_text(log_path, header + block)
-            else:
-                existing = log_path.read_text(encoding="utf-8")
-                atomic_write_text(log_path, existing + block)
-        except Exception as exc:
-            logger.warning("Failed to append smoke log %s: %s", log_path, exc)
-
     async def run(
         self,
         *,
@@ -1188,23 +1121,11 @@ class VerificationLoop:
                             except Exception as exc:
                                 logger.warning("Failed to collect evidence paths: %s", exc)
 
-                        smoke_scenarios = getattr(self._ticket, "smoke_scenarios", ())
-                        if not smoke_scenarios and getattr(self._ticket, "path", None):
-                            try:
-                                from runner.adapters.markdown.parser import TicketMarkdownParser
-                                parsed_t = TicketMarkdownParser().parse(self._ticket.path)
-                                smoke_scenarios = getattr(parsed_t, "smoke_scenarios", ())
-                            except Exception:
-                                pass
-                        if not smoke_scenarios and ready_signal.manual_verification:
-                            smoke_scenarios = tuple(ready_signal.manual_verification)
-
                         card = EvidenceCard(
                             ticket_id=self._ticket.id,
                             test_status="passed",
                             harness_status=None,
                             evidence_paths=evidence_paths,
-                            smoke_scenarios=smoke_scenarios,
                         )
 
                         if self._state_coordinator is not None:
@@ -1251,70 +1172,6 @@ class VerificationLoop:
                             raise UserAbortError(
                                 f"Fail-closed: Unhandled approval decision {decision!r} for ticket '{self._ticket.id}'."
                             )
-
-                    # --- Manual verification handling ---
-                    if ready_signal.manual_verification_is_default:
-                        # manual_verification was absent from the payload => backward-compatible, do not emit
-                        pass
-                    elif not ready_signal.manual_verification:
-                        # manual_verification present but empty => ticket defined no smoke scenarios
-                        logger.warning(
-                            "[%s] manual_verification is empty — ticket must define at least one smoke scenario.",
-                            self._ticket.id,
-                        )
-                    else:
-                        def _scenario_label(s: dict) -> str:
-                            tag = " [also auto-covered]" if s.get("auto_covered") else ""
-                            return f"{s.get('name', '')}{tag}"
-
-                        # 1. Commit body injection if GitOperations is available
-                        if self._git_operations is not None:
-                            changes = [f"Update {p}" for p in ready_signal.modified_files] + [
-                                "Manual verification required:",
-                                *(f"- {_scenario_label(s)}" for s in ready_signal.manual_verification),
-                            ]
-                            try:
-                                commit_res = self._git_operations.commit_ticket(
-                                    scope=ready_signal.scope or "adapters",
-                                    title=self._ticket.title,
-                                    changes=changes,
-                                )
-                                if inspect.iscoroutine(commit_res):
-                                    await commit_res
-                            except Exception as exc:
-                                logger.warning("GitOperations commit_ticket failed: %s", exc)
-                        else:
-                            logger.warning(
-                                "GitOperations not provided to VerificationLoop; skipping commit-body injection"
-                            )
-
-                        # 2. Emit full human-action checklist to terminal
-                        scenario_lines: list[str] = []
-                        for scenario in ready_signal.manual_verification:
-                            name = scenario.get("name", "")
-                            setup = scenario.get("setup", "")
-                            steps = scenario.get("steps", "")
-                            expected = scenario.get("expected", "")
-                            auto_covered = bool(scenario.get("auto_covered", False))
-                            auto_tag = " [also auto-covered]" if auto_covered else ""
-                            scenario_lines.append(f"Scenario: {name}{auto_tag}")
-                            if setup:
-                                scenario_lines.append(f"Setup: {setup}")
-                            if steps:
-                                scenario_lines.append(f"Steps: {steps}")
-                            if expected:
-                                scenario_lines.append(f"Expected: {expected}")
-                        scenario_text = "\n".join(scenario_lines)
-                        if self._notify is not None:
-                            try:
-                                self._notify(scenario_text)
-                            except Exception:
-                                print(scenario_text)
-                        else:
-                            print(scenario_text)
-
-                        # 3. Append to per-spec-slug smoke log (durable record)
-                        self._append_smoke_log(ready_signal, self._ticket)
 
                     return VerificationLoopResult.passed(
                         ready_signal=ready_signal,
