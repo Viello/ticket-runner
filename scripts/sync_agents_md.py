@@ -10,6 +10,7 @@ import sys
 
 from runner.tools.scaffold_sandbox import (
     DEFAULT_PREAMBLE,
+    SkillsMode,
     extract_curated_subset,
     format_sandbox_agents_md,
     get_default_target_dir,
@@ -35,6 +36,7 @@ def sync_agents_md(
     upstream_path: Path | None = None,
     *,
     write: bool = False,
+    skills_mode: SkillsMode = "default",
 ) -> int:
     """Compare sandbox AGENTS.md curated subset against upstream.
 
@@ -42,6 +44,8 @@ def sync_agents_md(
         target_dir: Directory containing sandbox AGENTS.md.
         upstream_path: Optional path to upstream AGENTS.md.
         write: If True, overwrite sandbox copy with updated upstream subset and fresh sync stamp.
+        skills_mode: Either ``"default"`` (4 curated skills shipped) or ``"all"``
+            (full skill catalog — see T005d). Affects ``## Agent skills`` bullet trim.
 
     Returns:
         0 if in sync (or successfully written), 1 if drift detected, 2 on missing-file I/O.
@@ -64,7 +68,7 @@ def sync_agents_md(
         print(f"Error reading file: {exc}", file=sys.stderr)
         return 2
 
-    upstream_curated = extract_curated_subset(upstream_text)
+    upstream_curated = extract_curated_subset(upstream_text, skills_mode=skills_mode)
     preamble, stamp_date, sandbox_curated = parse_sandbox_agents_md(sandbox_text)
 
     if not preamble.strip():
@@ -125,9 +129,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Apply upstream changes to sandbox copy with a fresh sync stamp",
     )
+    parser.add_argument(
+        "--skills",
+        choices=("default", "all"),
+        default="default",
+        help=(
+            "Skill catalog mode: 'default' (4 curated skills) or 'all' (full "
+            "catalog — T005d). Affects ## Agent skills bullet trim only."
+        ),
+    )
 
     args = parser.parse_args(argv)
-    return sync_agents_md(args.target_dir, args.upstream, write=args.write)
+    return sync_agents_md(args.target_dir, args.upstream, write=args.write, skills_mode=args.skills)
 
 
 if __name__ == "__main__":

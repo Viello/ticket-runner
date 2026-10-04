@@ -103,6 +103,19 @@ developer should be able to:
   stamped with sync date; `scripts/sync_agents_md.py` does one-way drift
   detection; initial commit `chore(sandbox): initialize ticket-runner onboarding
   sandbox`.
+- [T005c — Lock the curated `AGENTS.md` subset and preamble](T005c-lock-curated-agents-md-subset.md):
+  locked preamble (5 lines, opens "Welcome to your Ticket Runner sandbox…", no
+  top-level heading) and sync stamp `<!-- mirrored from D:\Projects/AGENTS.md on
+  YYYY-MM-DD -->`; section rubric (`## Invariants` + `## Environment` + `## Agent
+  skills` included verbatim-or-trimmed; `## Implementation status`,
+  `## Read before designing`, `## Development workflow`, and the opening
+  paragraph excluded); bullet-trim tables for `## Environment` (1 of 4 kept) and
+  `## Agent skills` (2 of 4 kept in default mode, all 4 in `sandbox.skills: all`
+  mode); scaffold_sandbox.py aligned: `INCLUDED_HEADINGS = ("## Invariants",
+  "## Environment", "## Agent skills")`, new bullet-trim constants, `skills_mode:
+  Literal["default", "all"]` parameter on `extract_curated_subset` and `scaffold`,
+  `--skills {default,all}` CLI flag, fallback curated-subset updated to match;
+  `scripts/sync_agents_md.py` mirrors the `--skills` flag.
 
 ## Not yet specified
 
@@ -151,10 +164,11 @@ developer should be able to:
 - T003 — Add `test_live_antigravity_smoke.py` — wayfinder:task (AFK) — blocked by T018
 - T004 — Plumb `AGENT_ANTIGRAVITY_BIN` and `AGENT_OPENCODE_BIN` through Doctor — wayfinder:task (HITL) — blocked by T001 (unblocked)
 - T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\` — CLOSED — wayfinder:grilling (HITL)
-- T005a — Add CLI to `runner/adapters/git/pre_push_hook.py` — wayfinder:task (AFK)
-- T005b — Create `runner.tools.scaffold_sandbox` and `scripts/sync_agents_md.py` — wayfinder:task (AFK) — blocked by T005, T005a, T005c
-- T005c — Lock the curated `AGENTS.md` subset and preamble — wayfinder:grilling (HITL)
-- T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005, T005a, T005b, T005c
+- T005a — Add CLI to `runner/adapters/git/pre_push_hook.py` — CLOSED — wayfinder:task (AFK)
+- T005b — Create `runner.tools.scaffold_sandbox` and `scripts/sync_agents_md.py` — CLOSED — wayfinder:task (AFK) — blocked by T005, T005a, T005c
+- T005c — Lock the curated `AGENTS.md` subset and preamble — CLOSED — wayfinder:grilling (HITL)
+- T005d — Add `sandbox.skills` config flag for skill catalog mode — wayfinder:grilling (HITL) — blocks T005b-impl (if filed), T006
+- T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005, T005a, T005b, T005c, T005d
 - T007 — Lock the in-repo harness layout and `.gitignore` rules — wayfinder:grilling (HITL)
 - T008 — Scaffold the in-repo harness at `D:\Projects\live-test-target/` — wayfinder:task (AFK) — blocked by T007
 - T009 — Lock the empty-starter design — wayfinder:grilling (HITL)

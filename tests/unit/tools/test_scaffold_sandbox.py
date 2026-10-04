@@ -41,7 +41,10 @@ Specs 01-13 implemented.
 - Second invariant.
 
 ## Environment
-- Windows/PowerShell.
+- Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
+- Dependencies: discord.py, rich, pyyaml, pytest (see requirements.txt). Discord token comes from the DISCORD_BOT_TOKEN env var.
+- Discord and terminal-UI adapters are implemented under runner/adapters/discord/ and runner/adapters/ui/.
+- Pre-push hook guardrail is installed via runner/adapters/git/pre_push_hook.py reading scripts/pre-push.sh.
 
 ## Development workflow
 General workflow info.
@@ -53,17 +56,62 @@ General workflow info.
 - Implement tickets.
 
 ## Agent skills
-- .agents/skills/ implement.
+- `.agents/skills/` vendors the user's global skill catalog; handoff, claude-handoff, to-tickets have project-specific edits.
+- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
 """
     curated = extract_curated_subset(sample_agents_md)
+    # Per T005c resolution: Invariants + Environment + Agent skills included.
     assert "## Invariants" in curated
     assert "- First invariant." in curated
-    assert "## Development workflow" in curated
-    assert "### 1. Alignment & Design" in curated
+    assert "- Second invariant." in curated
+    assert "## Environment" in curated
     assert "## Agent skills" in curated
+    # Per T005c bullet trim (default): only the Windows/PowerShell bullet survives.
+    assert "Target platform is Windows/PowerShell" in curated
+    assert "Dependencies:" not in curated
+    assert "Discord and terminal-UI adapters" not in curated
+    assert "Pre-push hook guardrail" not in curated
+    # Per T005c bullet trim (default): only handoff + implement survive in Agent skills.
+    assert "handoff/SKILL.md` is load-bearing" in curated
+    assert "implement/SKILL.md` defines the default worker" in curated
+    assert "vendors the user's global skill catalog" not in curated
+    assert "security-review/SKILL.md" not in curated
+    # Per T005c section exclusions.
     assert "## Implementation status" not in curated
     assert "## Read before designing" not in curated
-    assert "## Environment" not in curated
+    assert "## Development workflow" not in curated
+
+
+def test_extract_curated_subset_all_skills_mode() -> None:
+    sample_agents_md = """# AGENTS.md
+
+## Agent skills
+- `.agents/skills/` vendors the user's global skill catalog.
+- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
+"""
+    curated = extract_curated_subset(sample_agents_md, skills_mode="all")
+    # Per T005c resolution (all mode): all 4 Agent skills bullets survive.
+    assert "vendors the user's global skill catalog" in curated
+    assert "handoff/SKILL.md` is load-bearing" in curated
+    assert "implement/SKILL.md` defines" in curated
+    assert "security-review/SKILL.md" in curated
+
+
+def test_extract_curated_subset_unrecognized_bullets_dropped() -> None:
+    """Bullets not in the keep-marker list are dropped (conservative default)."""
+    sample_agents_md = """# AGENTS.md
+
+## Environment
+- Target platform is Windows/PowerShell.
+- Future unknown bullet that isn't in T005c's rubric.
+"""
+    curated = extract_curated_subset(sample_agents_md)
+    assert "Target platform is Windows/PowerShell" in curated
+    assert "Future unknown bullet" not in curated
 
 
 def test_scaffold_happy_path(tmp_path: Path) -> None:

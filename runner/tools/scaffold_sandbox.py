@@ -11,20 +11,45 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Literal
 
 DEFAULT_PREAMBLE: str = (
-    "# Ticket Runner Onboarding Sandbox\n"
-    "This sandbox demonstrates Ticket Runner queue execution against a runnable Python application.\n"
-    "Verify environment prerequisites by running: python ticket_runner.py --project-dir <target> doctor\n"
-    "Tickets are queued under docs/tickets/00-welcome/ and executed autonomously on agent/ticket-runner.\n"
-    "Scaffold entry point is runner.tools.scaffold_sandbox; reset with --force --non-interactive."
+    "Welcome to your Ticket Runner sandbox — a runnable demo target at `D:\\Sandbox\\ticket-runner-live-target\\`.\n"
+    "First stop: run `ticket-runner --project-dir . doctor` to confirm the sandbox is wired.\n"
+    "Tickets live in `docs/tickets/00-welcome/`.\n"
+    "The scaffold entry point is `python -m runner.tools.scaffold_sandbox`.\n"
+    "Reset with `--force` to wipe and regenerate this tree from the upstream layout lock (T005)."
 )
 
 INCLUDED_HEADINGS: tuple[str, ...] = (
     "## Invariants",
-    "## Development workflow",
+    "## Environment",
     "## Agent skills",
 )
+
+# Bullet-trim markers (substring prefix on bullet text after "- ").
+# Per T005c resolution: each bullet is matched by its starting text, not by
+# index, so upstream additions don't silently break the trim. Unrecognized
+# bullets are dropped by default (conservative: extra content in the sandbox
+# would confuse first-time users).
+
+ENV_BULLETS_KEEP_PREFIXES: tuple[str, ...] = (
+    "Target platform is Windows/PowerShell",
+)
+
+AGENT_BULLETS_KEEP_PREFIXES_DEFAULT: tuple[str, ...] = (
+    "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement/SKILL.md` defines",
+)
+
+AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
+    "`.agents/skills/` vendors the user's global skill catalog",
+    "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement/SKILL.md` defines",
+    "`.agents/skills/security-review/SKILL.md` defines",
+)
+
+SkillsMode = Literal["default", "all"]
 
 STAMP_PATTERN = re.compile(
     r"<!--\s*mirrored from .*? on (\d{4}-\d{2}-\d{2})\s*-->"
@@ -133,8 +158,40 @@ def get_default_target_dir() -> Path:
     return Path.home() / "Sandbox" / "ticket-runner-live-target"
 
 
-def extract_curated_subset(text: str) -> str:
-    """Extract invariant-bearing curated sections from upstream AGENTS.md."""
+def _filter_section_bullets(
+    section_lines: list[str],
+    keep_prefixes: tuple[str, ...],
+) -> list[str]:
+    """Filter bullets in a markdown section, returning heading + kept bullets.
+
+    Bullets whose text (after "- ") starts with any of ``keep_prefixes`` are
+    kept. All other bullets (drop-targeted or unrecognized) are dropped.
+    Non-bullet lines (blank, continuation) are dropped to keep the section
+    tight; upstream AGENTS.md bullets are single-line.
+    """
+    result: list[str] = []
+    for line in section_lines:
+        if line.startswith("## "):
+            result.append(line)
+            continue
+        if line.startswith("- ") or line.startswith("* "):
+            bullet_text = line[2:].lstrip()
+            if any(bullet_text.startswith(p) for p in keep_prefixes):
+                result.append(line)
+            # else: drop
+        # else: drop non-bullet lines (blank, continuation)
+    return result
+
+
+def extract_curated_subset(text: str, skills_mode: SkillsMode = "default") -> str:
+    """Extract invariant-bearing curated sections from upstream AGENTS.md.
+
+    Args:
+        text: Raw upstream ``AGENTS.md`` content.
+        skills_mode: Either ``"default"`` (4 curated skills shipped) or
+            ``"all"`` (full skill catalog shipped — see T005d). Controls the
+            bullet-trim for ``## Agent skills`` only.
+    """
     lines = text.splitlines()
     sections: list[str] = []
     current_heading: str | None = None
@@ -144,7 +201,7 @@ def extract_curated_subset(text: str) -> str:
         if line.startswith("## "):
             heading = line.split("\n")[0].strip()
             if current_heading and any(current_heading.startswith(h) for h in INCLUDED_HEADINGS):
-                sections.append("\n".join(current_lines).strip())
+                sections.append(_finalize_section(current_heading, current_lines, skills_mode))
             current_heading = heading
             current_lines = [line]
         else:
@@ -152,9 +209,30 @@ def extract_curated_subset(text: str) -> str:
                 current_lines.append(line)
 
     if current_heading and any(current_heading.startswith(h) for h in INCLUDED_HEADINGS):
-        sections.append("\n".join(current_lines).strip())
+        sections.append(_finalize_section(current_heading, current_lines, skills_mode))
 
     return "\n\n".join(sections).strip()
+
+
+def _finalize_section(
+    heading: str,
+    section_lines: list[str],
+    skills_mode: SkillsMode,
+) -> str:
+    """Apply section-specific bullet trim and return the cleaned section text."""
+    if heading.startswith("## Environment"):
+        keep = ENV_BULLETS_KEEP_PREFIXES
+    elif heading.startswith("## Agent skills"):
+        keep = (
+            AGENT_BULLETS_KEEP_PREFIXES_ALL
+            if skills_mode == "all"
+            else AGENT_BULLETS_KEEP_PREFIXES_DEFAULT
+        )
+    else:
+        # ## Invariants (or any future INCLUDED_HEADINGS without a trim spec):
+        # all bullets verbatim.
+        return "\n".join(section_lines).strip()
+    return "\n".join(_filter_section_bullets(section_lines, keep)).strip()
 
 
 def format_sandbox_agents_md(preamble: str, stamp_date: str, curated_subset: str) -> str:
@@ -213,6 +291,7 @@ def scaffold(
     force: bool = False,
     source_skills_dir: Path | None = None,
     upstream_agents_md: Path | None = None,
+    skills_mode: SkillsMode = "default",
 ) -> None:
     """Scaffold onboarding sandbox tree to target_dir.
 
@@ -222,6 +301,9 @@ def scaffold(
                Preserves .git/ and .agent/ runtime state.
         source_skills_dir: Optional override for source skills catalog directory.
         upstream_agents_md: Optional override for upstream AGENTS.md file.
+        skills_mode: Either ``"default"`` (4 curated skills shipped) or
+            ``"all"`` (full skill catalog — see T005d). Affects the bullet
+            trim applied to ``## Agent skills`` in AGENTS.md only.
     """
     target = target_dir.resolve()
     created_count = 0
@@ -284,18 +366,23 @@ def scaffold(
     if not agents_file.exists() or force:
         upstream_file = _resolve_upstream_agents_md(upstream_agents_md)
         if upstream_file and upstream_file.is_file():
-            curated_subset = extract_curated_subset(upstream_file.read_text(encoding="utf-8"))
+            curated_subset = extract_curated_subset(
+                upstream_file.read_text(encoding="utf-8"),
+                skills_mode=skills_mode,
+            )
         else:
+            # Fallback when no upstream AGENTS.md is discoverable. Mirrors the
+            # default-mode bullet trim (per T005c resolution).
             curated_subset = (
                 "## Invariants\n"
                 "- All automated work happens on agent/ticket-runner.\n"
                 "- Commit format: <type>(<scope>): <Title>.\n"
                 "- Worker executes tickets via configured worker.execution_skill.\n\n"
-                "## Development workflow\n"
-                "### 3. Execution (Interactive or Ticket Runner)\n"
-                "- Implement tickets using TDD at pre-agreed seams.\n\n"
+                "## Environment\n"
+                "- Target platform is Windows/PowerShell.\n\n"
                 "## Agent skills\n"
-                "- .agents/skills/ vendors skill catalog."
+                "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+                "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
             )
         today = datetime.date.today().isoformat()
         agents_content = format_sandbox_agents_md(DEFAULT_PREAMBLE, today, curated_subset)
@@ -453,6 +540,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip confirmation prompt on --force",
     )
+    parser.add_argument(
+        "--skills",
+        choices=("default", "all"),
+        default="default",
+        help=(
+            "Skill catalog mode: 'default' ships the 4 curated skills "
+            "(implement, code-review, diagnosing-bugs, handoff); 'all' ships "
+            "the full catalog (see T005d). Affects AGENTS.md ## Agent skills "
+            "bullet trim only."
+        ),
+    )
 
     args = parser.parse_args(argv)
     target_dir: Path = args.target_dir.resolve()
@@ -463,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Aborted.")
             return 1
 
-    scaffold(target_dir, force=args.force)
+    scaffold(target_dir, force=args.force, skills_mode=args.skills)
     return 0
 
 

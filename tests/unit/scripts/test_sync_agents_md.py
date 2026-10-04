@@ -28,16 +28,16 @@ Specs implemented.
 - Invariant 2.
 
 ## Environment
-- Windows.
-
-## Development workflow
-Workflow details.
-
-### 1. Alignment & Design
-- Grill me.
+- Target platform is Windows/PowerShell.
+- Dependencies: discord.py, rich, pyyaml, pytest.
+- Discord and terminal-UI adapters are implemented under runner/adapters/.
+- Pre-push hook guardrail is installed via runner/adapters/git/.
 
 ## Agent skills
-- Implement skill.
+- `.agents/skills/` vendors the user's global skill catalog.
+- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
 """
     upstream.write_text(content, encoding="utf-8")
     return upstream
@@ -48,17 +48,18 @@ def test_sync_agents_md_in_sync(sample_upstream: Path, tmp_path: Path, capsys: p
     sandbox_dir.mkdir()
     sandbox_file = sandbox_dir / "AGENTS.md"
 
-    # Create matching sandbox file with preamble and stamp
+    # Create matching sandbox file with preamble and stamp.
+    # Per T005c default-mode bullet trim: Environment keeps bullet #1 only;
+    # Agent skills keeps bullets #2 + #3.
     curated_content = (
         "## Invariants\n"
         "- Invariant 1.\n"
         "- Invariant 2.\n\n"
-        "## Development workflow\n"
-        "Workflow details.\n\n"
-        "### 1. Alignment & Design\n"
-        "- Grill me.\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
         "## Agent skills\n"
-        "- Implement skill."
+        "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
     )
     formatted = format_sandbox_agents_md(DEFAULT_PREAMBLE, "2026-10-01", curated_content)
     sandbox_file.write_text(formatted, encoding="utf-8")
@@ -77,14 +78,14 @@ def test_sync_agents_md_drift_detected(sample_upstream: Path, tmp_path: Path, ca
     sandbox_dir.mkdir()
     sandbox_file = sandbox_dir / "AGENTS.md"
 
-    # Create diverged sandbox file
+    # Create diverged sandbox file (dropped a bullet T005c says to keep)
     curated_content = (
         "## Invariants\n"
         "- Diverged invariant.\n\n"
-        "## Development workflow\n"
-        "Workflow details.\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
         "## Agent skills\n"
-        "- Implement skill."
+        "- .agents/skills/handoff/SKILL.md is load-bearing."
     )
     formatted = format_sandbox_agents_md(DEFAULT_PREAMBLE, "2026-10-01", curated_content)
     sandbox_file.write_text(formatted, encoding="utf-8")
