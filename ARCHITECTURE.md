@@ -53,7 +53,7 @@ Ticket Runner runs as an external CLI binary decoupled from the target codebase:
 
 ```text
 ticket-runner/
-├── ticket_runner.py                  # CLI entry point (argparse: start, doctor, init, pause, status, skills)
+├── ticket_runner.py                  # CLI entry point (argparse: start, doctor, init, pause, status, skills, bot, notify)
 ├── requirements.txt                  # Python dependencies (discord.py, rich, pyyaml, pytest)
 ├── pyproject.toml                    # Package metadata, Python 3.11+, pytest configuration
 │
@@ -249,7 +249,7 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 │   ├── questions/                    # Worker operator questions ({ticket_id}.json)
 │   ├── checkpoints/                  # Token budget context handoff checkpoints ({ticket_id}/handoff.md)
 │   ├── logs/                         # Raw worker telemetry and stdout logs
-│   ├── smoke_log_<spec-slug>.md      # Cumulative Gatekeeper smoke verification log
+│   ├── live-qa_log_<spec-slug>.md   # Human-authored live QA verification log
 │   ├── evidence/                     # Verification Subsystem Evidence Artifacts (Spec 13)
 │   │   └── <ticket_id>/              # Bounded evidence directory per ticket
 │   │       ├── summary.json          # Exit code, duration, artifact links, sanitized failure excerpt
