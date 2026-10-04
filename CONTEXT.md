@@ -144,6 +144,18 @@ _Avoid_: Test script, driver, test harness
 The structured summary of behavioral verification outcomes (status, exit code, bounded failure excerpt, artifact links) presented on Discord or terminal for human sign-off.
 _Avoid_: Test report, verification summary, result block
 
+**ApprovalDecision**:
+The operator's explicit sign-off verdict (`APPROVE`, `REJECT`, `DIAGNOSE`) submitted in Human-in-the-Loop mode, optionally annotated with feedback reason on rejection.
+_Avoid_: Verdict, review response, gate choice, human signal
+
+**Approval Gateway**:
+The notification and input port (`runner/ports/approval_gateway.py`) that presents an Evidence Card to the active presence channel (Terminal prompt or Discord thread card) and awaits an operator's ApprovalDecision before committing.
+_Avoid_: Approval handler, review gate, sign-off listener
+
+**Evidence Triage**:
+The application service (`runner/application/evidence_triage.py`) that parses test and harness failure logs and extracts a strictly bounded excerpt (maximum 30 lines / 1,000 characters) for the LLM retry prompt to prevent context blowout.
+_Avoid_: Log parser, error cropper, failure summarizer, output trimmer
+
 **Skills Catalog**:
 The centralized repository of reusable, agent-agnostic development skills (`Viello/agent-skills`) distributable to any project.
 _Avoid_: Plugin repo, skill store, prompt library

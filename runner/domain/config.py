@@ -11,6 +11,7 @@ VALID_PRESENCE_MODES = frozenset({"nearby", "away"})
 VALID_QUEUE_COMPLETIONS = frozenset({"standby", "terminate"})
 VALID_CLEAN_SLATE_POLICIES = frozenset({"interactive", "always", "never"})
 VALID_WORKER_PROVIDERS = frozenset({"opencode", "antigravity"})
+VALID_APPROVAL_MODES = frozenset({"autonomous", "human"})
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,7 @@ class LifecycleConfig:
     queue_completion: str = "standby"
     clean_slate: str = "interactive"
     poll_interval: float = 5.0
+    approval_mode: str = "autonomous"
 
     def __post_init__(self) -> None:
         if self.queue_completion not in VALID_QUEUE_COMPLETIONS:
@@ -178,6 +180,10 @@ class LifecycleConfig:
         if self.clean_slate not in VALID_CLEAN_SLATE_POLICIES:
             raise ConfigError(
                 f"Lifecycle clean_slate must be one of {sorted(VALID_CLEAN_SLATE_POLICIES)}, got: '{self.clean_slate}'"
+            )
+        if self.approval_mode not in VALID_APPROVAL_MODES:
+            raise ConfigError(
+                f"Lifecycle approval_mode must be one of {sorted(VALID_APPROVAL_MODES)}, got: '{self.approval_mode}'"
             )
         if (
             isinstance(self.poll_interval, bool)

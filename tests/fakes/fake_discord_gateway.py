@@ -109,7 +109,10 @@ class FakeDiscordGateway:
         raise_on_post_message: Exception | None = None,
         raise_on_edit_message: Exception | None = None,
         raise_on_create_thread: Exception | None = None,
+        thread_id: str | None = None,
     ) -> None:
+        self.thread_id: str | None = thread_id
+        self.queued_interactions: list[Any] = []
         self.calls: list[DiscordCall] = []
         self.messages: dict[str, dict[str, Any]] = {}
         self.threads: dict[str, dict[str, Any]] = {}
@@ -330,4 +333,8 @@ class FakeDiscordGateway:
         self.messages.pop(message_id, None)
         if message_id in self.pinned_messages:
             self.pinned_messages.remove(message_id)
+
+    def queue_interaction(self, interaction: Any) -> None:
+        """Queue a simulated interaction for approval testing."""
+        self.queued_interactions.append(interaction)
 

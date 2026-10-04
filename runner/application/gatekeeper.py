@@ -23,16 +23,19 @@ from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig, VerificationConfig
+from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import DiscordGatewayError, NonInteractiveError, SignalFormatError, UserAbortError
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
     analyse,
     render_diagnostic_report,
+    strip_ansi,
 )
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal
 from runner.domain.status_event import RunState, StatusEvent
 from runner.domain.ticket import Ticket
+from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import (
     InterventionAction,
@@ -593,6 +596,29 @@ def build_verification_failure_prompt(
     return prompt
 
 
+def _format_rejection_hint(reason: str | None) -> str:
+    """Format and bound operator rejection reason safely for worker retry."""
+    if not reason or not reason.strip():
+        return "Operator rejected verification. Please review and revise the implementation."
+    clean = strip_ansi(reason).strip()
+    # Mask potential token/secret exposures
+    clean = re.sub(
+        r"(?i)(token|bearer|secret|password|key)\s*[:=]\s*\S+",
+        r"\1: [REDACTED]",
+        clean,
+    )
+    lines = clean.splitlines()
+    if len(lines) > 15:
+        clean = "\n".join(lines[:15]) + "\n..."
+    if len(clean) > 400:
+        clean = clean[:397] + "..."
+    return (
+        f"Operator rejected verification with feedback:\n"
+        f"{clean}\n"
+        f"Please address this feedback and revise the implementation."
+    )
+
+
 class VerificationLoopStatus(str, Enum):
     """Outcome status of a verification loop run."""
 
@@ -614,6 +640,7 @@ class VerificationLoopResult:
     attempts: int = 0
     resources_accessed: frozenset[str] = frozenset()
     failure_diagnostic: FailureDiagnostic | None = None
+    approval_decision: ApprovalDecision | None = None
 
     @property
     def is_passed(self) -> bool:
@@ -649,6 +676,7 @@ class VerificationLoopResult:
         attempts: int,
         session_id: str | None = None,
         resources_accessed: frozenset[str] = frozenset(),
+        approval_decision: ApprovalDecision | None = None,
     ) -> VerificationLoopResult:
         return cls(
             status=VerificationLoopStatus.PASSED,
@@ -657,6 +685,7 @@ class VerificationLoopResult:
             attempts=attempts,
             session_id=session_id,
             resources_accessed=resources_accessed,
+            approval_decision=approval_decision,
         )
 
     @classmethod
@@ -749,6 +778,9 @@ class VerificationLoop:
         thread_id: str = "",
         status_card_message_id: str = "",
         presence_coordinator: Any | None = None,
+        approval_gateway: ApprovalGateway | None = None,
+        approval_mode: str = "autonomous",
+        tui_coordinator: Any | None = None,
     ) -> None:
         self._ticket = ticket
         self._cycle_runner = cycle_runner
@@ -780,6 +812,9 @@ class VerificationLoop:
         self._thread_id = thread_id
         self._status_card_message_id = status_card_message_id
         self._presence_coordinator = presence_coordinator
+        self._approval_gateway = approval_gateway
+        self._approval_mode = approval_mode
+        self._tui_coordinator = tui_coordinator
         self._handoff_logged = False
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
@@ -1134,6 +1169,89 @@ class VerificationLoop:
                         last_step_summary="Verification passed",
                     )
 
+                    # Human approval gate
+                    approval_decision: ApprovalDecision | None = None
+                    if self._approval_mode == "human":
+                        if self._approval_gateway is None:
+                            raise UserAbortError(
+                                f"Fail-closed: approval_mode is 'human' but no ApprovalGateway was provided for ticket '{self._ticket.id}'."
+                            )
+
+                        evidence_paths: tuple[str, ...] = ()
+                        if self._runtime_paths is not None:
+                            try:
+                                ev_dir = self._runtime_paths.evidence_dir(self._ticket.id)
+                                if ev_dir.exists():
+                                    evidence_paths = tuple(
+                                        str(p) for p in sorted(ev_dir.iterdir()) if p.is_file()
+                                    )
+                            except Exception as exc:
+                                logger.warning("Failed to collect evidence paths: %s", exc)
+
+                        smoke_scenarios = getattr(self._ticket, "smoke_scenarios", ())
+                        if not smoke_scenarios and getattr(self._ticket, "path", None):
+                            try:
+                                from runner.adapters.markdown.parser import TicketMarkdownParser
+                                parsed_t = TicketMarkdownParser().parse(self._ticket.path)
+                                smoke_scenarios = getattr(parsed_t, "smoke_scenarios", ())
+                            except Exception:
+                                pass
+                        if not smoke_scenarios and ready_signal.manual_verification:
+                            smoke_scenarios = tuple(ready_signal.manual_verification)
+
+                        card = EvidenceCard(
+                            ticket_id=self._ticket.id,
+                            test_status="passed",
+                            harness_status=None,
+                            evidence_paths=evidence_paths,
+                            smoke_scenarios=smoke_scenarios,
+                        )
+
+                        if self._state_coordinator is not None:
+                            self._state_coordinator.transition_to_waiting_for_user()
+
+                        decision = self._approval_gateway.request_approval(card)
+                        if inspect.iscoroutine(decision):
+                            decision = await decision
+
+                        if decision == ApprovalDecision.APPROVE:
+                            approval_decision = decision
+                        elif decision == ApprovalDecision.REJECT:
+                            reason = getattr(decision, "reason", None)
+                            self._pending_prompt = _format_rejection_hint(reason)
+                            if self._state_coordinator is not None:
+                                self._state_coordinator.transition_to_working(
+                                    ticket_id=self._ticket.id,
+                                    session_id=self._active_session_id,
+                                    verification_attempts=self._attempts,
+                                )
+                            continue
+                        elif decision == ApprovalDecision.DIAGNOSE:
+                            if self._tui_coordinator is not None:
+                                diag_res = self._tui_coordinator.launch_tui(
+                                    session_id=self._active_session_id
+                                )
+                                if inspect.iscoroutine(diag_res):
+                                    await diag_res
+                            elif self._ui_event_sink is not None:
+                                self._ui_event_sink.emit(
+                                    "runner", "Diagnostic session requested."
+                                )
+                            self._pending_prompt = (
+                                "Resuming after user diagnostic session. Continue from where you left off."
+                            )
+                            if self._state_coordinator is not None:
+                                self._state_coordinator.transition_to_working(
+                                    ticket_id=self._ticket.id,
+                                    session_id=self._active_session_id,
+                                    verification_attempts=self._attempts,
+                                )
+                            continue
+                        else:
+                            raise UserAbortError(
+                                f"Fail-closed: Unhandled approval decision {decision!r} for ticket '{self._ticket.id}'."
+                            )
+
                     # --- Manual verification handling ---
                     if ready_signal.manual_verification_is_default:
                         # manual_verification was absent from the payload => backward-compatible, do not emit
@@ -1204,6 +1322,7 @@ class VerificationLoop:
                         attempts=self._attempts,
                         session_id=self._active_session_id,
                         resources_accessed=frozenset(self._accumulated_resources),
+                        approval_decision=approval_decision,
                     )
 
                 # Verification failed

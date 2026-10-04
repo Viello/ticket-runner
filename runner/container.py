@@ -50,6 +50,7 @@ from runner.domain.config import (
 )
 from runner.domain.runtime_paths import RuntimePaths
 from runner.ports.agent_worker import AgentWorker
+from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
@@ -103,6 +104,7 @@ class RunnerContainer:
     discord_thread_manager: Any | None = None
     discord_logger: Any | None = None
     agent_worker: AgentWorker | None = None
+    approval_gateway: ApprovalGateway | None = None
     project_dir: Path | None = None
 
 
@@ -150,6 +152,7 @@ def build_container(
     discord_thread_manager: Any | None = None,
     discord_logger: Any | None = None,
     agent_worker: AgentWorker | None = None,
+    approval_gateway: ApprovalGateway | None = None,
 ) -> RunnerContainer:
     """Build and wire the complete runner pipeline with optional keyword-only overrides."""
     effective_dir: Path | None = None
@@ -285,6 +288,12 @@ def build_container(
         signal_repository=resolved_signal_repo,
     )
 
+    resolved_approval_gateway: ApprovalGateway | None = (
+        approval_gateway
+        if resolved_config.lifecycle.approval_mode == "human"
+        else None
+    )
+
     resolved_processor = processor or TicketProcessor(
         coordinator=resolved_coordinator,
         signal_repository=resolved_signal_repo,
@@ -302,6 +311,9 @@ def build_container(
         token_budget=resolved_config.tokens,
         status_publisher=resolved_status_publisher,
         git_operations=resolved_git_ops,
+        approval_gateway=resolved_approval_gateway,
+        approval_mode=resolved_config.lifecycle.approval_mode,
+        tui_coordinator=resolved_tui_coordinator if 'resolved_tui_coordinator' in locals() else tui_coordinator,
     )
     if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
         resolved_processor.state_coordinator = resolved_state_coordinator
@@ -397,6 +409,8 @@ def build_container(
 
     if resolved_supervisor.tui_coordinator is None:
         resolved_supervisor.tui_coordinator = resolved_tui_coordinator
+    if hasattr(resolved_processor, "_tui_coordinator") and resolved_processor._tui_coordinator is None:
+        resolved_processor._tui_coordinator = resolved_tui_coordinator
 
     return RunnerContainer(
         config=resolved_config,
@@ -425,6 +439,7 @@ def build_container(
         discord_thread_manager=discord_thread_manager,
         discord_logger=discord_logger,
         agent_worker=resolved_agent_worker,
+        approval_gateway=resolved_approval_gateway,
         project_dir=effective_dir,
     )
 

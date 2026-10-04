@@ -12,6 +12,7 @@ from runner.adapters.ui.terminal import (
     RichTerminalDisplay,
     calculate_token_bar,
 )
+from runner.adapters.ui.terminal_approval import TerminalApprovalAdapter
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "KeyboardPoller",
     "ModelPrompt",
     "RichTerminalDisplay",
+    "TerminalApprovalAdapter",
     "TerminalInterventionGateway",
     "calculate_token_bar",
     "default_windows_key_reader",

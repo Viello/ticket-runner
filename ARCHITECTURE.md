@@ -76,6 +76,7 @@ ticket-runner/
 │   │   ├── runtime_paths.py          # Value object resolving paths in <project-dir> and .agent/
 │   │   ├── ring_buffer.py            # Fixed-capacity in-memory telemetry buffer (Spec 10)
 │   │   ├── failure_analyser.py       # Pattern-matching failure classifier for test suites (Spec 10)
+│   │   ├── evidence.py               # EvidenceCard, ApprovalDecision domain models (Spec 13)
 │   │   └── exceptions.py             # Domain hierarchy rooted at TicketRunnerError
 │   │
 │   ├── application/                  # Application Use Cases / Interactors
@@ -154,6 +155,7 @@ ticket-runner/
 │       │   ├── commands.py           # Slash commands (/mode, /pause, /status, /approve)
 │       │   ├── gateway.py            # Implements DiscordGateway
 │       │   ├── logger.py             # Implements DiscordLogger with chunking engine
+│       │   ├── approval.py           # DiscordApprovalAdapter implementing ApprovalGateway (Spec 13)
 │       │   ├── thread_listener.py    # Watches and routes messages inside ticket threads
 │       │   ├── live_check.py         # Connection and guild readiness healthchecker
 │       │   └── smoke.py              # Discord adapter smoke test verification utility
@@ -163,6 +165,7 @@ ticket-runner/
 │       │   ├── keyboard.py           # Non-blocking msvcrt keyboard reader for Windows
 │       │   ├── terminal_detector.py  # Host environment sniffer (Windows Terminal, VS Code, raw conhost)
 │       │   ├── terminal_prompts.py   # Human prompt helpers for interactive questions & decisions
+│       │   ├── terminal_approval.py  # TerminalApprovalAdapter implementing ApprovalGateway (Spec 13)
 │       │   ├── model_prompt.py       # Interactive model selector prompt for terminal UI
 │       │   └── tui_launcher.py       # Out-of-band terminal window spawner for worker observation
 │       ├── config/
@@ -176,10 +179,12 @@ ticket-runner/
     ├── fakes/                        # Deterministic In-Memory Port Test Doubles
     │   ├── __init__.py
     │   ├── fake_agent_worker.py      # In-memory AgentWorker double for deterministic supervisor testing
+    │   ├── fake_approval_gateway.py  # In-memory ApprovalGateway double for Spec 13 testing
     │   ├── fake_command_runner.py    # Simulates CLI stdout streams and exit codes
     │   ├── fake_ticket_repository.py # In-memory ticket queue double
     │   ├── fake_state_store.py       # In-memory state persistence double
     │   ├── fake_signal_repository.py # In-memory signal and question double
+    │   ├── fake_skills_client.py     # In-memory remote skills catalog double
     │   ├── fake_discord_gateway.py   # In-memory recorded discord threads and messages
     │   ├── fake_discord_logger.py    # In-memory recorded discord log events
     │   ├── fake_intervention.py      # In-memory scripted operator response double
@@ -188,7 +193,10 @@ ticket-runner/
     ├── unit/                         # Fast Isolated Layered Tests
     │   ├── domain/                   # Entity invariants, token budget math, paths, failure analysis
     │   ├── application/              # Interactor workflows using fakes
-    │   └── adapters/                 # Parsers, serializers, locks, and file store tests
+    │   ├── adapters/                 # Parsers, serializers, locks, and file store tests
+    │   ├── ports/                    # Port protocol compliance tests
+    │   ├── container/                # Composition Root wiring tests
+    │   └── skills/                   # Verification meta-skill tests
     ├── integration/                  # Out-of-band and Subsystem Tests
     │   └── test_discord_e2e.py       # End-to-end Discord smoke & flag verification
     └── specs/                        # Spec-Level Behavioral Verification Suites
@@ -199,7 +207,8 @@ ticket-runner/
         ├── test_spec_06_state_ui.py
         ├── test_spec_07_model_selection.py
         ├── test_spec_11_decoupled_runner.py
-        └── test_spec_12_scaffolding.py
+        ├── test_spec_12_scaffolding.py
+        └── test_spec_13_verification_and_approval.py
 ```
 
 ---
@@ -219,6 +228,10 @@ When Ticket Runner targets an external codebase via `--project-dir <path>`, it e
 │   ├── implement/SKILL.md            # Worker implementation instructions
 │   ├── code-review/SKILL.md          # Standards and spec review skill
 │   ├── security-review/SKILL.md      # Security review discipline (ADR 0013)
+│   ├── create-verification-skill/    # Meta-skill scaffolding verify-<app>/ (Spec 13)
+│   │   └── SKILL.md
+│   ├── maintain-verification-skill/  # Companion skill auditing feature maps (Spec 13)
+│   │   └── SKILL.md
 │   └── verify-<app>/                 # Verification Subsystem Contract (Spec 13)
 │       ├── SKILL.md                  # 5-step lifecycle: Launch -> Doctor -> Drive -> Evidence -> Cleanup
 │       ├── harness/                  # Behavioral test drivers (Playwright, PTY CLI, HTTP)

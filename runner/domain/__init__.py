@@ -11,9 +11,11 @@ from runner.domain.config import (
     RunnerConfig,
     TokenBudgetConfig,
     UIConfig,
+    VALID_APPROVAL_MODES,
     VerificationConfig,
     WorkerConfig,
 )
+from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import (
     CleanSlateError,
     CommandNotFoundError,
@@ -72,6 +74,7 @@ from runner.domain.telemetry import (
 from runner.domain.ticket import Ticket, TicketStatus, parse_ticket_status
 
 __all__ = [
+    "ApprovalDecision",
     "DEFAULT_AGENT_DIR",
     "BudgetAction",
     "BudgetMonitor",
@@ -81,6 +84,7 @@ __all__ = [
     "DiscordConfig",
     "DiscordGatewayError",
     "DoctorError",
+    "EvidenceCard",
     "FAILURE_LABELS",
     "FailureDiagnostic",
     "GitConfig",
@@ -118,6 +122,7 @@ __all__ = [
     "TokenUsage",
     "UIConfig",
     "UserAbortError",
+    "VALID_APPROVAL_MODES",
     "VALID_RING_BUFFER_SOURCES",
     "VerificationConfig",
     "WorkerConfig",

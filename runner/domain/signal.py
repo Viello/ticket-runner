@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any
 
+from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import SignalFormatError
 
 TICKET_NUMBER_PATTERN = re.compile(r"^[tT]\d{3,}$")

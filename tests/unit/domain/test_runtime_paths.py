@@ -28,6 +28,7 @@ def test_directory_properties() -> None:
     assert paths.questions_dir == Path(".agent/questions")
     assert paths.checkpoints_dir == Path(".agent/checkpoints")
     assert paths.logs_dir == Path(".agent/logs")
+    assert paths.evidence_base_dir == Path(".agent/evidence")
 
 
 def test_state_path() -> None:
@@ -300,6 +301,51 @@ def test_external_root_dir_resolution(tmp_path: Path) -> None:
     assert paths.question_path("T097") == agent_dir / "questions" / "T097.json"
     assert paths.checkpoint_path("T097") == agent_dir / "checkpoints" / "T097" / "handoff.md"
     assert paths.session_log_path("T097", "ses_abc123") == agent_dir / "logs" / "T097_session_ses_abc123.jsonl"
+    assert paths.evidence_base_dir == agent_dir / "evidence"
+    assert paths.evidence_dir("T097") == agent_dir / "evidence" / "T097"
+
+
+def test_evidence_dir_standard_and_ensure(tmp_path: Path) -> None:
+    paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    assert paths.evidence_base_dir == tmp_path / ".agent" / "evidence"
+    assert paths.evidence_dir("T107") == tmp_path / ".agent" / "evidence" / "T107"
+
+    # Directory does not exist yet
+    assert not paths.evidence_dir("T107").exists()
+
+    # ensure_evidence_dir creates it
+    created = paths.ensure_evidence_dir("T107")
+    assert created == tmp_path / ".agent" / "evidence" / "T107"
+    assert created.is_dir()
+
+    # ensure_evidence_base_dir creates base dir
+    base_created = paths.ensure_evidence_base_dir()
+    assert base_created == tmp_path / ".agent" / "evidence"
+    assert base_created.is_dir()
+
+
+def test_evidence_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.evidence_dir("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.evidence_dir("T001/../../escape")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.evidence_dir("T001\\evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.ensure_evidence_dir("../../evil")
+
+
+def test_ensure_all_dirs_creates_evidence_dirs(tmp_path: Path) -> None:
+    paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    paths.ensure_all_dirs("T107")
+    assert (tmp_path / ".agent" / "signals").is_dir()
+    assert (tmp_path / ".agent" / "questions").is_dir()
+    assert (tmp_path / ".agent" / "checkpoints" / "T107").is_dir()
+    assert (tmp_path / ".agent" / "evidence").is_dir()
+    assert (tmp_path / ".agent" / "evidence" / "T107").is_dir()
+    assert (tmp_path / ".agent" / "logs").is_dir()
+
 
 
 
