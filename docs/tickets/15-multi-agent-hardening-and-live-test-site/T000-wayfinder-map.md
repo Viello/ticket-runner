@@ -191,5 +191,7 @@ developer should be able to:
 - T017 — (Conditional) Seed the demo ticket queue — wayfinder:task (AFK) — blocked by T016 = yes
 - T018 — Rewrite Antigravity adapter to match empirical CLI surface — wayfinder:task (HITL) — blocked by T002 (unblocked); critical-path
 - T019 — Push the wayfinder skill fix to Viello/agent-skills main — wayfinder:grilling (HITL) — blocked by T014, T018
-- T099 — Spec-closing alignment ticket — wayfinder:task (HITL) — blocked by all (incl. T019)
+- T020 — Scaffold output sanitization engine — wayfinder:task (HITL) — blocked by T005b, T005c, T005d
+- T021 — All-mode skill catalog enumeration from the public catalog — wayfinder:task (HITL) — blocked by T005d
+- T099 — Spec-closing alignment ticket — wayfinder:task (HITL) — blocked by all (incl. T019, T020, T021)
 -->
