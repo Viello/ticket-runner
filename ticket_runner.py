@@ -218,6 +218,29 @@ def create_parser() -> argparse.ArgumentParser:
         help="Start the Discord bot client loop in interactive standalone mode.",
     )
 
+    # notify command
+    notify_parser = subparsers.add_parser(
+        "notify",
+        help="Post a single notification message to the configured Discord channel and exit.",
+    )
+    notify_parser.add_argument(
+        "message",
+        type=str,
+        help="Notification message to post to Discord status channel.",
+    )
+    notify_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Target project directory path (default: current directory).",
+    )
+    notify_parser.add_argument(
+        "--config",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Path to configuration YAML file (default: config.yaml).",
+    )
+
     # placeholders for future subcommands
     subparsers.add_parser("pause", help="Pause the active ticket execution.")
     subparsers.add_parser("status", help="Display current runner and ticket status.")
@@ -805,6 +828,126 @@ async def run_bot(
     return 0
 
 
+async def run_notify(
+    message: str,
+    config_path: Path | None = None,
+    container_instance: BotContainer | None = None,
+    gateway: DiscordGateway | None = None,
+    stderr: Any | None = None,
+    project_dir: Path | None = None,
+) -> int:
+    """Execute one-shot Discord notification and exit (T114, Spec 14)."""
+    err_stream = stderr or sys.stderr
+
+    if not message or not message.strip():
+        err_stream.write("Error: Notification message cannot be empty.\n")
+        return 1
+
+    resolved_project_dir: Path | None = None
+    if project_dir is not None:
+        resolved_project_dir = Path(project_dir).resolve()
+        if not resolved_project_dir.exists():
+            err_stream.write(f"\n[Runner] Error: Project directory '{resolved_project_dir}' does not exist.\n")
+            return 1
+        if not resolved_project_dir.is_dir():
+            err_stream.write(f"\n[Runner] Error: Project path '{resolved_project_dir}' is not a directory.\n")
+            return 1
+
+    effective_config_path = config_path
+    if resolved_project_dir is not None and config_path is not None and not config_path.is_absolute():
+        effective_config_path = resolved_project_dir / config_path
+
+    try:
+        container = container_instance or build_bot_container(
+            config_path=effective_config_path,
+            project_dir=resolved_project_dir,
+        )
+    except Exception as exc:
+        err_stream.write(f"Configuration error: {exc}\n")
+        return 1
+
+    config = container.config
+
+    if not config.discord.enabled:
+        err_stream.write("Error: Discord is disabled in configuration (discord.enabled is false).\n")
+        return 1
+
+    if not config.discord.channel_id:
+        err_stream.write("Error: Missing discord.channel_id in configuration.\n")
+        return 1
+
+    if not config.discord.channel_id.strip().isdigit():
+        err_stream.write(
+            f"Error: Invalid discord.channel_id '{config.discord.channel_id}' in configuration (must be numeric snowflake).\n"
+        )
+        return 1
+
+    token_env = config.discord.token_env
+    token_val = os.environ.get(token_env, "").strip()
+    if not token_val:
+        err_stream.write(
+            f"Authentication failed: Missing or empty bot token in environment variable '{token_env}'.\n"
+        )
+        return 1
+
+    def _sanitize(text: str) -> str:
+        if token_val and token_val in text:
+            return text.replace(token_val, "[REDACTED]")
+        return text
+
+    gw = gateway
+    if gw is not None:
+        try:
+            await gw.post_message(config.discord.channel_id, message)
+            return 0
+        except Exception as exc:
+            err_stream.write(f"Error posting notification: {_sanitize(str(exc))}\n")
+            return 1
+
+    # Live gateway execution using container client
+    client = container.discord_client
+    start_task = asyncio.create_task(client.start())
+    ready_task = asyncio.create_task(client.ready_event.wait())
+    try:
+        done, pending = await asyncio.wait(
+            [start_task, ready_task],
+            return_when=asyncio.FIRST_COMPLETED,
+            timeout=30.0,
+        )
+        if ready_task not in done:
+            if start_task in done:
+                exc = start_task.exception()
+                err_stream.write(f"Authentication failed: {_sanitize(str(exc))}\n")
+            else:
+                err_stream.write("Authentication failed: Connection timed out connecting to Discord.\n")
+            for p in pending:
+                p.cancel()
+            await client.close()
+            return 1
+
+        if getattr(client, "ready_error", None) is not None:
+            err_stream.write(f"Discord connection error: {_sanitize(str(client.ready_error))}\n")
+            for p in pending:
+                p.cancel()
+            await client.close()
+            return 1
+
+        live_gw = DiscordPyGateway(client.client)
+        await live_gw.post_message(config.discord.channel_id, message)
+        return 0
+    except Exception as exc:
+        err_stream.write(f"Error posting notification: {_sanitize(str(exc))}\n")
+        return 1
+    finally:
+        await client.close()
+        if not start_task.done():
+            start_task.cancel()
+            try:
+                await start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
 
 
 def run_init(
@@ -882,7 +1025,12 @@ def run_skills_sync(
         return 1
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    gateway: DiscordGateway | None = None,
+    container_instance: BotContainer | None = None,
+) -> int:
     """Main CLI entry point returning status exit code."""
     parser = create_parser()
     args = parser.parse_args(argv)
@@ -960,6 +1108,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     config_path=config_path,
                     smoke=getattr(args, "smoke", False),
                     run=getattr(args, "run", False),
+                    container_instance=container_instance,
+                    gateway=gateway,
+                    project_dir=project_dir,
+                )
+            )
+        elif args.command == "notify":
+            return asyncio.run(
+                run_notify(
+                    message=args.message,
+                    config_path=config_path,
+                    container_instance=container_instance,
+                    gateway=gateway,
                     project_dir=project_dir,
                 )
             )

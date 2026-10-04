@@ -24,7 +24,7 @@ from runner.domain.config import (
 )
 from runner.domain.exceptions import DiscordGatewayError
 from tests.fakes.fake_discord_gateway import FakeDiscordGateway
-from ticket_runner import create_parser, main, run_bot
+from ticket_runner import create_parser, main, run_bot, run_notify
 
 
 def _make_test_config(
@@ -392,3 +392,286 @@ def test_main_bot_smoke_delegation() -> None:
         code = main(["bot", "--smoke"])
         assert code == 0
         mock_run_bot.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_run_notify_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify posts a message via injected gateway and exits 0."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config(channel_id="1234567890")
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    exit_code = await run_notify(
+        message="live-qa: scenario 1 — verified",
+        container_instance=container,
+        gateway=fake_gateway,
+    )
+
+    assert exit_code == 0
+    assert len(fake_gateway.calls) == 1
+    call = fake_gateway.calls[0]
+    assert call.method == "post_message"
+    assert call.channel_or_thread_id == "1234567890"
+    assert call.content == "live-qa: scenario 1 — verified"
+
+
+@pytest.mark.anyio
+async def test_run_notify_disabled_discord(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 with diagnostic if discord is disabled in config."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config(enabled=False)
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert len(fake_gateway.calls) == 0
+    err_output = stderr.getvalue()
+    assert "discord.enabled" in err_output
+    assert "disabled" in err_output.lower()
+
+
+@pytest.mark.anyio
+async def test_run_notify_missing_channel_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 with diagnostic if discord.channel_id is missing."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config(channel_id="")
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert len(fake_gateway.calls) == 0
+    err_output = stderr.getvalue()
+    assert "channel_id" in err_output
+
+
+@pytest.mark.anyio
+async def test_run_notify_invalid_channel_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 with diagnostic if discord.channel_id is not numeric."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config(channel_id="not_a_number")
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert len(fake_gateway.calls) == 0
+    err_output = stderr.getvalue()
+    assert "channel_id" in err_output
+
+
+@pytest.mark.anyio
+async def test_run_notify_missing_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 naming the token env var when token is unset or empty."""
+    monkeypatch.delenv("TEST_DISCORD_TOKEN", raising=False)
+    config = _make_test_config()
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert len(fake_gateway.calls) == 0
+    err_output = stderr.getvalue()
+    assert "TEST_DISCORD_TOKEN" in err_output
+    assert "token" in err_output.lower()
+
+
+@pytest.mark.anyio
+async def test_run_notify_empty_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 when message is empty or whitespace-only."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config()
+    fake_gateway = FakeDiscordGateway()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="   ",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert len(fake_gateway.calls) == 0
+    err_output = stderr.getvalue()
+    assert "empty" in err_output.lower()
+
+
+@pytest.mark.anyio
+async def test_run_notify_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify exits 1 and reports error message when gateway raises exception."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config()
+    fake_gateway = FakeDiscordGateway(
+        raise_on_post_message=DiscordGatewayError("Remote API 500 server error")
+    )
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    err_output = stderr.getvalue()
+    assert "Remote API 500 server error" in err_output
+
+
+@pytest.mark.anyio
+async def test_run_notify_security_token_never_in_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Secret bot token is never logged, echoed in diagnostics, or printed on error."""
+    secret_token = "SECRET_SUPER_SENSITIVE_BOT_TOKEN_12345"
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", secret_token)
+    config = _make_test_config()
+    fake_gateway = FakeDiscordGateway(
+        raise_on_post_message=DiscordGatewayError(f"Failed with token {secret_token}")
+    )
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=MagicMock(spec=DiscordClient),
+    )
+
+    stderr = StringIO()
+    exit_code = await run_notify(
+        message="hello",
+        container_instance=container,
+        gateway=fake_gateway,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    err_output = stderr.getvalue()
+    assert secret_token not in err_output
+
+
+@pytest.mark.anyio
+async def test_run_notify_live_client_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_notify connects client, posts via DiscordPyGateway, and closes client when gateway is None."""
+    monkeypatch.setenv("TEST_DISCORD_TOKEN", "valid_token_123")
+    config = _make_test_config()
+
+    mock_discord_client = MagicMock(spec=DiscordClient)
+    mock_discord_client.client = MagicMock()
+    mock_discord_client.ready_event = asyncio.Event()
+    mock_discord_client.ready_event.set()
+    mock_discord_client.ready_error = None
+    mock_discord_client.start = AsyncMock()
+    mock_discord_client.close = AsyncMock()
+
+    container = BotContainer(
+        config=config,
+        runtime_paths=MagicMock(),
+        signal_repository=MagicMock(),
+        discord_client=mock_discord_client,
+    )
+
+    with patch("ticket_runner.DiscordPyGateway") as mock_gw_class:
+        mock_gw_instance = AsyncMock()
+        mock_gw_instance.post_message = AsyncMock(return_value="msg_123")
+        mock_gw_class.return_value = mock_gw_instance
+
+        exit_code = await run_notify(
+            message="hello live",
+            container_instance=container,
+        )
+
+        assert exit_code == 0
+        mock_discord_client.start.assert_called_once()
+        mock_gw_instance.post_message.assert_awaited_once_with(
+            "1234567890", "hello live"
+        )
+        mock_discord_client.close.assert_awaited_once()
+
+
+def test_main_notify_delegation() -> None:
+    """main with ['notify', 'hello'] routes to run_notify and returns exit code 0."""
+    with patch("ticket_runner.run_notify", new=AsyncMock(return_value=0)) as mock_run_notify:
+        code = main(["notify", "hello"])
+        assert code == 0
+        mock_run_notify.assert_awaited_once()
+
+
+def test_main_notify_catches_keyboard_interrupt_returns_130() -> None:
+    """main returns 130 if KeyboardInterrupt is raised during notify execution."""
+    with patch("ticket_runner.run_notify", side_effect=KeyboardInterrupt):
+        code = main(["notify", "hello"])
+        assert code == 130

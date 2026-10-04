@@ -291,5 +291,12 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When auditing living documentation (`ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`) against implemented specifications, forward-declared or newly introduced modules (such as `evidence.py`, `approval.py`, `terminal_approval.py`, test doubles, and verification meta-skills) can be omitted from directory trees or glossary entries, causing subtle drift between actual code and agent navigation guidance. Furthermore, status flags in roadmap tables and adapter environment notes in `AGENTS.md` can remain marked as planned or unimplemented, misleading subsequent agents and operators.
 - **Solution:** Execute automated cross-checks comparing filesystem paths against `ARCHITECTURE.md` directory listings, verify glossary terms and `_Avoid_` synonym blocks in `CONTEXT.md` using deterministic regex sweeps, and systematically update implementation statuses and roadmap tables across `AGENTS.md` and `README.md`. Maintaining exact correspondence between code, tests, and living documentation ensures zero-guesswork agent navigation across future specification cycles.
 
+---
+
+## Discord One-Shot Notification Lifecycle & Token Redaction Guardrails
+
+- **Problem:** Executing a one-shot notification CLI command (`ticket_runner.py notify <msg>`) without an injected gateway requires establishing a minimal connection with `discord.py`'s client (`client.start()`) to authenticate the HTTP session before resolving channels and posting messages. Awaiting readiness indefinitely or failing to handle errors can hang the CLI process. Furthermore, if network or Discord API exceptions happen to contain the secret bot token, echoing raw exceptions to stderr would compromise bot credentials.
+- **Solution:** In `run_notify`, await `client.ready_event.wait()` with a 30-second timeout guard, inspect `client.ready_error` for fast failure reporting, and ensure `client.close()` and task cleanup unconditionally execute in a `finally` block. Defensively sanitize all error outputs by redacting `token_val` if present in exception strings, and validate that `channel_id` is a numeric snowflake before initiating connection tasks.
+
 
 

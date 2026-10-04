@@ -1,5 +1,6 @@
 # T114 — Discord notify one-shot CLI subcommand
-Status: pending
+Status: completed
+Completed: 2026-10-04T06:21:00Z
 Spec: docs/specs/14-live-qa-replacement.md
 Blocked by: None
 Security: required
@@ -18,11 +19,23 @@ Security: required
 - Security verification: the token is read only from the env var named by `config.discord.token_env`, never logged, never echoed in diagnostics; message text is passed through without shell interpolation; unit tests assert the token value appears nowhere in captured output.
 
 ### Smoke Scenarios
-**Scenario: notify posts to Discord**
-- Setup: `config.yaml` with `discord.enabled: true`, valid `channel_id`, `DISCORD_BOT_TOKEN` set in env; bot not otherwise required to be running.
-- Why: Live-qa sessions stream per-scenario verdicts through this command; if one-shot posting works, the streaming hook has its transport.
-- Steps: 1. Run `py ticket_runner.py notify "live-qa: scenario X — verified"`. 2. Watch the configured Discord channel. 3. Then unset the token env var and re-run.
-- Expected: The message appears in the channel within seconds and the command exits 0; the second run exits non-zero with a diagnostic naming the missing token env var, and no traceback.
+**Scenario: notify posts to Discord** [also auto-covered]
+- Setup: Ensure `config.yaml` has `discord.enabled: true` and a valid numeric `channel_id`, and `DISCORD_BOT_TOKEN` is set in the environment. The bot does not need to be running beforehand.
+- Why: In live-qa sessions, human verification verdicts are streamed into Discord in real-time. This command delivers single messages without running a continuous background bot.
+- Steps:
+  1. Open a PowerShell terminal in the repository root (`d:\Projects`).
+  2. Post a test notification to the configured status channel:
+     ```powershell
+     py ticket_runner.py notify "live-qa: scenario X — verified"
+     ```
+  3. Verify that the command exits 0 and the message appears in the configured Discord channel within seconds.
+  4. Test missing token diagnostic by running with an empty token in a temporary subshell:
+     ```powershell
+     powershell -Command "$env:DISCORD_BOT_TOKEN=''; py ticket_runner.py notify 'hello'"
+     ```
+- Expected:
+  - Step 2: The command exits with code 0 and the text `"live-qa: scenario X — verified"` is visible in the Discord status channel.
+  - Step 4: The command exits with code 1, prints `Authentication failed: Missing or empty bot token in environment variable 'DISCORD_BOT_TOKEN'.` to stderr, and produces no Python traceback.
 
 ### Gotchas
 - `run_bot` builds its container via `build_bot_container` from `runner.container` — reuse that path; do not hand-wire discord.py in the CLI layer.
