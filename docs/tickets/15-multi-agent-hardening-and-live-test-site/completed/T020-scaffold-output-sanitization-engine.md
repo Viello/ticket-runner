@@ -1,6 +1,7 @@
 # T020 — Scaffold Output Sanitization Engine
 **Type:** wayfinder:task (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-04T16:15:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T005b, T005c, T005d
 Reasoning: medium
