@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
+import urllib.error
 import pytest
 
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.tools.scaffold_sandbox import (
+    CURATED_SKILLS,
     DEFAULT_PREAMBLE,
     _read_yaml_sandbox_skills,
     _resolve_skills_mode,
     build_ticket_runner_yaml,
     extract_curated_subset,
+    fetch_public_skills_catalog,
     get_default_target_dir,
     main,
     scaffold,
@@ -284,11 +289,158 @@ def test_scaffold_yaml_contains_sandbox_skills_all(tmp_path: Path) -> None:
     assert _read_yaml_sandbox_skills(target / "ticket-runner.yaml") == "all"
 
 
-def test_scaffold_all_mode_prints_deferred_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_fetch_public_skills_catalog_from_tarball(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Synthesize an in-memory tarball with 2 skills and an extra non-skill file
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        # Extra non-skill file
+        readme_data = b"# Readme\n"
+        ti = tarfile.TarInfo(name="agent-skills-main/README.md")
+        ti.size = len(readme_data)
+        tar.addfile(ti, io.BytesIO(readme_data))
+
+        # Skill 1
+        skill1_data = b"---\nname: skill-one\n---\n# Skill One\n"
+        ti1 = tarfile.TarInfo(name="agent-skills-main/skill-one/SKILL.md")
+        ti1.size = len(skill1_data)
+        tar.addfile(ti1, io.BytesIO(skill1_data))
+
+        # Skill 2
+        skill2_data = b"---\nname: skill-two\n---\n# Skill Two\n"
+        ti2 = tarfile.TarInfo(name="agent-skills-main/skill-two/SKILL.md")
+        ti2.size = len(skill2_data)
+        tar.addfile(ti2, io.BytesIO(skill2_data))
+
+    tar_bytes = buf.getvalue()
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return tar_bytes
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=15.0: FakeResponse(),
+    )
+
+    catalog = fetch_public_skills_catalog()
+    assert len(catalog) == 2
+    assert "skill-one" in catalog
+    assert "skill-two" in catalog
+    assert "# Skill One" in catalog["skill-one"]
+    assert "# Skill Two" in catalog["skill-two"]
+
+
+def test_fetch_public_skills_catalog_empty_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        readme_data = b"# Readme\n"
+        ti = tarfile.TarInfo(name="agent-skills-main/README.md")
+        ti.size = len(readme_data)
+        tar.addfile(ti, io.BytesIO(readme_data))
+
+    tar_bytes = buf.getvalue()
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def read(self) -> bytes:
+            return tar_bytes
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=15.0: FakeResponse(),
+    )
+
+    with pytest.raises(ValueError, match="No skills found"):
+        fetch_public_skills_catalog()
+
+
+def test_scaffold_all_mode_with_source_skills_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    fake_catalog = tmp_path / "fake_catalog"
+    for i in range(1, 6):
+        skill_dir = fake_catalog / f"fake-skill-{i}"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: fake-skill-{i}\n---\n# Skill {i}\n", encoding="utf-8")
+
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, skills_mode="all", source_skills_dir=fake_catalog)
+    captured = capsys.readouterr().out
+
+    # More than 4 skills shipped
+    target_skills = list((target / ".agents" / "skills").iterdir())
+    assert len(target_skills) == 5
+    for i in range(1, 6):
+        assert (target / ".agents" / "skills" / f"fake-skill-{i}" / "SKILL.md").is_file()
+
+    assert "[scaffold] all mode: 5 skills shipped from" in captured
+    assert "deferred to T005d-impl" not in captured
+
+
+def test_scaffold_all_mode_network_fallback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def raise_network_error(*args: object, **kwargs: object) -> None:
+        raise urllib.error.URLError("Network unreachable (simulated)")
+
+    monkeypatch.setattr("runner.tools.scaffold_sandbox.fetch_public_skills_catalog", raise_network_error)
+
     target = tmp_path / "sandbox"
     scaffold(target, force=False, skills_mode="all")
     captured = capsys.readouterr().out
-    assert "[scaffold] all mode: 4 skills shipped (catalog enumeration deferred to T005d-impl)" in captured
+
+    # Ships 4 curated skills on fallback
+    target_skills = list((target / ".agents" / "skills").iterdir())
+    assert len(target_skills) == 4
+    for skill_name in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+        assert (target / ".agents" / "skills" / skill_name / "SKILL.md").is_file()
+
+    assert "[scaffold] Warning: Failed to fetch skill catalog from Viello/agent-skills" in captured
+    assert "[scaffold] all mode: 4 skills shipped (fallback to curated default)" in captured
+    assert "deferred to T005d-impl" not in captured
+
+
+def test_scaffold_all_mode_live_network(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, skills_mode="all")
+    captured = capsys.readouterr().out
+
+    target_skills = [d for d in (target / ".agents" / "skills").iterdir() if d.is_dir()]
+    assert len(target_skills) > 4
+    assert "[scaffold] all mode: " in captured
+    assert "skills shipped from Viello/agent-skills" in captured
+    assert "deferred to T005d-impl" not in captured
+
+
+def test_main_cli_skills_all_source_skills_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    fake_catalog = tmp_path / "cli_catalog"
+    for i in range(1, 6):
+        skill_dir = fake_catalog / f"cli-skill-{i}"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: cli-skill-{i}\n---\n# CLI Skill {i}\n", encoding="utf-8")
+
+    target = tmp_path / "cli_sandbox"
+    code = main([
+        "--target-dir", str(target),
+        "--non-interactive",
+        "--skills", "all",
+        "--source-skills-dir", str(fake_catalog),
+    ])
+    assert code == 0
+    captured = capsys.readouterr().out
+    target_skills = [d for d in (target / ".agents" / "skills").iterdir() if d.is_dir()]
+    assert len(target_skills) == 5
+    assert "[scaffold] all mode: 5 skills shipped from" in captured
+    assert "deferred to T005d-impl" not in captured
 
 
 def test_scaffold_default_mode_omits_deferred_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

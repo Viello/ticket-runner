@@ -1,6 +1,7 @@
 # T021 — All-Mode Skill Catalog Enumeration from the Public Catalog
 **Type:** wayfinder:task (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-04T16:23:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T005d
 Reasoning: medium

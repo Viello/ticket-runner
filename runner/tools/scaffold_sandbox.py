@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import io
 import os
 from pathlib import Path
 import platform
@@ -11,7 +12,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 from typing import Literal
+import urllib.error
+import urllib.request
 
 from runner.tools.sanitize import apply_sanitization
 
@@ -52,6 +56,49 @@ AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
 )
 
 SkillsMode = Literal["default", "all"]
+
+CURATED_SKILLS: tuple[str, ...] = (
+    "implement",
+    "code-review",
+    "diagnosing-bugs",
+    "handoff",
+)
+
+PUBLIC_SKILLS_REPO_URL: str = "https://github.com/Viello/agent-skills"
+PUBLIC_SKILLS_TARBALL_URL: str = "https://github.com/Viello/agent-skills/archive/refs/heads/main.tar.gz"
+
+
+def fetch_public_skills_catalog(
+    url: str = PUBLIC_SKILLS_TARBALL_URL,
+    timeout: float = 15.0,
+) -> dict[str, str]:
+    """Fetch and extract skill catalog from upstream GitHub tarball.
+
+    Returns:
+        Mapping of skill_name -> SKILL.md content.
+    """
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ticket-runner-scaffold"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        tar_bytes = resp.read()
+
+    skills: dict[str, str] = {}
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/")
+            if len(parts) == 3 and parts[2] == "SKILL.md":
+                skill_name = parts[1]
+                f = tar.extractfile(member)
+                if f is not None:
+                    skills[skill_name] = f.read().decode("utf-8")
+
+    if not skills:
+        raise ValueError(f"No skills found in tarball from {url}")
+    return skills
 
 STAMP_PATTERN = re.compile(
     r"<!--\s*mirrored from .*? on (\d{4}-\d{2}-\d{2})\s*-->"
@@ -388,27 +435,64 @@ def scaffold(
     for sub in ("signals", "questions", "logs", "checkpoints", "evidence", "archive"):
         (target / ".agent" / sub).mkdir(parents=True, exist_ok=True)
 
-    # 2. .agents/skills/{implement,code-review,diagnosing-bugs,handoff}/SKILL.md
-    skills_src = _resolve_source_skills_dir(source_skills_dir)
+    # 2. .agents/skills/<skill>/SKILL.md
     target_skills_dir = target / ".agents" / "skills"
-    for skill_name in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+    source_label = "Viello/agent-skills"
+    fallback = False
+    skills_data: dict[str, str] = {}
+
+    if skills_mode == "all":
+        if source_skills_dir is not None:
+            if not source_skills_dir.is_dir():
+                raise FileNotFoundError(f"Source skills directory does not exist: {source_skills_dir}")
+            source_label = str(source_skills_dir)
+            for item in sorted(source_skills_dir.iterdir()):
+                skill_file = item / "SKILL.md"
+                if item.is_dir() and skill_file.is_file():
+                    skills_data[item.name] = skill_file.read_text(encoding="utf-8")
+        else:
+            try:
+                skills_data = fetch_public_skills_catalog()
+                source_label = "Viello/agent-skills"
+            except Exception as exc:
+                print(
+                    f"[scaffold] Warning: Failed to fetch skill catalog from Viello/agent-skills: {exc}. "
+                    "Falling back to curated default skills."
+                )
+                fallback = True
+
+        if fallback or (source_skills_dir is None and not skills_data):
+            fallback = True
+            skills_src = _resolve_source_skills_dir(None)
+            skills_data = {}
+            for skill_name in CURATED_SKILLS:
+                src_file = skills_src / skill_name / "SKILL.md" if skills_src else None
+                if src_file and src_file.is_file():
+                    skills_data[skill_name] = src_file.read_text(encoding="utf-8")
+                else:
+                    skills_data[skill_name] = (
+                        f"---\nname: {skill_name}\ndescription: {skill_name} skill\n---\n# {skill_name}\n"
+                    )
+    else:
+        # default mode: 4 curated skills
+        skills_src = _resolve_source_skills_dir(source_skills_dir)
+        for skill_name in CURATED_SKILLS:
+            src_file = skills_src / skill_name / "SKILL.md" if skills_src else None
+            if src_file and src_file.is_file():
+                skills_data[skill_name] = src_file.read_text(encoding="utf-8")
+            else:
+                skills_data[skill_name] = (
+                    f"---\nname: {skill_name}\ndescription: {skill_name} skill\n---\n# {skill_name}\n"
+                )
+
+    for skill_name, content in skills_data.items():
         dest_file = target_skills_dir / skill_name / "SKILL.md"
         dest_file.parent.mkdir(parents=True, exist_ok=True)
         if not dest_file.exists() or force:
-            src_file = skills_src / skill_name / "SKILL.md" if skills_src else None
-            if src_file and src_file.is_file():
-                dest_file.write_text(
-                    apply_sanitization(src_file.read_text(encoding="utf-8"), "skill_md"),
-                    encoding="utf-8",
-                )
-            else:
-                dest_file.write_text(
-                    apply_sanitization(
-                        f"---\nname: {skill_name}\ndescription: {skill_name} skill\n---\n# {skill_name}\n",
-                        "skill_md",
-                    ),
-                    encoding="utf-8",
-                )
+            dest_file.write_text(
+                apply_sanitization(content, "skill_md"),
+                encoding="utf-8",
+            )
             created_count += 1
 
     # 3. docs/tickets/00-welcome/T001-hello-world.md
@@ -606,7 +690,10 @@ def scaffold(
     print(f"[scaffold] Commit: {commit_sha} chore(sandbox): initialize ticket-runner onboarding sandbox")
     print(f"[scaffold] Verification: python ticket_runner.py --project-dir {target} doctor")
     if skills_mode == "all":
-        print("[scaffold] all mode: 4 skills shipped (catalog enumeration deferred to T005d-impl)")
+        if fallback:
+            print("[scaffold] all mode: 4 skills shipped (fallback to curated default)")
+        else:
+            print(f"[scaffold] all mode: {len(skills_data)} skills shipped from {source_label}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -632,15 +719,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip confirmation prompt on --force",
     )
     parser.add_argument(
+        "--source-skills-dir",
+        type=Path,
+        default=None,
+        help="Optional local directory override for source skills catalog",
+    )
+    parser.add_argument(
         "--skills",
         choices=("default", "all"),
         default=None,
         help=(
             "Skill catalog mode: 'default' ships the 4 curated skills "
             "(implement, code-review, diagnosing-bugs, handoff); 'all' ships "
-            "the full catalog (see T005d). Overrides ticket-runner.yaml "
-            "sandbox.skills; falls back to it, then to 'default'. Affects "
-            "AGENTS.md ## Agent skills bullet trim only."
+            "the full catalog from Viello/agent-skills. Overrides ticket-runner.yaml "
+            "sandbox.skills; falls back to it, then to 'default'."
         ),
     )
 
@@ -654,7 +746,12 @@ def main(argv: list[str] | None = None) -> int:
             print("Aborted.")
             return 1
 
-    scaffold(target_dir, force=args.force, skills_mode=skills_mode)
+    scaffold(
+        target_dir,
+        force=args.force,
+        skills_mode=skills_mode,
+        source_skills_dir=args.source_skills_dir,
+    )
     return 0
 
 
