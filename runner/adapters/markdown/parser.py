@@ -49,7 +49,6 @@ class TicketMarkdownParser:
         ticket_id, title = self._parse_title(lines[title_index], ticket_path)
         metadata, region_end = self._parse_metadata(lines, title_index)
         sections = self._parse_sections(lines[region_end:])
-        smoke_scenarios = self._parse_smoke_scenarios(lines[region_end:])
 
         return Ticket(
             id=ticket_id,
@@ -62,7 +61,6 @@ class TicketMarkdownParser:
             path=ticket_path,
             security_required=self._parse_security_required(metadata),
             reasoning=self._parse_reasoning(metadata),
-            smoke_scenarios=smoke_scenarios,
         )
 
     def _title_index(self, lines: list[str], path: Path) -> int:
@@ -138,69 +136,3 @@ class TicketMarkdownParser:
             if bullet:
                 found[current].append(bullet.group("text").strip())
         return {field: tuple(entries) for field, entries in found.items()}
-
-    def _parse_smoke_scenarios(self, lines: list[str]) -> tuple[dict[str, Any], ...]:
-        in_smoke = False
-        scenarios: list[dict[str, Any]] = []
-        current: dict[str, Any] | None = None
-        current_field: str | None = None
-
-        scenario_heading_re = re.compile(
-            r"^\*\*(?:Scenario:)?\s*(?P<name>.+?)\*\*\s*$|^(?:-\s+)?Scenario:\s*(?P<alt_name>.+?)$",
-            re.IGNORECASE,
-        )
-        field_re = re.compile(
-            r"^\s*-\s+(?P<field>Setup|Why|Steps|Expected):\s*(?P<rest>.*)$",
-            re.IGNORECASE,
-        )
-
-        for line in lines:
-            heading = SECTION_PATTERN.match(line)
-            if heading:
-                name = heading.group("name").strip().lower()
-                if name == "smoke scenarios":
-                    in_smoke = True
-                    continue
-                else:
-                    in_smoke = False
-                    if current:
-                        scenarios.append(current)
-                        current = None
-                    continue
-
-            if not in_smoke:
-                continue
-
-            sc_match = scenario_heading_re.match(line.strip())
-            if sc_match:
-                if current:
-                    scenarios.append(current)
-                name_val = sc_match.group("name") or sc_match.group("alt_name") or ""
-                current = {
-                    "name": name_val.strip(),
-                    "setup": "",
-                    "why": "",
-                    "steps": "",
-                    "expected": "",
-                }
-                current_field = None
-                continue
-
-            f_match = field_re.match(line)
-            if f_match and current is not None:
-                field_name = f_match.group("field").lower()
-                rest = f_match.group("rest").strip()
-                current[field_name] = rest
-                current_field = field_name
-                continue
-
-            if current is not None and current_field is not None and line.strip():
-                if current[current_field]:
-                    current[current_field] += "\n" + line.strip()
-                else:
-                    current[current_field] = line.strip()
-
-        if current:
-            scenarios.append(current)
-
-        return tuple(scenarios)

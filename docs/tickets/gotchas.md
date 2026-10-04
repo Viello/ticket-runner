@@ -298,5 +298,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Executing a one-shot notification CLI command (`ticket_runner.py notify <msg>`) without an injected gateway requires establishing a minimal connection with `discord.py`'s client (`client.start()`) to authenticate the HTTP session before resolving channels and posting messages. Awaiting readiness indefinitely or failing to handle errors can hang the CLI process. Furthermore, if network or Discord API exceptions happen to contain the secret bot token, echoing raw exceptions to stderr would compromise bot credentials.
 - **Solution:** In `run_notify`, await `client.ready_event.wait()` with a 30-second timeout guard, inspect `client.ready_error` for fast failure reporting, and ensure `client.close()` and task cleanup unconditionally execute in a `finally` block. Defensively sanitize all error outputs by redacting `token_val` if present in exception strings, and validate that `channel_id` is a numeric snowflake before initiating connection tasks.
 
+---
+
+## Domain Scenario Data Rip & Legacy Unknown-Key Tolerance at the Signal Boundary
+
+- **Problem:** Removing the smoke scenario data path from `Ticket` and `ReadySignal` risks runtime crashes when loading historical ticket markdown files or processing in-flight ready signals that still include legacy `manual_verification` payloads. If `ReadySignal.parse` strictly enforces a schema without unknown-key tolerance, legacy signals from earlier specifications or other workers cannot be loaded. Furthermore, downstream components like `Gatekeeper` and `TicketProcessor` that access `ready_signal.manual_verification` or `ready_signal.manual_verification_is_default` directly will raise `AttributeError` when those fields are deleted from domain dataclasses.
+- **Solution:** Remove `smoke_scenarios` from `Ticket` and remove `_parse_smoke_scenarios` from `TicketMarkdownParser`, treating `### Smoke Scenarios` sections as inert ignored text. Remove `manual_verification` from `ReadySignal` dataclass and validator; decode payloads purely through required fields so extra/legacy keys like `manual_verification` pass through tolerated without error. In `Gatekeeper` and `TicketProcessor`, defensively guard legacy scenario access with `getattr(..., "manual_verification", ())` and `getattr(..., "manual_verification_is_default", True)` during intermediate migration states. In `PromptBuilder`, filter legacy invariant lines and instruct the human-driven `/live-qa` discipline directly.
+
+
 
 

@@ -28,6 +28,16 @@ from runner.domain.ticket import Ticket, TicketStatus
 from tests.fakes.fake_intervention import FakeInterventionGateway
 
 
+@dataclass(frozen=True)
+class _LegacyReadySignal(ReadySignal):
+    manual_verification: tuple[dict, ...] = ()
+    _manual_verification_was_present: bool = False
+
+    @property
+    def manual_verification_is_default(self) -> bool:
+        return not self._manual_verification_was_present
+
+
 def _make_ticket(ticket_id: str = "T069") -> Ticket:
     return Ticket(
         id=ticket_id,
@@ -142,8 +152,7 @@ def test_absent_manual_verification_backward_compatible():
         timestamp=datetime.now(timezone.utc),
         # manual_verification defaults to ()
     )
-    assert ready.manual_verification == ()
-    assert ready.manual_verification_is_default is True
+    assert not hasattr(ready, "manual_verification")
 
     cycle_result = WorkerRunResult(
         status=SingleCycleStatus.READY,
@@ -171,7 +180,7 @@ def test_absent_manual_verification_backward_compatible():
 def test_empty_manual_verification_logs_warning():
     """When manual_verification is present but empty, emit a warning log and no user notification."""
     ticket = _make_ticket()
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),
@@ -210,7 +219,7 @@ def test_empty_manual_verification_logs_warning():
 def test_populated_manual_verification_terminal_output(sample_scenarios):
     """When manual_verification contains scenarios, print full Setup/Steps/Expected verbatim."""
     ticket = _make_ticket()
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),
@@ -254,7 +263,7 @@ def test_populated_manual_verification_terminal_output(sample_scenarios):
 def test_populated_manual_verification_commit_body_injection(sample_scenarios):
     """Commit body includes 'Manual verification required:' and one bullet per scenario name."""
     ticket = _make_ticket()
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),
@@ -297,7 +306,7 @@ def test_populated_manual_verification_commit_body_injection(sample_scenarios):
 def test_missing_git_operations_logs_warning_and_does_not_block_pass(sample_scenarios, caplog):
     """When git_operations is None, loop logs warning and passes successfully."""
     ticket = _make_ticket()
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),
@@ -332,8 +341,8 @@ def test_missing_git_operations_logs_warning_and_does_not_block_pass(sample_scen
 
 
 
-def test_signal_format_error_on_malformed_manual_verification():
-    """Non-dict entries or non-string values raise SignalFormatError."""
+def test_ready_signal_tolerates_malformed_legacy_manual_verification():
+    """Legacy manual_verification payloads (even malformed) are ignored via unknown-key tolerance."""
     payload_bad_entry = {
         "ticket_id": "T069",
         "status": "ready_for_verification",
@@ -343,8 +352,8 @@ def test_signal_format_error_on_malformed_manual_verification():
         "timestamp": "2026-09-21T00:00:00+00:00",
         "manual_verification": ["not-a-dict"],
     }
-    with pytest.raises(SignalFormatError):
-        ReadySignal.parse(payload_bad_entry, "T069")
+    signal = ReadySignal.parse(payload_bad_entry, "T069")
+    assert not hasattr(signal, "manual_verification")
 
     payload_bad_type = {
         "ticket_id": "T069",
@@ -355,12 +364,12 @@ def test_signal_format_error_on_malformed_manual_verification():
         "timestamp": "2026-09-21T00:00:00+00:00",
         "manual_verification": [{"name": 123}],
     }
-    with pytest.raises(SignalFormatError):
-        ReadySignal.parse(payload_bad_type, "T069")
+    signal = ReadySignal.parse(payload_bad_type, "T069")
+    assert not hasattr(signal, "manual_verification")
 
 
-def test_manual_verification_sanitization():
-    """Embedded newlines, carriage returns, and ANSI escape sequences are stripped."""
+def test_legacy_manual_verification_tolerated_in_signal():
+    """Legacy manual_verification with newlines or ANSI is ignored without crashing."""
     payload = {
         "ticket_id": "T069",
         "status": "ready_for_verification",
@@ -378,17 +387,14 @@ def test_manual_verification_sanitization():
         ],
     }
     signal = ReadySignal.parse(payload, "T069")
-    entry = signal.manual_verification[0]
-    assert "\r" not in entry["name"]
-    assert "\n" not in entry["name"]
-    assert "\x1b" not in entry["name"]
-    assert "Scenario NameRed" in entry["name"]
+    assert signal.ticket_id == "T069"
+    assert not hasattr(signal, "manual_verification")
 
 
 def test_auto_covered_tag_in_terminal_output(mixed_scenarios: tuple[dict[str, Any], ...]) -> None:
     """Assert terminal output contains 'Auto-covered scenario [also auto-covered]' while manual-only line has no tag."""
     ticket = _make_ticket()
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),
@@ -430,7 +436,7 @@ def test_smoke_log_appended_after_pass(
 ) -> None:
     """Verify .agent/smoke_log_test-spec.md is created with header, auto-covered scenario, and update notes."""
     ticket = _make_ticket("T078")
-    ready = ReadySignal(
+    ready = _LegacyReadySignal(
         ticket_id=ticket.id,
         status=SignalStatus.READY_FOR_VERIFICATION,
         modified_files=("runner/application/gatekeeper.py",),

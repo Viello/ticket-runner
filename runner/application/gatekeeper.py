@@ -1002,7 +1002,7 @@ class VerificationLoop:
         lines.append(f"_Appended: {timestamp}_")
         lines.append("")
 
-        for scenario in ready_signal.manual_verification:
+        for scenario in getattr(ready_signal, "manual_verification", ()):
             name = scenario.get("name", "")
             setup = scenario.get("setup", "")
             steps = scenario.get("steps", "")
@@ -1196,8 +1196,8 @@ class VerificationLoop:
                                 smoke_scenarios = getattr(parsed_t, "smoke_scenarios", ())
                             except Exception:
                                 pass
-                        if not smoke_scenarios and ready_signal.manual_verification:
-                            smoke_scenarios = tuple(ready_signal.manual_verification)
+                        if not smoke_scenarios and getattr(ready_signal, "manual_verification", ()):
+                            smoke_scenarios = tuple(getattr(ready_signal, "manual_verification", ()))
 
                         card = EvidenceCard(
                             ticket_id=self._ticket.id,
@@ -1253,10 +1253,10 @@ class VerificationLoop:
                             )
 
                     # --- Manual verification handling ---
-                    if ready_signal.manual_verification_is_default:
+                    if getattr(ready_signal, "manual_verification_is_default", True):
                         # manual_verification was absent from the payload => backward-compatible, do not emit
                         pass
-                    elif not ready_signal.manual_verification:
+                    elif not getattr(ready_signal, "manual_verification", ()):
                         # manual_verification present but empty => ticket defined no smoke scenarios
                         logger.warning(
                             "[%s] manual_verification is empty — ticket must define at least one smoke scenario.",
@@ -1271,7 +1271,7 @@ class VerificationLoop:
                         if self._git_operations is not None:
                             changes = [f"Update {p}" for p in ready_signal.modified_files] + [
                                 "Manual verification required:",
-                                *(f"- {_scenario_label(s)}" for s in ready_signal.manual_verification),
+                                *(f"- {_scenario_label(s)}" for s in getattr(ready_signal, "manual_verification", ())),
                             ]
                             try:
                                 commit_res = self._git_operations.commit_ticket(
@@ -1290,7 +1290,7 @@ class VerificationLoop:
 
                         # 2. Emit full human-action checklist to terminal
                         scenario_lines: list[str] = []
-                        for scenario in ready_signal.manual_verification:
+                        for scenario in getattr(ready_signal, "manual_verification", ()):
                             name = scenario.get("name", "")
                             setup = scenario.get("setup", "")
                             steps = scenario.get("steps", "")

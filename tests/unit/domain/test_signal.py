@@ -124,6 +124,31 @@ def test_ready_signal_tolerates_unknown_extra_fields() -> None:
     assert signal.ticket_id == "T026"
 
 
+def test_ready_signal_tolerates_legacy_manual_verification_payload() -> None:
+    payload = _ready_payload(
+        manual_verification=[
+            {
+                "name": "Legacy scenario",
+                "setup": "None",
+                "steps": "Run command",
+                "expected": "Pass",
+                "auto_covered": True,
+            }
+        ]
+    )
+
+    signal = ReadySignal.parse(json.dumps(payload), "T026")
+
+    assert signal.ticket_id == "T026"
+    assert not hasattr(signal, "manual_verification")
+    assert not hasattr(signal, "manual_verification_is_default")
+
+
+def test_ready_signal_schema_excludes_manual_verification() -> None:
+    assert "manual_verification" not in ReadySignal.__dataclass_fields__
+
+
+
 @pytest.mark.parametrize(
     "timestamp",
     [

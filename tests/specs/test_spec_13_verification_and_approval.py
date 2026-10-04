@@ -187,7 +187,7 @@ def test_spec_13_full_lifecycle_with_evidence_triage_and_human_approval(tmp_path
 
     from runner.adapters.markdown.parser import TicketMarkdownParser
     ticket = TicketMarkdownParser().parse(ticket_file)
-    assert len(ticket.smoke_scenarios) >= 1
+    assert not hasattr(ticket, "smoke_scenarios")
 
     signal_repo = FakeSignalRepository()
     signal_repo.seed_ready(_make_ready_signal(ticket_id))
@@ -223,7 +223,7 @@ def test_spec_13_full_lifecycle_with_evidence_triage_and_human_approval(tmp_path
     assert card.test_status == "passed"
     # Evidence paths should capture the summary.json written during triage
     assert any("summary.json" in str(p) for p in card.evidence_paths)
-    assert len(card.smoke_scenarios) >= 1
+    assert len(card.smoke_scenarios) == 0
 
 
 def test_spec_13_reject_and_retry_preserves_context_and_injects_feedback(tmp_path: Path) -> None:

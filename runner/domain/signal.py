@@ -178,62 +178,7 @@ def _validate_answer(
     return None
 
 
-def _validate_manual_verification(value: object, label: str) -> tuple[dict, ...]:
-    """Validate and coerce the manual_verification field.
 
-    Each entry must be a dict. The four core string fields (name, setup, steps, expected)
-    are validated as strings. Two optional extension fields are also accepted:
-    - ``auto_covered`` (bool, defaults to False): whether the automated test suite also
-      exercises this scenario end-to-end.
-    - ``update_notes`` (str, defaults to ""): free-text note when this scenario supersedes
-      a prior ticket's smoke log entry.
-    Returns a tuple of dicts, or raises SignalFormatError.
-    Accepts _MISSING_SENTINEL to represent "field absent from payload".
-    """
-    _STRING_FIELDS = frozenset({"name", "setup", "steps", "expected", "update_notes"})
-
-    if value is _MISSING_SENTINEL or value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise SignalFormatError(
-            f"{label} field 'manual_verification' must be an array of dicts, got: {_preview(value)}"
-        )
-    result: list[dict] = []
-    for i, entry in enumerate(value):
-        if not isinstance(entry, dict):
-            raise SignalFormatError(
-                f"{label} field 'manual_verification[{i}]' must be a dict, got: {_preview(entry)}"
-            )
-        sanitized: dict = {}
-        for k, v in entry.items():
-            if k == "auto_covered":
-                # Accept bool or bool-coercible int; normalise to Python bool
-                if not isinstance(v, (bool, int)) or isinstance(v, float):
-                    raise SignalFormatError(
-                        f"{label} field 'manual_verification[{i}][auto_covered]' must be a boolean,"
-                        f" got: {_preview(v)}"
-                    )
-                sanitized[k] = bool(v)
-            elif k in _STRING_FIELDS:
-                if not isinstance(v, str):
-                    raise SignalFormatError(
-                        f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
-                    )
-                # Strip ANSI escape sequences
-                s = re.sub(r"\x1b\[[0-9;]*m", "", v)
-                if k == "name":
-                    # Sanitize scenario name: strip carriage returns and newlines to prevent git header injection
-                    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-                sanitized[k] = s
-            else:
-                # Unknown keys: validate as string and pass through for forward compatibility
-                if not isinstance(v, str):
-                    raise SignalFormatError(
-                        f"{label} field 'manual_verification[{i}][{k}]' must be a string, got: {_preview(v)}"
-                    )
-                sanitized[k] = re.sub(r"\x1b\[[0-9;]*m", "", v)
-        result.append(sanitized)
-    return tuple(result)
 
 
 def _validate_ticket_match(actual: str, expected: object, label: str) -> None:
@@ -281,14 +226,6 @@ def _require_text(payload: Mapping[str, Any], field: str, label: str) -> str:
     return _validate_text(_require_present(payload, field, label), field, label)
 
 
-_MISSING_SENTINEL = object()
-
-
-def _has_manual_verification_key(payload: Mapping[str, Any]) -> bool:
-    """Check if 'manual_verification' key exists in the raw payload dict."""
-    return "manual_verification" in payload
-
-
 @dataclass(frozen=True)
 class ReadySignal:
     """Worker declaration that implementation is ready for Gatekeeper verification."""
@@ -300,8 +237,6 @@ class ReadySignal:
     new_gotchas: tuple[str, ...]
     timestamp: datetime
     scope: str | None = None
-    manual_verification: tuple[dict, ...] = ()
-    _manual_verification_was_present: bool = False
 
     def __post_init__(self) -> None:
         label = _READY_LABEL
@@ -328,16 +263,6 @@ class ReadySignal:
             _coerce_timestamp(self.timestamp, "timestamp", label),
         )
         object.__setattr__(self, "scope", _validate_scope(self.scope, label))
-        object.__setattr__(
-            self,
-            "manual_verification",
-            _validate_manual_verification(self.manual_verification, label),
-        )
-
-    @property
-    def manual_verification_is_default(self) -> bool:
-        """Return True when manual_verification was not present in the payload."""
-        return not self._manual_verification_was_present
 
     @classmethod
     def parse(
@@ -356,8 +281,6 @@ class ReadySignal:
             new_gotchas=_require_present(payload, "new_gotchas", label),
             timestamp=_require_present(payload, "timestamp", label),
             scope=payload.get("scope"),
-            manual_verification=payload.get("manual_verification", ()),
-            _manual_verification_was_present=_has_manual_verification_key(payload),
         )
 
 

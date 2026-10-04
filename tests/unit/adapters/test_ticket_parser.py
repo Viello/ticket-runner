@@ -309,3 +309,45 @@ def test_smoke_fail_recovery_skill_ticket_runner_template_is_valid(tmp_path: Pat
     assert "Fix regression identified during smoke verification of T042:" in ticket.requirements[0]
 
 
+def test_parse_legacy_ticket_with_smoke_scenarios_is_inert(tmp_path: Path) -> None:
+    legacy_content = """# T088 — Legacy Feature with Smoke Scenarios
+Status: completed
+Spec: docs/specs/13-verification-subsystem-and-human-gate.md
+
+### Requirements
+- Implement verification feature.
+
+### Acceptance Criteria
+- Full test suite passes.
+
+### Smoke Scenarios
+**Scenario: legacy verification check**
+- Setup: None
+- Why: Test backward compatibility of legacy tickets
+- Steps: Run command
+- Expected: Exit code 0
+
+### Gotchas
+- None
+"""
+    path = tmp_path / "T088-legacy-feature.md"
+    path.write_text(legacy_content, encoding="utf-8")
+
+    ticket = TicketMarkdownParser().parse(path)
+
+    assert ticket.id == "T088"
+    assert ticket.title == "Legacy Feature with Smoke Scenarios"
+    assert ticket.status is TicketStatus.COMPLETED
+    assert ticket.requirements == ("Implement verification feature.",)
+    assert ticket.acceptance_criteria == ("Full test suite passes.",)
+    assert ticket.gotchas == ("None",)
+    assert not hasattr(ticket, "smoke_scenarios")
+
+
+def test_ticket_entity_has_no_smoke_scenarios_attribute() -> None:
+    from runner.domain.ticket import Ticket
+
+    assert "smoke_scenarios" not in Ticket.__dataclass_fields__
+
+
+

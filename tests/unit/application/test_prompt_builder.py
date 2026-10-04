@@ -419,7 +419,7 @@ def test_prompt_resilient_invariants_fallback_when_agents_md_missing_or_corrupt(
     assert "## Invariants" in prompt
 
 
-def test_prompt_documents_manual_verification_schema_with_auto_covered_and_update_notes() -> None:
+def test_prompt_ready_signal_schema_excludes_manual_verification() -> None:
     ticket = _make_ticket(ticket_id="T079")
     prompt = build_prompt(
         ticket=ticket,
@@ -428,17 +428,12 @@ def test_prompt_documents_manual_verification_schema_with_auto_covered_and_updat
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert "`manual_verification`" in prompt
-    assert "auto_covered" in prompt
-    assert "update_notes" in prompt
-    assert "empty array `[]` if all are automated" not in prompt
-    assert "`name`" in prompt
-    assert "`setup`" in prompt
-    assert "`steps`" in prompt
-    assert "`expected`" in prompt
+    assert "`manual_verification`" not in prompt
+    assert "auto_covered" not in prompt
+    assert "update_notes" not in prompt
 
 
-def test_prompt_documents_smoke_scenario_completeness_invariant() -> None:
+def test_prompt_documents_live_qa_verification_contract() -> None:
     ticket = _make_ticket(ticket_id="T079")
     prompt = build_prompt(
         ticket=ticket,
@@ -448,10 +443,11 @@ def test_prompt_documents_smoke_scenario_completeness_invariant() -> None:
     )
 
     prompt_lower = prompt.lower()
-    assert "smoke scenarios" in prompt_lower
-    assert "incomplete" in prompt_lower
-    assert "must not emit a ready signal" in prompt_lower
-    assert "additive" in prompt_lower
+    assert "smoke scenario" not in prompt_lower
+    assert "smoke scenarios" not in prompt_lower
+    assert "manual_verification" not in prompt_lower
+    assert "/live-qa" in prompt
+    assert "The Worker drafts no scenarios and self-reports no manual verification." in prompt
 
 
 

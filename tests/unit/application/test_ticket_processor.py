@@ -1198,7 +1198,7 @@ def test_multi_cycle_resource_accumulation(tmp_path: Path) -> None:
 
 
 def test_ticket_processor_outcome_includes_manual_verification(tmp_path: Path) -> None:
-    """When ready signal contains manual_verification, approved outcome.changes includes scenarios."""
+    """When ready signal contains legacy manual_verification, it parses cleanly via unknown-key tolerance and changes exclude scenarios."""
     ticket = _make_ticket(ticket_id="T069", security_required=False)
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
     runtime_paths.ensure_signals_dir()
@@ -1250,8 +1250,7 @@ def test_ticket_processor_outcome_includes_manual_verification(tmp_path: Path) -
     outcome = asyncio.run(processor(ticket))
     assert outcome.is_approved is True
     assert "Update runner/application/gatekeeper.py" in outcome.changes
-    assert "Manual verification required:" in outcome.changes
-    assert "- Verify terminal checklist" in outcome.changes
+    assert "Manual verification required:" not in outcome.changes
 
 
 class _FakeDiscordThreadManager:
