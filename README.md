@@ -139,12 +139,12 @@ Ticket Runner organizes software engineering into an 8-stage quality pipeline mo
 
 1. **Planning & Alignment**: Stress-test architectural proposals, API designs, and state models with `/grill-me` or interactive interview skills. Throwaway prototypes are explored using `/prototype` before committing to code.
 2. **Formal Specification**: Synthesize aligned requirements into a structured specification file under `docs/specs/<spec-slug>.md` using `/to-spec`, defining the problem statement, architectural boundaries, and target solution.
-3. **Ticket Decomposition & Queueing**: Decompose the specification into discrete, testable tickets under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using `/to-tickets`. Every ticket defines requirements, acceptance criteria, smoke scenarios, and gotchas. Every queue concludes with a mandatory spec-closing alignment ticket.
+3. **Ticket Decomposition & Queueing**: Decompose the specification into discrete, testable tickets under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using `/to-tickets`. Every ticket defines requirements, acceptance criteria, and gotchas. Every queue concludes with a mandatory spec-closing alignment ticket.
 4. **Implementation (TDD)**: The Runner launches an `AgentWorker` (OpenCode or Antigravity CLI) guided by `worker.execution_skill` (`.agents/skills/implement/SKILL.md`). The Worker implements the active ticket slice test-first across red-green cycles, but never commits directly.
 5. **Pre-Signal Review**: Before signaling completion, the Worker conducts a two-axis review using `/code-review` to verify that code adheres to repository standards and accurately delivers the originating spec requirements.
 6. **Security Review**: If flagged in ticket requirements or frontmatter (`Security: required`), the Worker invokes `/security-review` before signaling readiness to catch OWASP vulnerabilities, unsafe data handling, or credential exposure.
 7. **Gatekeeper Verification**: Gatekeeper runs independent test and build commands, plus behavioral verification harnesses (Playwright, PTY CLI, HTTP). Full logs and media persist out-of-band to `.agent/evidence/<ticket_id>/`. On failure, the Runner feeds back a strictly bounded triage excerpt (≤ 30 lines / 1,000 characters) to preserve the model's context.
-8. **Human Gate & Completion**: In Human-in-the-Loop mode, Gatekeeper halts after green checks to present an **Evidence Card** via the active presence channel (Rich terminal prompt in Nearby mode; Discord Status Card with `/approve` in Away mode). Upon human sign-off, Gatekeeper authors exactly one atomic conventional commit, relocates the ticket to `completed/`, and logs smoke scenarios to `.agent/smoke_log_<spec-slug>.md`.
+8. **Human Gate & Completion**: In Human-in-the-Loop mode, Gatekeeper halts after green checks to present an **Evidence Card** via the active presence channel (Rich terminal prompt in Nearby mode; Discord Status Card with `/approve` in Away mode). Upon human sign-off, Gatekeeper authors exactly one atomic conventional commit and relocates the ticket to `completed/`. Human verification is conducted via `/live-qa` sessions recording durable verdicts to `.agent/live-qa_log_<spec-slug>.md`.
 
 ---
 
@@ -566,10 +566,11 @@ To eliminate model hallucinations from context saturation, Ticket Runner monitor
 ### Dual-Mode Human-in-the-Loop Approval Gate
 
 In Human-in-the-Loop mode (`lifecycle.mode: "human"`):
-- Gatekeeper halts after green verification checks and formats an **Evidence Card** summarizing status, duration, artifact links, and human smoke scenarios.
+- Gatekeeper halts after green verification checks and formats an **Evidence Card** summarizing status, duration, and artifact links.
 - In **Nearby Mode**, an interactive terminal prompt displays the card with actions: `[y]` approve & commit, `[n]` reject & retry, `[d]` launch diagnostic session.
 - In **Away Mode**, the card posts to the ticket's Discord thread, awaiting `/approve` or `/reject` slash commands.
 - Commits are strictly blocked until human approval is confirmed.
+- Human verification is driven independently via `/live-qa` sessions.
 
 ### Spec Context Excerpt Injection
 
@@ -602,7 +603,7 @@ docs/tickets/
 
 ### Ticket File Format
 
-Each ticket defines requirements, acceptance criteria, smoke scenarios, and gotchas:
+Each ticket defines requirements, acceptance criteria, and gotchas:
 
 ```markdown
 # T001 — Fix admin loading state
@@ -619,15 +620,6 @@ Reasoning: medium
 - Loading spinner displays during async fetch.
 - No layout shift or double scrollbars.
 - Existing CRUD operations remain green.
-
-### Smoke Scenarios
-**Scenario: Verify Admin Table Loading State**
-- Setup: None (runs from repo root).
-- Why: Ensure users see an unambiguous loading indicator during data retrieval.
-- Steps:
-  1. Open the admin datasets page.
-  2. Trigger table sort refetch.
-- Expected: Spinner displays immediately and disappears once rows render.
 
 ### Gotchas
 - Table component uses virtualized rendering; loading state must wrap the table body.
