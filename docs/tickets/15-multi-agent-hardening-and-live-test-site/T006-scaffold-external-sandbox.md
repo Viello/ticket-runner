@@ -2,83 +2,100 @@
 **Type:** wayfinder:task (AFK)
 Status: pending
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
-Blocked by: T005
+Blocked by: T005, T005a, T005b, T005c
 Reasoning: medium
 
 ### Question
 
-Execute the layout decision locked in T005: create the on-disk structure, initialize
-the git repo, install the pre-push hook, and seed the minimal `ticket-runner.yaml`.
+Execute the layout decision locked in T005 by invoking
+`runner.tools.scaffold_sandbox` (per T005b) against
+`D:\Sandbox\ticket-runner-live-target\`. T006 itself does not write the tree —
+that is T005b's job. T006 is the "kick the tires" ticket that proves
+scaffold_sandbox's output satisfies the user-facing demo promise.
 
 ### Why this matters
 
 Without a live external sandbox, the user cannot:
 
-- Exercise the runner end-to-end against a fresh target without polluting
-  `D:\Projects`.
+- Experience the worker/gatekeeper flow against a real, runnable Python sample
+  (per T005's resolution: `src/sample_app/` + `tests/test_smoke.py`).
+- Watch the queue drive a trivial ticket (`T001-hello-world.md`) end-to-end.
 - Diagnose issues by comparing runner behavior between `D:\Projects` and a clean
   external tree.
-- Validate that `--project-dir` works on a sandbox tree that mirrors a real Target
-  Project shape.
+- Validate that `--project-dir` works on a sandbox tree that mirrors a real
+  Target Project shape.
 
 ### Requirements
 
-- Create `D:\Sandbox\` if it does not exist.
-- Create `D:\Sandbox\ticket-runner-live-target\` with the layout T005 locked:
-  - `.agent/` (with the standard subdirs: `signals/`, `questions/`, `logs/`,
-    `checkpoints/`, `evidence/`, `archive/`).
-  - `docs/tickets/` (empty for now — T016-T017-style demo tickets are NOT part of
-    this sandbox; it stays disposable).
-  - `.agents/skills/implement/SKILL.md` (minimal copy of
-    `D:\Projects\.agents\skills\implement\SKILL.md`).
-  - `.agents/skills/code-review/SKILL.md` (minimal copy).
-  - `AGENTS.md` (minimal, pointing to AGENTS.md invariants — link back to
-    `D:\Projects\AGENTS.md` for the canonical invariants, with a local note that
-    this is a sandbox).
-  - `ticket-runner.yaml` with the provider + execution_skill settings T005 locked.
-  - `.gitignore` covering `.agent/` and `docs/tickets/.queue.lock`.
-- Initialize git repo: `git init -b main`, `git checkout -b agent/ticket-runner`.
-- Install pre-push hook:
-  - Run `python -m runner.adapters.git.pre_push_hook install
-    --target-dir D:\Sandbox\ticket-runner-live-target` (or whatever CLI the
-    scaffolder exposes).
-  - Verify `.git/hooks/pre-push` exists with the guardrail block.
-- Author one initial commit on `agent/ticket-runner` with a `<type>(<scope>):
-  <Title>` message per `AGENTS.md` commit format invariant — never include a ticket
-  number. Suggested: `chore(sandbox): initialize disposable ticket-runner sandbox`.
+- Invoke
+  `python -m runner.tools.scaffold_sandbox --non-interactive --force` from the
+  Runner repo (`D:\Projects`) with the implicit default of
+  `D:\Sandbox\ticket-runner-live-target\`.
+- Verify the scaffold produces the T005-locked tree:
+  - `.agent/{signals,questions,logs,checkpoints,evidence,archive}/`
+  - `.agents/skills/{implement,code-review,diagnosing-bugs,handoff}/SKILL.md`
+  - `docs/tickets/00-welcome/T001-hello-world.md`
+  - `src/sample_app/__init__.py` + `tests/test_smoke.py`
+  - `AGENTS.md` (preamble + curated subset, per T005c)
+  - `ticket-runner.yaml` (provider: antigravity)
+  - `.gitignore` (`.agent/`, `docs/tickets/.queue.lock`)
+  - `.git/` with `agent/ticket-runner` branch and the pre-push guardrail hook
+    installed.
+- Verify the initial commit `chore(sandbox): initialize ticket-runner onboarding
+  sandbox` exists on `agent/ticket-runner`.
+- Verify `git log` shows the scaffold commit authored by
+  `runner.tools.scaffold_sandbox` (per T005's Q13 = A: scaffold authors the
+  commit, not the gatekeeper).
 - DO NOT push (per `AGENTS.md` "Never `git push`" invariant).
+- Run the smoke scenario (below) end-to-end.
 
 ### Acceptance Criteria
 
-- `D:\Sandbox\ticket-runner-live-target\.agent\` exists with the standard
-  subdirectories.
-- `D:\Sandbox\ticket-runner-live-target\docs\tickets\` exists.
+- `D:\Sandbox\ticket-runner-live-target\` exists with the T005-locked tree.
 - `D:\Sandbox\ticket-runner-live-target\.git\hooks\pre-push` exists with the
   guardrail block.
-- `git log` on `agent/ticket-runner` shows the initial scaffold commit.
-- `ticket-runner --project-dir D:\Sandbox\ticket-runner-live-target doctor`
-  passes all checks.
+- `git log` on `agent/ticket-runner` shows the initial scaffold commit
+  (`chore(sandbox): initialize ticket-runner onboarding sandbox`).
+- `python ticket_runner.py --project-dir
+  D:\Sandbox\ticket-runner-live-target doctor` passes all checks.
+- A second, idempotent invocation of
+  `python -m runner.tools.scaffold_sandbox --non-interactive` (no `--force`)
+  makes zero changes (verifies T005b's idempotency).
+- The trivial ticket `T001-hello-world.md` is discoverable by the queue loader
+  (i.e. has the right frontmatter shape, lives under a `<spec-slug>/` directory).
 
 ### Smoke Scenarios
 
 **Scenario: External sandbox is fully scaffolded and doctor-clean**
 
 - Setup: None (this scenario verifies the work done by T006).
-- Why: Confirm the sandbox is wired end-to-end.
+- Why: Confirm the sandbox is wired end-to-end as a user-facing demo.
 - Steps:
   1. Run
-     `python ticket_runner.py --project-dir D:\Sandbox\ticket-runner-live-target doctor`.
+     `python ticket_runner.py --project-dir D:\Sandbox\ticket-runner-live-target
+     doctor`.
   2. Confirm doctor prints "PASS" / no remediation messages.
-- Expected: Step 2 prints success for all doctor checks.
+  3. Inspect `D:\Sandbox\ticket-runner-live-target\AGENTS.md` and confirm the
+     5-line preamble is present above the curated subset.
+  4. Confirm `D:\Sandbox\ticket-runner-live-target\docs\tickets\00-welcome\
+     T001-hello-world.md` is present and loadable.
+- Expected: All four steps succeed; doctor reports a clean pre-flight; the
+  welcome ticket is visible to a `ticket-runner queue list` invocation.
 
 ### Gotchas
 
-- The sandbox's AGENTS.md should reference the canonical
-  `D:\Projects\AGENTS.md` invariants so the runner's gatekeeper and worker behave
-  consistently between sandbox and source repo.
-- The `agent/ticket-runner` branch must be created BEFORE the pre-push hook is
-  installed; otherwise the hook may not fire on the initial scaffold commit.
-- The initial commit is hand-authored, not gatekeeper-authored. This is a one-time
-  exception to the "Gatekeeper alone commits" invariant (per
-  `docs/adr/0002-independent-gatekeeper-verification.md`) because no gatekeeper has
-  yet run against an empty ticket queue.
+- The sandbox's AGENTS.md is a curated subset (per T005c) — do NOT inline-edit
+  it to match `D:\Projects/AGENTS.md`. Drift detection is
+  `scripts/sync_agents_md.py`'s job (T005b).
+- The pre-push hook installation is delegated to
+  `runner.adapters.git.pre_push_hook install --git-dir <target>/.git` (T005a).
+  T006 does not invoke `PrePushHookInstaller` directly.
+- The `agent/ticket-runner` branch is created by scaffold_sandbox as part of its
+  git-init step. T006 does not run `git checkout` separately.
+- The initial commit is authored by scaffold_sandbox (one-shot exception to the
+  "Gatekeeper alone commits" invariant per
+  `docs/adr/0002-independent-gatekeeper-verification.md`); the gatekeeper does
+  not run until a real ticket (T001-hello-world) executes.
+- Re-running scaffold_sandbox in default mode is a no-op verification — useful
+  for confirming the sandbox hasn't rotted, but does not regenerate anything.
+  Use `--force` only when intentionally resetting.

@@ -1,8 +1,10 @@
 """Adapter for installing and verifying the pre-push git hook guardrail."""
 
+import argparse
 import os
 from pathlib import Path
 import stat
+import sys
 
 
 class PrePushHookInstaller:
@@ -109,3 +111,48 @@ class PrePushHookInstaller:
             pass
 
         return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for pre-push hook management."""
+    parser = argparse.ArgumentParser(
+        prog="runner.adapters.git.pre_push_hook",
+        description="CLI installer for ticket runner pre-push git hook guardrail.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    install_parser = subparsers.add_parser("install", help="Install pre-push hook guardrail")
+    install_parser.add_argument(
+        "--git-dir",
+        type=Path,
+        required=True,
+        help="Path to target .git directory",
+    )
+    install_parser.add_argument(
+        "--template-path",
+        type=Path,
+        default=None,
+        help="Optional path to custom pre-push template",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command == "install":
+        git_dir: Path = args.git_dir
+        if not git_dir.is_dir():
+            print(f"Error: Git directory '{git_dir}' does not exist or is not a directory.", file=sys.stderr)
+            return 1
+
+        PrePushHookInstaller.install(
+            git_dir=git_dir,
+            template_path=args.template_path,
+        )
+        target_hook = git_dir / "hooks" / "pre-push"
+        print(f"Installed pre-push guardrail into {target_hook}")
+        return 0
+
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -87,6 +87,22 @@ developer should be able to:
   `conversation_id` (UUID, not `ses_*`); exit codes 0/1/2/3. **Comprehensive drift
   between adapter and reality → new ticket T018.** Research: branch
   `research/agy-flag-surface` (commit `0c30f9a`).
+- [T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\`](T005-lock-layout-of-external-sandbox.md):
+  realistic user-facing onboarding sandbox (not a disposable playground); own git
+  repo (`main` base, `agent/ticket-runner` branch); pre-push hook via
+  `PrePushHookInstaller.install()` self-contained default; smoke test
+  `ticket-runner --project-dir D:\Sandbox\ticket-runner-live-target\ doctor`;
+  `worker.provider: "antigravity"`; persistent primary, rebuild via
+  `python -m runner.tools.scaffold_sandbox --force` (or
+  `ticket-runner-scaffold-sandbox` console-script); 4 skills
+  (`implement`, `code-review`, `diagnosing-bugs`, `handoff`); ships with sample
+  `src/sample_app/` + `tests/test_smoke.py` + one trivial ticket
+  `docs/tickets/00-welcome/T001-hello-world.md` so doctor and the worker flow have a
+  real, runnable demo; AGENTS.md is a 5-line preamble + curated subset of
+  upstream invariants (Discord/Supabase/Vercel/Tailwind sections omitted),
+  stamped with sync date; `scripts/sync_agents_md.py` does one-way drift
+  detection; initial commit `chore(sandbox): initialize ticket-runner onboarding
+  sandbox`.
 
 ## Not yet specified
 
@@ -134,8 +150,11 @@ developer should be able to:
 - T002 — Empirical `agy` CLI flag surface — CLOSED — wayfinder:research (AFK)
 - T003 — Add `test_live_antigravity_smoke.py` — wayfinder:task (AFK) — blocked by T018
 - T004 — Plumb `AGENT_ANTIGRAVITY_BIN` and `AGENT_OPENCODE_BIN` through Doctor — wayfinder:task (HITL) — blocked by T001 (unblocked)
-- T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\` — wayfinder:grilling (HITL)
-- T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005
+- T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\` — CLOSED — wayfinder:grilling (HITL)
+- T005a — Add CLI to `runner/adapters/git/pre_push_hook.py` — wayfinder:task (AFK)
+- T005b — Create `runner.tools.scaffold_sandbox` and `scripts/sync_agents_md.py` — wayfinder:task (AFK) — blocked by T005, T005a, T005c
+- T005c — Lock the curated `AGENTS.md` subset and preamble — wayfinder:grilling (HITL)
+- T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005, T005a, T005b, T005c
 - T007 — Lock the in-repo harness layout and `.gitignore` rules — wayfinder:grilling (HITL)
 - T008 — Scaffold the in-repo harness at `D:\Projects\live-test-target/` — wayfinder:task (AFK) — blocked by T007
 - T009 — Lock the empty-starter design — wayfinder:grilling (HITL)

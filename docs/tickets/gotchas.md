@@ -354,3 +354,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 - **Problem:** `Doctor._check_worker_binary` resolved `agy` / `opencode` by literal name only, so users with non-PATH installs (mise, asdf, pipx, custom dirs, CI) could not pass pre-flight. A naive override that silently falls back to PATH when the override path is wrong hides misconfiguration, and tests that construct `Doctor` without `env=` inherit `os.environ` and break on hosts where the override is exported.
 - **Solution:** Resolution priority is (1) `AGENT_ANTIGRAVITY_BIN` / `AGENT_OPENCODE_BIN` env-var, then (2) `path_resolver(binary)` (`shutil.which`). When the env-var is set it must point at an existing executable file (`os.path.isfile` + `os.access(X_OK)`); otherwise the check fails with `"<VAR> is set to '<path>' but that path does not exist or is not executable."` and PATH is NOT consulted. The OpenCode branch runs `<override> --version` via `check_opencode(binary=...)`. Tests covering override behaviour pass `env={}` / `env={...}` explicitly for determinism. Worker adapters still spawn the literal `agy` / `opencode` names; the override currently affects Doctor pre-flight only.
+
+
+---
+
+
+
+## Pre-Push Hook Installer CLI Naming & Classmethod Re-use
+
+- **Problem:** External scaffolding tools and shell users need to install the pre-push guardrail into `.git/hooks/pre-push` without fragile inline Python snippets. Naming the CLI argument `--target-dir` caused ambiguity between the target project root and its `.git/` subdirectory, and conflicted with the underlying `PrePushHookInstaller.install(git_dir=...)` parameter naming.
+- **Solution:** Name the CLI argument `--git-dir <path>` consistently with the adapter classmethod, explicitly pointing to the `.git/` directory. Expose `main()` and execute via `python -m runner.adapters.git.pre_push_hook install --git-dir <path>`, delegating idempotency, template fallback (`DEFAULT_STANDALONE_HOOK`), and permission management directly to `PrePushHookInstaller.install()` without duplicating hook text or logic.
