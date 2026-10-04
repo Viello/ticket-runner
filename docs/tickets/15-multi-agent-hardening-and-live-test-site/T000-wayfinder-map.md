@@ -116,6 +116,15 @@ developer should be able to:
   Literal["default", "all"]` parameter on `extract_curated_subset` and `scaffold`,
   `--skills {default,all}` CLI flag, fallback curated-subset updated to match;
   `scripts/sync_agents_md.py` mirrors the `--skills` flag.
+- [T005d — Add `sandbox.skills` config flag for skill catalog mode](T005d-add-sandbox-skills-config-flag.md):
+  locked nested `sandbox.skills: default|all` key (Q1=a) with mode-resolution
+  priority CLI > `ticket-runner.yaml` > `"default"` mirrored in both
+  `scaffold_sandbox` and `sync_agents_md` (Q2=a); scaffold self-documents the
+  mode it used (Q3=a); contract-only — `all`-mode catalog enumeration deferred to
+  a follow-up, flagged by `[scaffold] all mode: … deferred to T005d-impl` (Q4=c);
+  the `sandbox.skills` line carries a flip-and-re-sync footnote (Q5=b); new
+  `sync_agents_md --apply` opt-in auto-rewrites on YAML-mode drift (Q6=b);
+  `worker.execution_skill` is unaffected — the flag governs bullet trim only.
 
 ## Not yet specified
 
@@ -167,7 +176,7 @@ developer should be able to:
 - T005a — Add CLI to `runner/adapters/git/pre_push_hook.py` — CLOSED — wayfinder:task (AFK)
 - T005b — Create `runner.tools.scaffold_sandbox` and `scripts/sync_agents_md.py` — CLOSED — wayfinder:task (AFK) — blocked by T005, T005a, T005c
 - T005c — Lock the curated `AGENTS.md` subset and preamble — CLOSED — wayfinder:grilling (HITL)
-- T005d — Add `sandbox.skills` config flag for skill catalog mode — wayfinder:grilling (HITL) — blocks T005b-impl (if filed), T006
+- T005d — Add `sandbox.skills` config flag for skill catalog mode — CLOSED — wayfinder:grilling (HITL)
 - T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005, T005a, T005b, T005c, T005d
 - T007 — Lock the in-repo harness layout and `.gitignore` rules — wayfinder:grilling (HITL)
 - T008 — Scaffold the in-repo harness at `D:\Projects\live-test-target/` — wayfinder:task (AFK) — blocked by T007

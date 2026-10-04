@@ -105,7 +105,7 @@ __pycache__/
 .pytest_cache/
 """
 
-TICKET_RUNNER_YAML: str = """project:
+TICKET_RUNNER_YAML_TEMPLATE: str = """project:
   name: "ticket-runner-live-target"
   branch: "agent/ticket-runner"
   base_branch: "main"
@@ -113,6 +113,10 @@ TICKET_RUNNER_YAML: str = """project:
 worker:
   provider: "antigravity"
   execution_skill: ".agents/skills/implement/SKILL.md"
+
+sandbox:
+  # Flip + re-run sync_agents_md.py --write --skills <default|all> to apply.
+  skills: "{skills_mode}"
 
 verification:
   test_cmd: "python -m pytest"
@@ -156,6 +160,65 @@ def get_default_target_dir() -> Path:
     if platform.system() == "Windows":
         return Path(r"D:\Sandbox\ticket-runner-live-target")
     return Path.home() / "Sandbox" / "ticket-runner-live-target"
+
+
+def build_ticket_runner_yaml(skills_mode: SkillsMode = "default") -> str:
+    """Render the sandbox ``ticket-runner.yaml`` with the ``sandbox.skills`` mode.
+
+    The emitted file is self-documenting: ``sandbox.skills`` reflects the mode
+    the scaffold was invoked with, and carries a footnote explaining how to
+    re-apply a post-scaffold flip (see T005d resolution, Q5).
+    """
+    return TICKET_RUNNER_YAML_TEMPLATE.replace("{skills_mode}", skills_mode)
+
+
+def _read_yaml_sandbox_skills(yaml_path: Path) -> SkillsMode | None:
+    """Read ``sandbox.skills`` from a ``ticket-runner.yaml`` file.
+
+    Returns ``"default"`` or ``"all"`` when the key is present and valid,
+    ``None`` otherwise (missing file, malformed YAML, missing/unknown value).
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - pyyaml is a hard dependency
+        return None
+
+    if not yaml_path.is_file():
+        return None
+
+    try:
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    sandbox = data.get("sandbox")
+    if not isinstance(sandbox, dict):
+        return None
+    skills = sandbox.get("skills")
+    if skills in ("default", "all"):
+        return skills  # type: ignore[return-value]
+    return None
+
+
+def _resolve_skills_mode(
+    cli_mode: SkillsMode | None,
+    target_dir: Path,
+) -> SkillsMode:
+    """Resolve the effective skills mode: CLI > ``ticket-runner.yaml`` > fallback.
+
+    Priority (per T005d resolution, Q2):
+        1. Explicit ``cli_mode`` (from ``--skills``), when provided.
+        2. ``ticket-runner.yaml: sandbox.skills`` under ``target_dir``.
+        3. Hardcoded fallback ``"default"``.
+    """
+    if cli_mode is not None:
+        return cli_mode
+    yaml_mode = _read_yaml_sandbox_skills(target_dir / "ticket-runner.yaml")
+    if yaml_mode is not None:
+        return yaml_mode
+    return "default"
 
 
 def _filter_section_bullets(
@@ -392,7 +455,7 @@ def scaffold(
     # 7. ticket-runner.yaml
     config_file = target / "ticket-runner.yaml"
     if not config_file.exists() or force:
-        config_file.write_text(TICKET_RUNNER_YAML, encoding="utf-8")
+        config_file.write_text(build_ticket_runner_yaml(skills_mode), encoding="utf-8")
         created_count += 1
 
     # 8. .gitignore
@@ -516,6 +579,8 @@ def scaffold(
     print(f"[scaffold] Hook installed: {hook_file} active")
     print(f"[scaffold] Commit: {commit_sha} chore(sandbox): initialize ticket-runner onboarding sandbox")
     print(f"[scaffold] Verification: python ticket_runner.py --project-dir {target} doctor")
+    if skills_mode == "all":
+        print("[scaffold] all mode: 4 skills shipped (catalog enumeration deferred to T005d-impl)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -543,17 +608,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skills",
         choices=("default", "all"),
-        default="default",
+        default=None,
         help=(
             "Skill catalog mode: 'default' ships the 4 curated skills "
             "(implement, code-review, diagnosing-bugs, handoff); 'all' ships "
-            "the full catalog (see T005d). Affects AGENTS.md ## Agent skills "
-            "bullet trim only."
+            "the full catalog (see T005d). Overrides ticket-runner.yaml "
+            "sandbox.skills; falls back to it, then to 'default'. Affects "
+            "AGENTS.md ## Agent skills bullet trim only."
         ),
     )
 
     args = parser.parse_args(argv)
     target_dir: Path = args.target_dir.resolve()
+    skills_mode = _resolve_skills_mode(args.skills, target_dir)
 
     if args.force and not args.non_interactive and target_dir.exists():
         response = input(f"Warning: --force will wipe non-runtime files in '{target_dir}'. Proceed? [y/N]: ")
@@ -561,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Aborted.")
             return 1
 
-    scaffold(target_dir, force=args.force, skills_mode=args.skills)
+    scaffold(target_dir, force=args.force, skills_mode=skills_mode)
     return 0
 
 

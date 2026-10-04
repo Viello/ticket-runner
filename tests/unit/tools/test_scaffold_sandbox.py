@@ -11,6 +11,9 @@ import pytest
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.tools.scaffold_sandbox import (
     DEFAULT_PREAMBLE,
+    _read_yaml_sandbox_skills,
+    _resolve_skills_mode,
+    build_ticket_runner_yaml,
     extract_curated_subset,
     get_default_target_dir,
     main,
@@ -249,3 +252,85 @@ def test_main_cli_surface(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert "Hook installed:" in captured
     assert "Commit:" in captured
     assert "Verification:" in captured
+
+
+def test_build_ticket_runner_yaml_default_mode() -> None:
+    content = build_ticket_runner_yaml("default")
+    assert "sandbox:" in content
+    assert 'skills: "default"' in content
+    assert "# Flip + re-run sync_agents_md.py --write --skills <default|all> to apply." in content
+
+
+def test_build_ticket_runner_yaml_all_mode() -> None:
+    content = build_ticket_runner_yaml("all")
+    assert 'skills: "all"' in content
+
+
+def test_scaffold_yaml_contains_sandbox_skills_default(tmp_path: Path) -> None:
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False)
+    yaml_text = (target / "ticket-runner.yaml").read_text(encoding="utf-8")
+    assert "sandbox:" in yaml_text
+    assert 'skills: "default"' in yaml_text
+    assert "# Flip + re-run sync_agents_md.py --write --skills <default|all> to apply." in yaml_text
+    assert _read_yaml_sandbox_skills(target / "ticket-runner.yaml") == "default"
+
+
+def test_scaffold_yaml_contains_sandbox_skills_all(tmp_path: Path) -> None:
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, skills_mode="all")
+    yaml_text = (target / "ticket-runner.yaml").read_text(encoding="utf-8")
+    assert 'skills: "all"' in yaml_text
+    assert _read_yaml_sandbox_skills(target / "ticket-runner.yaml") == "all"
+
+
+def test_scaffold_all_mode_prints_deferred_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, skills_mode="all")
+    captured = capsys.readouterr().out
+    assert "[scaffold] all mode: 4 skills shipped (catalog enumeration deferred to T005d-impl)" in captured
+
+
+def test_scaffold_default_mode_omits_deferred_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, skills_mode="default")
+    captured = capsys.readouterr().out
+    assert "catalog enumeration deferred" not in captured
+
+
+def test_yaml_reader_returns_none_for_missing_file(tmp_path: Path) -> None:
+    assert _read_yaml_sandbox_skills(tmp_path / "absent.yaml") is None
+
+
+def test_yaml_reader_returns_none_for_missing_key(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "ticket-runner.yaml"
+    yaml_file.write_text("sandbox: {}\n", encoding="utf-8")
+    assert _read_yaml_sandbox_skills(yaml_file) is None
+
+
+def test_yaml_reader_returns_none_for_invalid_value(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "ticket-runner.yaml"
+    yaml_file.write_text('sandbox:\n  skills: "bogus"\n', encoding="utf-8")
+    assert _read_yaml_sandbox_skills(yaml_file) is None
+
+
+def test_yaml_reader_returns_none_for_malformed_yaml(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "ticket-runner.yaml"
+    yaml_file.write_text("sandbox: [unclosed\n", encoding="utf-8")
+    assert _read_yaml_sandbox_skills(yaml_file) is None
+
+
+def test_resolve_skills_mode_cli_overrides_yaml(tmp_path: Path) -> None:
+    (tmp_path / "ticket-runner.yaml").write_text(
+        'sandbox:\n  skills: "all"\n', encoding="utf-8"
+    )
+    assert _resolve_skills_mode("default", tmp_path) == "default"
+    assert _resolve_skills_mode("all", tmp_path) == "all"
+
+
+def test_resolve_skills_mode_falls_back_to_yaml_then_default(tmp_path: Path) -> None:
+    assert _resolve_skills_mode(None, tmp_path) == "default"
+    (tmp_path / "ticket-runner.yaml").write_text(
+        'sandbox:\n  skills: "all"\n', encoding="utf-8"
+    )
+    assert _resolve_skills_mode(None, tmp_path) == "all"

@@ -11,6 +11,7 @@ import sys
 from runner.tools.scaffold_sandbox import (
     DEFAULT_PREAMBLE,
     SkillsMode,
+    _resolve_skills_mode,
     extract_curated_subset,
     format_sandbox_agents_md,
     get_default_target_dir,
@@ -36,7 +37,8 @@ def sync_agents_md(
     upstream_path: Path | None = None,
     *,
     write: bool = False,
-    skills_mode: SkillsMode = "default",
+    apply: bool = False,
+    skills_mode: SkillsMode | None = None,
 ) -> int:
     """Compare sandbox AGENTS.md curated subset against upstream.
 
@@ -44,8 +46,11 @@ def sync_agents_md(
         target_dir: Directory containing sandbox AGENTS.md.
         upstream_path: Optional path to upstream AGENTS.md.
         write: If True, overwrite sandbox copy with updated upstream subset and fresh sync stamp.
-        skills_mode: Either ``"default"`` (4 curated skills shipped) or ``"all"``
-            (full skill catalog — see T005d). Affects ``## Agent skills`` bullet trim.
+        apply: If True, auto-rewrite the sandbox copy when it drifts from the
+            resolved mode (opt-in per invocation — see T005d resolution, Q6).
+        skills_mode: Explicit mode override. When ``None``, resolution follows
+            the priority chain CLI > ``ticket-runner.yaml: sandbox.skills`` >
+            ``"default"`` (T005d resolution, Q2).
 
     Returns:
         0 if in sync (or successfully written), 1 if drift detected, 2 on missing-file I/O.
@@ -61,6 +66,9 @@ def sync_agents_md(
         print(f"Error: Sandbox AGENTS.md not found at '{target_path}'", file=sys.stderr)
         return 2
 
+    config_dir = target_dir if target_dir.is_dir() else target_dir.parent
+    resolved_mode = _resolve_skills_mode(skills_mode, config_dir)
+
     try:
         upstream_text = upstream.read_text(encoding="utf-8")
         sandbox_text = target_path.read_text(encoding="utf-8")
@@ -68,22 +76,28 @@ def sync_agents_md(
         print(f"Error reading file: {exc}", file=sys.stderr)
         return 2
 
-    upstream_curated = extract_curated_subset(upstream_text, skills_mode=skills_mode)
+    upstream_curated = extract_curated_subset(upstream_text, skills_mode=resolved_mode)
     preamble, stamp_date, sandbox_curated = parse_sandbox_agents_md(sandbox_text)
 
     if not preamble.strip():
         preamble = DEFAULT_PREAMBLE
 
     if upstream_curated.strip() == sandbox_curated.strip():
-        print(f"Sandbox AGENTS.md at '{target_path}' is in sync with upstream '{upstream}'.")
+        if apply:
+            print(f"Already in sync with sandbox.skills={resolved_mode}.")
+        else:
+            print(f"Sandbox AGENTS.md at '{target_path}' is in sync with upstream '{upstream}'.")
         return 0
 
-    if write:
+    if write or apply:
         today = datetime.date.today().isoformat()
         new_content = format_sandbox_agents_md(preamble, today, upstream_curated)
         try:
             target_path.write_text(new_content, encoding="utf-8")
-            print(f"Updated '{target_path}' with upstream curated subset (stamp date: {today}).")
+            if apply and not write:
+                print(f"[sync] Applied sandbox.skills={resolved_mode} to AGENTS.md.")
+            else:
+                print(f"Updated '{target_path}' with upstream curated subset (stamp date: {today}).")
             return 0
         except OSError as exc:
             print(f"Error writing to '{target_path}': {exc}", file=sys.stderr)
@@ -130,17 +144,33 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply upstream changes to sandbox copy with a fresh sync stamp",
     )
     parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Auto-rewrite the sandbox AGENTS.md when it drifts from the resolved "
+            "mode (CLI > ticket-runner.yaml: sandbox.skills > 'default')."
+        ),
+    )
+    parser.add_argument(
         "--skills",
         choices=("default", "all"),
-        default="default",
+        default=None,
         help=(
             "Skill catalog mode: 'default' (4 curated skills) or 'all' (full "
-            "catalog — T005d). Affects ## Agent skills bullet trim only."
+            "catalog — T005d). Overrides ticket-runner.yaml sandbox.skills; "
+            "falls back to it, then to 'default'. Affects ## Agent skills bullet "
+            "trim only."
         ),
     )
 
     args = parser.parse_args(argv)
-    return sync_agents_md(args.target_dir, args.upstream, write=args.write, skills_mode=args.skills)
+    return sync_agents_md(
+        args.target_dir,
+        args.upstream,
+        write=args.write,
+        apply=args.apply,
+        skills_mode=args.skills,
+    )
 
 
 if __name__ == "__main__":

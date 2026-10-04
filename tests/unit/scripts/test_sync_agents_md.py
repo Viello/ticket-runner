@@ -142,3 +142,154 @@ def test_sync_agents_md_missing_files(tmp_path: Path) -> None:
         "--upstream", str(non_existent / "upstream.md"),
     ])
     assert code == 2
+
+
+def _curated_content(mode: str) -> str:
+    """Build the curated subset matching ``extract_curated_subset`` output."""
+    agent_skills = (
+        "## Agent skills\n"
+        "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
+    )
+    if mode == "all":
+        agent_skills = (
+            "## Agent skills\n"
+            "- `.agents/skills/` vendors the user's global skill catalog.\n"
+            "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+            "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.\n"
+            "- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline."
+        )
+    return (
+        "## Invariants\n"
+        "- Invariant 1.\n"
+        "- Invariant 2.\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
+        + agent_skills
+    )
+
+
+def _seed_sandbox(sandbox_dir: Path, mode: str) -> Path:
+    """Write a sandbox AGENTS.md curated in ``mode`` plus its ticket-runner.yaml."""
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    sandbox_file = sandbox_dir / "AGENTS.md"
+    formatted = format_sandbox_agents_md(DEFAULT_PREAMBLE, "2026-10-01", _curated_content(mode))
+    sandbox_file.write_text(formatted, encoding="utf-8")
+    (sandbox_dir / "ticket-runner.yaml").write_text(
+        f'sandbox:\n  skills: "{mode}"\n', encoding="utf-8"
+    )
+    return sandbox_file
+
+
+def test_sync_default_scaffold_default_sync_in_sync(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    _seed_sandbox(sandbox_dir, "default")
+    code = main(["--target-dir", str(sandbox_dir), "--upstream", str(sample_upstream)])
+    assert code == 0
+    assert "in sync" in capsys.readouterr().out.lower()
+
+
+def test_sync_all_scaffold_all_sync_in_sync(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    _seed_sandbox(sandbox_dir, "all")
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+        "--skills", "all",
+    ])
+    assert code == 0
+    assert "in sync" in capsys.readouterr().out.lower()
+
+
+def test_sync_yaml_mode_resolution_when_cli_absent(
+    sample_upstream: Path, tmp_path: Path
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    _seed_sandbox(sandbox_dir, "all")
+    # No --skills flag: the YAML's sandbox.skills: all drives the mode.
+    code = main(["--target-dir", str(sandbox_dir), "--upstream", str(sample_upstream)])
+    assert code == 0
+
+
+def test_sync_cross_mode_drift_default_scaffold_all_sync(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    _seed_sandbox(sandbox_dir, "default")
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+        "--skills", "all",
+    ])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "security-review" in captured.out or "drift detected" in captured.err.lower()
+
+
+def test_sync_cross_mode_drift_all_scaffold_default_sync(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    _seed_sandbox(sandbox_dir, "all")
+    # YAML says all but CLI pins default -> resolved default -> 2 bullets vs 4 -> drift.
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+        "--skills", "default",
+    ])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "drift detected" in captured.err.lower() or "vendors the user's global" in captured.out
+
+
+def test_sync_apply_auto_rewrites_on_yaml_mismatch(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    # All-mode curated body, but YAML says default -> YAML-driven drift.
+    _seed_sandbox(sandbox_dir, "all")
+    (sandbox_dir / "ticket-runner.yaml").write_text(
+        'sandbox:\n  skills: "default"\n', encoding="utf-8"
+    )
+
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+        "--apply",
+    ])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "[sync] Applied sandbox.skills=default to AGENTS.md." in captured.out
+
+    rewritten = (sandbox_dir / "AGENTS.md").read_text(encoding="utf-8")
+    assert "vendors the user's global skill catalog" not in rewritten
+    assert "security-review/SKILL.md" not in rewritten
+
+    # A follow-up dry run is now clean.
+    code_after = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+    ])
+    assert code_after == 0
+
+
+def test_sync_apply_no_op_when_yaml_agrees(
+    sample_upstream: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_file = _seed_sandbox(sandbox_dir, "default")
+    before = sandbox_file.read_text(encoding="utf-8")
+
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(sample_upstream),
+        "--apply",
+    ])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Already in sync with sandbox.skills=default." in captured.out
+    assert sandbox_file.read_text(encoding="utf-8") == before

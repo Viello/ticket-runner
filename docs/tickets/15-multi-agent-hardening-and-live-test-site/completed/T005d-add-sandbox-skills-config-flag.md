@@ -1,6 +1,7 @@
 # T005d — Add `sandbox.skills` Config Flag for Skill Catalog Mode
 **Type:** wayfinder:grilling (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-04T23:10:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T005c (the AGENTS.md curated-subset lock; resolved)
 Blocks: T005b follow-up (scaffold_sandbox reads the flag), T006 (scaffold output respects the flag)
@@ -129,3 +130,79 @@ honor both modes end-to-end.
 - This ticket does NOT implement the all-mode skill enumeration — it only
   locks the contract. Implementation goes in a follow-up task ticket (e.g.
   T005d-impl) once the contract is approved.
+
+### Resolution (grilling session, 2026-10-04)
+
+Rounds answered Q1-Q6:
+
+- **Q1 = a — YAML schema placement.** New nested `sandbox:` top-level key with
+  `sandbox.skills: default|all` beneath it. Matches the existing namespace
+  convention (`worker:`, `verification:`, `tokens:`, `presence:`, `discord:`,
+  `lifecycle:`, `git:`, `ui:`) and scopes the knob to scaffold/sync time only.
+- **Q2 = a — Mode-resolution priority in both binaries.** `--skills` CLI (when
+  provided) > `ticket-runner.yaml: sandbox.skills` (when the file exists and
+  holds a valid value) > hardcoded `"default"`. Implemented as
+  `_resolve_skills_mode` in `runner/tools/scaffold_sandbox.py` and reused by
+  `scripts/sync_agents_md.py`.
+- **Q3 = a — Self-documenting YAML.** Scaffold emits `sandbox.skills:
+  "<mode>"` matching the mode used. The `TICKET_RUNNER_YAML` constant became
+  `TICKET_RUNNER_YAML_TEMPLATE` plus a `build_ticket_runner_yaml(skills_mode)`
+  builder.
+- **Q4 = c — Contract-only scope with an explicit log line.** The `all` mode
+  flips the `## Agent skills` bullet trim today; the `~/.agents/skills/` catalog
+  enumeration is deferred to a follow-up (`T005d-impl`, not filed here). To keep
+  the gap honest, scaffold prints
+  `[scaffold] all mode: 4 skills shipped (catalog enumeration deferred to T005d-impl)`
+  when invoked in `all` mode.
+- **Q5 = b — YAML footnote for the post-scaffold flip.** The `sandbox.skills`
+  line carries the comment
+  `# Flip + re-run sync_agents_md.py --write --skills <default|all> to apply.`
+  The user discovers the re-apply procedure at the moment they edit the knob.
+- **Q6 = b — `--apply` opt-in flag.** `scripts/sync_agents_md.py` gains
+  `--apply`: the script resolves the mode (CLI > YAML > `"default"`), and
+  auto-rewrites `AGENTS.md` when the resolved mode's curated subset disagrees
+  with the sandbox copy. Without `--apply`, the script stays in pure-detect mode.
+  `--apply` and `--write` are independent; `--write` always rewrites.
+
+**YAML schema (sandbox template):**
+
+```yaml
+worker:
+  provider: "antigravity"
+  execution_skill: ".agents/skills/implement/SKILL.md"
+
+sandbox:
+  # Flip + re-run sync_agents_md.py --write --skills <default|all> to apply.
+  skills: "default"
+```
+
+**Mode-resolution diagram (both binaries):**
+
+```
+--skills CLI flag  ──── provided ───▶ use it
+       │ absent
+       ▼
+ticket-runner.yaml: sandbox.skills ── valid ──▶ use it
+       │ absent/invalid
+       ▼
+"default" (hardcoded fallback)
+```
+
+**Implementation alignment:**
+
+- `runner/tools/scaffold_sandbox.py` — `TICKET_RUNNER_YAML_TEMPLATE`,
+  `build_ticket_runner_yaml`, `_read_yaml_sandbox_skills`, `_resolve_skills_mode`;
+  `scaffold()` writes the template and prints the `all`-mode deferred line.
+- `scripts/sync_agents_md.py` — mode resolution via `_resolve_skills_mode`;
+  new `--apply` flag; `--write` semantics unchanged.
+- Tests: YAML round-trip + reader edge cases + `all`-mode log line in
+  `tests/unit/tools/test_scaffold_sandbox.py`; the 4-case cross-mode matrix
+  (default/all scaffold × default/all sync), YAML-driven resolution when the
+  CLI is absent, and `--apply` rewrite/no-op semantics in
+  `tests/unit/scripts/test_sync_agents_md.py`.
+
+`worker.execution_skill` is unaffected by `sandbox.skills` — the flag governs
+the scaffold-time and sync-time bullet trim only, never runtime worker wiring.
+
+The welcome ticket `T001-hello-world.md` exercises only curated-default skills,
+so it behaves identically under either mode.
