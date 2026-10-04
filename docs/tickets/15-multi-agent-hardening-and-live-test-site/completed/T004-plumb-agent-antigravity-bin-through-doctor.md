@@ -1,6 +1,7 @@
 # T004 — Plumb `AGENT_ANTIGRAVITY_BIN` and `AGENT_OPENCODE_BIN` Through Doctor
 **Type:** wayfinder:task (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-04T10:24:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T001
 Reasoning: medium

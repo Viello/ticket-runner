@@ -347,3 +347,10 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Solution:** Add `tests/unit/adapters/test_live_antigravity_smoke.py` gated strictly on `TICKET_RUNNER_LIVE=1` using `pytestmark = pytest.mark.skipif(...)`. The smoke test resolves the binary respecting `AGENT_ANTIGRAVITY_BIN` before falling back to `shutil.which("agy")`, spawns the process via `SubprocessRunner.spawn` using the canonical headless flags (`-p`, `--output-format stream-json`, `--print-timeout 5s`), isolates file system mutations to pytest's `tmp_path`, and asserts that stream events parse as JSON, include `conversation_id`, and exhibit the closed event vocabulary (`init`, `step_update`, or `result`).
 
 
+
+---
+
+## Worker Binary Env-Var Override Resolution in Doctor
+
+- **Problem:** `Doctor._check_worker_binary` resolved `agy` / `opencode` by literal name only, so users with non-PATH installs (mise, asdf, pipx, custom dirs, CI) could not pass pre-flight. A naive override that silently falls back to PATH when the override path is wrong hides misconfiguration, and tests that construct `Doctor` without `env=` inherit `os.environ` and break on hosts where the override is exported.
+- **Solution:** Resolution priority is (1) `AGENT_ANTIGRAVITY_BIN` / `AGENT_OPENCODE_BIN` env-var, then (2) `path_resolver(binary)` (`shutil.which`). When the env-var is set it must point at an existing executable file (`os.path.isfile` + `os.access(X_OK)`); otherwise the check fails with `"<VAR> is set to '<path>' but that path does not exist or is not executable."` and PATH is NOT consulted. The OpenCode branch runs `<override> --version` via `check_opencode(binary=...)`. Tests covering override behaviour pass `env={}` / `env={...}` explicitly for determinism. Worker adapters still spawn the literal `agy` / `opencode` names; the override currently affects Doctor pre-flight only.

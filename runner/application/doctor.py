@@ -60,6 +60,8 @@ REQUIRED_DISCORD_PERMISSIONS = (
     "Embed Links",
 )
 
+ANTIGRAVITY_BIN_ENV_VAR = "AGENT_ANTIGRAVITY_BIN"
+OPENCODE_BIN_ENV_VAR = "AGENT_OPENCODE_BIN"
 
 
 @dataclass(frozen=True)
@@ -218,18 +220,57 @@ class Doctor:
                 pass
         return "opencode"
 
+    def _binary_override_failure(self, name: str, env_var: str) -> CheckResult | None:
+        """Return a failed check if ``env_var`` is set to a missing or non-executable path."""
+        override = self._env.get(env_var)
+        if not override:
+            return None
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return None
+        return CheckResult(
+            name=name,
+            passed=False,
+            message=f"{env_var} is set to '{override}' but that path does not exist or is not executable.",
+            remediation=f"Point {env_var} at an existing executable, or unset {env_var} to resolve the binary from PATH.",
+        )
+
     async def _check_worker_binary(self, name: str = CHECK_WORKER_BINARY) -> CheckResult:
-        """Verify the CLI binary corresponding to the configured worker provider is available on PATH."""
+        """Verify the CLI binary for the configured worker provider is available.
+
+        Resolution priority (binary env-var override convention):
+          1. Environment variable override — ``AGENT_ANTIGRAVITY_BIN`` for the
+             ``antigravity`` provider, ``AGENT_OPENCODE_BIN`` for ``opencode``.
+             When set, the path must name an existing executable file;
+             otherwise the check fails naming the variable and PATH is NOT
+             consulted.
+          2. ``path_resolver(binary)`` (``shutil.which`` by default) for the
+             literal binary name (``agy`` / ``opencode``).
+        """
         provider = self._get_worker_provider()
         if provider == "antigravity":
             binary = "agy"
+            env_var = ANTIGRAVITY_BIN_ENV_VAR
+            failure = self._binary_override_failure(name, env_var)
+            if failure is not None:
+                return failure
+            override = self._env.get(env_var)
+            if override:
+                return CheckResult(
+                    name=name,
+                    passed=True,
+                    message=f"Antigravity CLI binary verified at '{override}' (via {env_var}).",
+                    remediation=None,
+                )
             resolved = self._path_resolver(binary)
             if not resolved:
                 return CheckResult(
                     name=name,
                     passed=False,
                     message=f"Antigravity CLI binary '{binary}' was not found in PATH.",
-                    remediation=f"Install Antigravity CLI and ensure '{binary}' is accessible in your PATH.",
+                    remediation=(
+                        f"Install Antigravity CLI and ensure '{binary}' is accessible in your PATH, "
+                        f"or set {env_var} to the full path of the binary."
+                    ),
                 )
             return CheckResult(
                 name=name,
@@ -239,15 +280,22 @@ class Doctor:
             )
         else:
             binary = "opencode"
-            resolved = self._path_resolver(binary)
-            if not resolved:
+            env_var = OPENCODE_BIN_ENV_VAR
+            failure = self._binary_override_failure(name, env_var)
+            if failure is not None:
+                return failure
+            override = self._env.get(env_var)
+            if not override and not self._path_resolver(binary):
                 return CheckResult(
                     name=name,
                     passed=False,
                     message=f"OpenCode CLI binary '{binary}' was not found in PATH.",
-                    remediation=f"Install OpenCode CLI and ensure '{binary}' is accessible in your PATH.",
+                    remediation=(
+                        f"Install OpenCode CLI and ensure '{binary}' is accessible in your PATH, "
+                        f"or set {env_var} to the full path of the binary."
+                    ),
                 )
-            opencode_res = await self.check_opencode()
+            opencode_res = await self.check_opencode(binary=override or binary)
             if not opencode_res.passed:
                 return CheckResult(
                     name=name,
@@ -323,10 +371,15 @@ class Doctor:
         """Verify target project directory exists, is a directory, and is a valid git repository."""
         return await self._check_target_git_repo(name=name)
 
-    async def check_opencode(self) -> CheckResult:
-        """Verify OpenCode CLI binary is available and executable."""
+    async def check_opencode(self, binary: str = "opencode") -> CheckResult:
+        """Verify OpenCode CLI binary is available and executable.
+
+        Args:
+            binary: Executable to invoke with ``--version`` — the literal name
+                (PATH lookup) or an absolute path from ``AGENT_OPENCODE_BIN``.
+        """
         try:
-            result = await self._command_runner.run(["opencode", "--version"], cwd=self._cwd)
+            result = await self._command_runner.run([binary, "--version"], cwd=self._cwd)
         except CommandNotFoundError:
             return CheckResult(
                 name=CHECK_OPENCODE,
