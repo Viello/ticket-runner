@@ -293,3 +293,53 @@ def test_sync_apply_no_op_when_yaml_agrees(
     captured = capsys.readouterr()
     assert "Already in sync with sandbox.skills=default." in captured.out
     assert sandbox_file.read_text(encoding="utf-8") == before
+
+
+def test_sync_agents_md_sanitizes_upstream_adrs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    upstream = tmp_path / "upstream_AGENTS.md"
+    upstream.write_text(
+        "# AGENTS.md\n\n"
+        "## Invariants\n"
+        "- Rule with ADR (ADR 0001).\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
+        "## Agent skills\n"
+        "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.\n",
+        encoding="utf-8",
+    )
+
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    sandbox_file = sandbox_dir / "AGENTS.md"
+
+    # Seed sandbox with sanitized invariant (no ADR)
+    curated = (
+        "## Invariants\n"
+        "- Rule with ADR.\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
+        "## Agent skills\n"
+        "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
+    )
+    sandbox_file.write_text(
+        format_sandbox_agents_md(DEFAULT_PREAMBLE, "2026-10-01", curated),
+        encoding="utf-8",
+    )
+
+    code = main(["--target-dir", str(sandbox_dir), "--upstream", str(upstream)])
+    assert code == 0
+    assert "in sync" in capsys.readouterr().out.lower()
+
+    # If we write/apply, ensure the rewritten output is also sanitized
+    code_write = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(upstream),
+        "--write",
+    ])
+    assert code_write == 0
+    assert "(ADR" not in sandbox_file.read_text(encoding="utf-8")
+

@@ -334,3 +334,37 @@ def test_resolve_skills_mode_falls_back_to_yaml_then_default(tmp_path: Path) -> 
         'sandbox:\n  skills: "all"\n', encoding="utf-8"
     )
     assert _resolve_skills_mode(None, tmp_path) == "all"
+
+
+def test_scaffold_sanitizes_adr_and_welcome_spec(tmp_path: Path) -> None:
+    """Scaffold output sanitization strips ADRs and replaces welcome ticket spec."""
+    upstream_file = tmp_path / "upstream_AGENTS.md"
+    upstream_file.write_text(
+        "# AGENTS.md\n\n"
+        "## Invariants\n"
+        "- Invariant with ref (ADR 0001).\n"
+        "- Invariant with another ref (ADR 0004).\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
+        "## Agent skills\n"
+        "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the default worker.\n",
+        encoding="utf-8",
+    )
+
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False, upstream_agents_md=upstream_file)
+
+    # 1. AGENTS.md must contain no (ADR references
+    agents_text = (target / "AGENTS.md").read_text(encoding="utf-8")
+    assert "(ADR" not in agents_text
+    assert "- Invariant with ref." in agents_text
+    assert "- Invariant with another ref." in agents_text
+
+    # 2. Welcome ticket must carry a non-empty Spec: with no docs/specs/<name>.md
+    ticket_text = (
+        target / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
+    ).read_text(encoding="utf-8")
+    assert "docs/specs/" not in ticket_text
+    assert "Spec: N/A (sandbox demo)" in ticket_text
+

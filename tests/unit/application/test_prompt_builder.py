@@ -344,7 +344,7 @@ def test_prompt_inlines_agents_md_invariants() -> None:
     )
 
     assert "## Invariants" in prompt
-    assert "OpenCode is invoked as a subprocess" in prompt
+    assert "Agent backends (OpenCode, Antigravity CLI) are invoked as subprocesses" in prompt
     assert "Gatekeeper" in prompt
 
 

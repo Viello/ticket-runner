@@ -13,6 +13,8 @@ import subprocess
 import sys
 from typing import Literal
 
+from runner.tools.sanitize import apply_sanitization
+
 DEFAULT_PREAMBLE: str = (
     "Welcome to your Ticket Runner sandbox — a runnable demo target at `D:\\Sandbox\\ticket-runner-live-target\\`.\n"
     "First stop: run `ticket-runner --project-dir . doctor` to confirm the sandbox is wired.\n"
@@ -395,10 +397,16 @@ def scaffold(
         if not dest_file.exists() or force:
             src_file = skills_src / skill_name / "SKILL.md" if skills_src else None
             if src_file and src_file.is_file():
-                dest_file.write_text(src_file.read_text(encoding="utf-8"), encoding="utf-8")
+                dest_file.write_text(
+                    apply_sanitization(src_file.read_text(encoding="utf-8"), "skill_md"),
+                    encoding="utf-8",
+                )
             else:
                 dest_file.write_text(
-                    f"---\nname: {skill_name}\ndescription: {skill_name} skill\n---\n# {skill_name}\n",
+                    apply_sanitization(
+                        f"---\nname: {skill_name}\ndescription: {skill_name} skill\n---\n# {skill_name}\n",
+                        "skill_md",
+                    ),
                     encoding="utf-8",
                 )
             created_count += 1
@@ -407,21 +415,30 @@ def scaffold(
     welcome_ticket = target / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
     welcome_ticket.parent.mkdir(parents=True, exist_ok=True)
     if not welcome_ticket.exists() or force:
-        welcome_ticket.write_text(WELCOME_TICKET_CONTENT, encoding="utf-8")
+        welcome_ticket.write_text(
+            apply_sanitization(WELCOME_TICKET_CONTENT, "welcome_ticket"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 4. src/sample_app/__init__.py
     sample_init = target / "src" / "sample_app" / "__init__.py"
     sample_init.parent.mkdir(parents=True, exist_ok=True)
     if not sample_init.exists() or force:
-        sample_init.write_text(SAMPLE_APP_INIT, encoding="utf-8")
+        sample_init.write_text(
+            apply_sanitization(SAMPLE_APP_INIT, "python_src"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 5. tests/test_smoke.py
     smoke_test = target / "tests" / "test_smoke.py"
     smoke_test.parent.mkdir(parents=True, exist_ok=True)
     if not smoke_test.exists() or force:
-        smoke_test.write_text(SAMPLE_APP_TEST, encoding="utf-8")
+        smoke_test.write_text(
+            apply_sanitization(SAMPLE_APP_TEST, "python_test"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 6. AGENTS.md
@@ -449,19 +466,28 @@ def scaffold(
             )
         today = datetime.date.today().isoformat()
         agents_content = format_sandbox_agents_md(DEFAULT_PREAMBLE, today, curated_subset)
-        agents_file.write_text(agents_content, encoding="utf-8")
+        agents_file.write_text(
+            apply_sanitization(agents_content, "agents_md"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 7. ticket-runner.yaml
     config_file = target / "ticket-runner.yaml"
     if not config_file.exists() or force:
-        config_file.write_text(build_ticket_runner_yaml(skills_mode), encoding="utf-8")
+        config_file.write_text(
+            apply_sanitization(build_ticket_runner_yaml(skills_mode), "ticket_runner_yaml"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 8. .gitignore
     gitignore_file = target / ".gitignore"
     if not gitignore_file.exists() or force:
-        gitignore_file.write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        gitignore_file.write_text(
+            apply_sanitization(GITIGNORE_CONTENT, "gitignore"),
+            encoding="utf-8",
+        )
         created_count += 1
 
     # 9. Git repository initialization & branch

@@ -8,6 +8,7 @@ import difflib
 from pathlib import Path
 import sys
 
+from runner.tools.sanitize import apply_sanitization
 from runner.tools.scaffold_sandbox import (
     DEFAULT_PREAMBLE,
     SkillsMode,
@@ -77,6 +78,7 @@ def sync_agents_md(
         return 2
 
     upstream_curated = extract_curated_subset(upstream_text, skills_mode=resolved_mode)
+    upstream_curated = apply_sanitization(upstream_curated, "agents_md")
     preamble, stamp_date, sandbox_curated = parse_sandbox_agents_md(sandbox_text)
 
     if not preamble.strip():
@@ -92,6 +94,7 @@ def sync_agents_md(
     if write or apply:
         today = datetime.date.today().isoformat()
         new_content = format_sandbox_agents_md(preamble, today, upstream_curated)
+        new_content = apply_sanitization(new_content, "agents_md")
         try:
             target_path.write_text(new_content, encoding="utf-8")
             if apply and not write:
