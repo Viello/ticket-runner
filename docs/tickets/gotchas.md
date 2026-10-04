@@ -364,3 +364,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 - **Problem:** External scaffolding tools and shell users need to install the pre-push guardrail into `.git/hooks/pre-push` without fragile inline Python snippets. Naming the CLI argument `--target-dir` caused ambiguity between the target project root and its `.git/` subdirectory, and conflicted with the underlying `PrePushHookInstaller.install(git_dir=...)` parameter naming.
 - **Solution:** Name the CLI argument `--git-dir <path>` consistently with the adapter classmethod, explicitly pointing to the `.git/` directory. Expose `main()` and execute via `python -m runner.adapters.git.pre_push_hook install --git-dir <path>`, delegating idempotency, template fallback (`DEFAULT_STANDALONE_HOOK`), and permission management directly to `PrePushHookInstaller.install()` without duplicating hook text or logic.
+
+---
+
+## Scaffold Sandbox Force Reset Semantics & Runtime State Preservation
+
+- **Problem:** When resetting or re-scaffolding an onboarding sandbox (such as `D:\Sandbox\ticket-runner-live-target\`) using `--force`, a naive wipe would delete `.git/` (destroying commit history, branch configuration, and installed hooks) and `.agent/` (destroying runtime state such as active session logs, checkpoints, evidence, and durable signals). Furthermore, unconditioned execution on non-empty directories risks accidental data loss in interactive sessions.
+- **Solution:** In `runner.tools.scaffold_sandbox`, `--force` selectively wipes only source-tree files (`AGENTS.md`, `ticket-runner.yaml`, `.agents/`, `docs/`, `src/`, `tests/`, `.gitignore`) while strictly preserving `.git/` and `.agent/`. In interactive mode without `--non-interactive`, prompt the operator for explicit confirmation before wiping. Auto-configure git identity (`ticket-runner-scaffold <noreply@local>`) locally only if `git config user.name` returns empty, preserving global operator identity.
+

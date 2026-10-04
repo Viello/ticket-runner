@@ -1,6 +1,7 @@
 # T005b — Create `runner.tools.scaffold_sandbox` and `scripts/sync_agents_md.py`
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-04T14:28:36Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T005, T005a, T005c
 Reasoning: medium
@@ -129,9 +130,7 @@ upstream and the sandbox copy without manual diffing.
 
 - Setup: A scaffolded sandbox.
 - Steps:
-  1. Manually change a word in the curated-subset section of the sandbox's
-     `AGENTS.md`.
-  2. Run `python scripts/sync_agents_md.py` (no `--write`).
+  1. Run `python scripts/sync_agents_md.py` (no `--write`).
 - Expected: Exit 1, stdout lists the differing lines.
 
 ### Gotchas
