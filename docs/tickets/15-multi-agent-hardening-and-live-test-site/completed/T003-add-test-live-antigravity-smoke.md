@@ -1,6 +1,7 @@
 # T003 — Add `test_live_antigravity_smoke.py`
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-04T09:47:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T002, T018
 Reasoning: medium
