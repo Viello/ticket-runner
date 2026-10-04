@@ -318,3 +318,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 
 - **Problem:** When replacing an automated or worker-generated verification discipline (smoke scenarios) with a human-driven verification ritual (`/live-qa`), living documents (`AGENTS.md`, `README.md`) can retain stale instructions commanding agents to author, echo, or log scenarios. Because `PromptBuilder` dynamically extracts invariants from `AGENTS.md` under `## Invariants`, any leftover scenario rules in `AGENTS.md` silently re-inject obsolete completion gates into future worker prompts.
 - **Solution:** Re-point `AGENTS.md` and `README.md` at the `/live-qa` verification contract using surgical edits guided by `/writing-for-agents` principles: front-load leading words (`live-qa`, `Evidence Card`, `Gatekeeper`), state target human verification behavior positively, explicitly state log path (`.agent/live-qa_log_<slug>.md`) and refusal-in-absence semantics, and ensure no lines command agents to author, embed, echo, or log scenarios. Verify with case-insensitive pattern searches that only legitimate survivors (such as transport checks or recovery skills like `/smoke-fail`) remain.
+
+---
+
+## Skill Catalog Retargeting & Vendor Sync Guardrails
+
+- **Problem:** When re-targeting skill catalogs (`smoke-fail`, `to-tickets`, `implement`) from legacy smoke-scenario mechanisms to human-driven verification (`/live-qa`), unit tests like `test_smoke_fail_recovery_skill_ticket_runner_template_is_valid` that dynamically parse skill markdown templates will fail if their assertions expect legacy section headings or requirements text. Additionally, syncing skills to external catalogs (`Viello/agent-skills`) requires careful handling of project-specific queue sections without introducing personal paths or leaking internal references.
+- **Solution:** Align parser unit test assertions with the updated live-qa regression ticket template (`# T<NNN> — Regression: <Scenario Title>` and live-qa session reference). Apply `/writing-for-agents` principles to frame requirements positively without prescriptive negative phrases. Ensure identical synchronization between vendored skills in `.agents/skills/` and the canonical `Viello/agent-skills` repository, verifying that public repos contain clean, portable Markdown without internal paths or personal environment leaks.
+

@@ -1,5 +1,6 @@
 # T118 — Agent skill catalog re-targeted: smoke-fail, to-tickets, implement
-Status: pending
+Status: completed
+Completed: 2026-10-04T07:21:00Z
 Spec: docs/specs/14-live-qa-replacement.md
 Blocked by: T116
 

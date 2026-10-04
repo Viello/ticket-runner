@@ -286,11 +286,10 @@ def test_smoke_fail_recovery_skill_ticket_runner_template_is_valid(tmp_path: Pat
     assert match is not None
     sample = (
         match.group(1)
-        .replace("<spec-slug>", "07-smoke-verification-protocol")
+        .replace("<spec-slug>", "14-live-qa-replacement")
         .replace("<slug>", "sample")
         .replace("<NNN>", "999")
         .replace("<Scenario Title>", "Test")
-        .replace("<originating_id>", "T042")
         .replace("<observed_output>", "Crash")
         .replace("<expected_output>", "Redirect")
         .replace("<files_to_touch>", "runner/foo.py")
@@ -300,13 +299,13 @@ def test_smoke_fail_recovery_skill_ticket_runner_template_is_valid(tmp_path: Pat
         .replace("<test_steps>", "Run check")
         .replace("<Triage insights or quirks noted during failure capture>", "None")
     )
-    ticket_file = tmp_path / "T999-smoke-regression-sample.md"
+    ticket_file = tmp_path / "T999-regression-sample.md"
     ticket_file.write_text(sample, encoding="utf-8")
     ticket = TicketMarkdownParser().parse(ticket_file)
     assert ticket.id == "T999"
     assert ticket.status is TicketStatus.PENDING
-    assert ticket.title == "Smoke regression: Test"
-    assert "Fix regression identified during smoke verification of T042:" in ticket.requirements[0]
+    assert ticket.title == "Regression: Test"
+    assert "Fix regression identified during live-qa session `sample`:" in ticket.requirements[0]
 
 
 def test_parse_legacy_ticket_with_smoke_scenarios_is_inert(tmp_path: Path) -> None:

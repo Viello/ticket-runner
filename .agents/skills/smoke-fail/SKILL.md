@@ -1,12 +1,12 @@
 ---
 name: smoke-fail
-description: "Triage a failed smoke scenario and resolve it in the current session: diagnose the root cause, fix it, and land the change as a single squash-or-new commit."
+description: "Triage a failed live-qa scenario and resolve it in the current session: diagnose the root cause, fix it, and land the change as a single squash-or-new commit."
 disable-model-invocation: true
 ---
 
 # Smoke Fail Recovery
 
-Human-in-the-loop skill. Run when a manual smoke scenario fails. Diagnose and fix in the same session, landing the change in a single commit.
+Human-in-the-loop skill. Run when a scenario fails during `/live-qa`. Diagnose and fix in the same session, landing the change in a single commit.
 
 Two paths:
 
@@ -36,11 +36,14 @@ Wait for operator confirmation.
 
 Extract failure details from durable sources first, interactive intake as fallback:
 
-1. **Durable smoke log** (`smoke_log_<spec-slug>.md` or equivalent in the repo): locate entry by ticket ID or scenario title. Extract `Setup`, `Steps`, and `Expected` verbatim. Ask the operator for `Observed`.
-2. **Originating ticket** (`docs/tickets/<spec-slug>/completed/<T-NNN>-<slug>.md` or equivalent): read the `### Smoke Scenarios` section.
-3. **Interactive intake** (when no durable source exists): ask the operator for originating context (ticket ID, PR, SHA, or feature area), scenario title, setup, steps, observed, and expected.
+1. **Durable live-qa log** (`.agent/live-qa_log_<slug>.md`):
+   - Locate the target `[failed]` entry by scenario title or active session context:
+     `### <scenario title> — [failed] <timestamp>`
+   - Extract `<scenario title>`, the session header/label, the `- Observed:` line, and any recorded context or steps verbatim.
+   - Resolve originating session context from the session header (`## <ISO-8601 date> — <label> live session`) and file slug.
+2. **Interactive intake** (when no durable live-qa log exists or details are missing): ask the operator for originating context (ticket ID, branch, or session label), scenario title, setup, reproduction steps, observed behavior, and expected behavior.
 
-**Completion criterion**: Originating context, scenario title, setup, steps, observed, and expected are fully captured.
+**Completion criterion**: Originating live-qa session context, scenario title, setup, steps, observed, and expected are fully captured.
 
 ---
 
@@ -48,9 +51,9 @@ Extract failure details from durable sources first, interactive intake as fallba
 
 Detect the primary ticket destination:
 
-1. **Ticket Runner queue** — `docs/tickets/` exists. Target: `docs/tickets/<spec-slug>/T<NNN>-smoke-regression-<scenario-slug>.md`. Determine `<NNN>` by scanning all subdirectories (active and `completed/`) for the highest existing ticket number and incrementing by 1.
+1. **Ticket Runner queue** — `docs/tickets/` exists. Target: `docs/tickets/<spec-slug>/T<NNN>-regression-<scenario-slug>.md`. Determine `<NNN>` by scanning all subdirectories (active and `completed/`) for the highest existing ticket number and incrementing by 1.
 2. **Issue tracker (GitHub / Linear)** — `.github/` exists or `gh` CLI is available. Command: `gh issue create --label bug,regression`.
-3. **Local scratch** — fallback. Target: `.scratch/<feature-slug>/issues/<NN>-smoke-regression-<scenario-slug>.md`.
+3. **Local scratch** — fallback. Target: `.scratch/<feature-slug>/issues/<NN>-regression-<scenario-slug>.md`.
 
 Confirm with the operator before drafting.
 
@@ -65,13 +68,14 @@ Use as the working spec for diagnosis. On the squash path this draft is in-sessi
 ### Ticket Runner / local scratch template
 
 <ticket-runner-template>
-# T<NNN> — Smoke regression: <Scenario Title>
+# T<NNN> — Regression: <Scenario Title>
 Status: pending
 Spec: docs/specs/<spec-slug>.md
 Blocked by: None
 
 ### Requirements
-- Fix regression identified during smoke verification of <originating_id>:
+- Fix regression identified during live-qa session `<slug>`:
+  - Scenario: <Scenario Title>
   - Observed: <observed_output>
   - Expected: <expected_output>
 - Jump-start:
@@ -80,15 +84,8 @@ Blocked by: None
   - Verification: <verification_command>
 
 ### Acceptance Criteria
-- Smoke scenario "<Scenario Title>" passes verification.
+- Live-qa scenario "<Scenario Title>" passes verification.
 - Automated regression test added covering the failure mode.
-
-### Smoke Scenarios
-**Scenario: <Scenario Title>**
-- Setup: <setup_steps or "None (runs from repo root)">
-- Why: <1-2 sentences in simple plain English: what was broken and why we are verifying this fix>
-- Steps: <numbered, conversational, spoon-fed instructions with exact copy-pasteable terminal commands or scripts>
-- Expected: <exact success output to look for, and failure cues>
 
 ### Gotchas
 - <Triage insights or quirks noted during failure capture>
@@ -98,7 +95,8 @@ Blocked by: None
 
 ```
 ## Originating Context
-Regression observed during smoke testing of <originating_id_or_feature>.
+Regression observed during live-qa session `<slug>`.
+Scenario: <Scenario Title>
 
 ## Observed Behavior
 <observed_output>
@@ -110,13 +108,6 @@ Regression observed during smoke testing of <originating_id_or_feature>.
 1. Setup: <setup_steps>
 2. Steps: <test_steps>
 
-## Smoke Scenarios
-**Scenario: <Scenario Title>**
-- Setup: <setup_steps or "None (runs from repo root)">
-- Why: <1-2 sentences in simple plain English: what was broken and why we are verifying this fix>
-- Steps: <numbered, conversational, spoon-fed instructions with exact copy-pasteable terminal commands or scripts>
-- Expected: <exact success output to look for, and failure cues>
-
 ## Jump-start
 - Files to inspect: <files_to_touch>
 - Verification: <verification_command>
@@ -124,7 +115,7 @@ Regression observed during smoke testing of <originating_id_or_feature>.
 
 **New-commit path only**: present the draft to the operator, confirm accuracy, then persist to disk or publish via `gh issue create`. Report the file path or issue URL before proceeding.
 
-**Completion criterion**: Ticket drafted with concrete paths, observed/expected behaviors, and embedded smoke scenario. (New-commit path: also persisted and confirmed.)
+**Completion criterion**: Ticket drafted with concrete paths, observed/expected behaviors, and live-qa session context. (New-commit path: also persisted and confirmed.)
 
 ---
 
@@ -145,7 +136,7 @@ Apply the fix. Run the feedback loop green. Then commit:
 1. Append a new entry to the repo's runtime-lessons log (`docs/tickets/gotchas.md` or equivalent):
 
    ```
-   ### <Scenario Title> — smoke regression (<ISO date>)
+   ### <Scenario Title> — regression fix (<ISO date>)
    - Problem: <observed failure, one sentence>
    - Fix: <what changed and why>
    - Verification: <command that goes green>
@@ -156,12 +147,11 @@ Apply the fix. Run the feedback loop green. Then commit:
 3. Amend the previous commit:
    - Keep the original `<type>(<scope>): <Title>` line unchanged.
    - Append a new imperative bullet to the commit body describing the fix.
-   - Update the `Manual verification required:` trailing section — mark the scenario `[fixed in this amend]`.
    - Run `git commit --amend`.
 
 4. Report the amended commit hash and updated message to the operator.
 
-**Completion criterion**: `git log -1` shows one commit with the fix folded in and the amended message includes `[fixed in this amend]`.
+**Completion criterion**: `git log -1` shows one commit with the fix folded in.
 
 ---
 
@@ -173,7 +163,7 @@ Apply the fix. Run the feedback loop green. Then commit:
 
 3. Stage fix code, regression test, relocated ticket file, and updated gotchas log.
 
-4. Commit following repo convention (`<type>(<scope>): <Title>`, bulleted imperative body). Include a `Manual verification required:` trailing section listing the smoke scenario, tagged `[also auto-covered]` where the regression test exercises it end-to-end.
+4. Commit following repo convention (`<type>(<scope>): <Title>`, bulleted imperative body).
 
 5. Report the commit hash and message to the operator.
 
@@ -181,17 +171,11 @@ Apply the fix. Run the feedback loop green. Then commit:
 
 ---
 
-## Step 6: Verify smoke scenario
+## Step 6: Re-verify via live-qa
 
-Walk the operator through the `### Smoke Scenarios` using the ELI5 standard. Human eyes required regardless of automated coverage:
-1. State **Why we check this** in 1-2 plain sentences.
-2. State the **Setup** requirements or confirm clean state.
-3. Provide the **Steps** as spoon-fed, numbered instructions with exact copy-pasteable terminal commands or runnable test snippets so the operator never has to write test code.
-4. State the exact **Expected** output (what success looks like) and clear failure cues.
-
-Append a passing entry to the smoke log if the repo maintains one.
-
+Re-verify the fix through a live-qa session:
+1. Walk the operator through the scenario steps on the live application.
+2. Record the fresh verdict (`[verified]`) in `.agent/live-qa_log_<slug>.md`.
 If the scenario still fails, re-enter Step 4.
 
-**Completion criterion**: Operator confirms the smoke scenario passes.
-
+**Completion criterion**: Operator confirms the scenario passes and a fresh verdict is recorded in the live-qa log.
