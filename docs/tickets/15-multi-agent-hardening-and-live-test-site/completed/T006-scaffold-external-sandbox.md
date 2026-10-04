@@ -1,6 +1,7 @@
 # T006 — Scaffold the External Sandbox at `D:\Sandbox\ticket-runner-live-target\`
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-04T15:35:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T005, T005a, T005b, T005c
 Reasoning: medium

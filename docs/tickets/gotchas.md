@@ -372,3 +372,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When resetting or re-scaffolding an onboarding sandbox (such as `D:\Sandbox\ticket-runner-live-target\`) using `--force`, a naive wipe would delete `.git/` (destroying commit history, branch configuration, and installed hooks) and `.agent/` (destroying runtime state such as active session logs, checkpoints, evidence, and durable signals). Furthermore, unconditioned execution on non-empty directories risks accidental data loss in interactive sessions.
 - **Solution:** In `runner.tools.scaffold_sandbox`, `--force` selectively wipes only source-tree files (`AGENTS.md`, `ticket-runner.yaml`, `.agents/`, `docs/`, `src/`, `tests/`, `.gitignore`) while strictly preserving `.git/` and `.agent/`. In interactive mode without `--non-interactive`, prompt the operator for explicit confirmation before wiping. Auto-configure git identity (`ticket-runner-scaffold <noreply@local>`) locally only if `git config user.name` returns empty, preserving global operator identity.
 
+---
+
+## External Sandbox Scaffold Verification & One-Shot Initial Commit Exception
+
+- **Problem:** Target project onboarding sandboxes require an initial git commit on `agent/ticket-runner` to establish a clean git tree before any worker or gatekeeper runs. Because `AGENTS.md` enforces "Gatekeeper alone commits", naive adherence would create a chicken-and-egg deadlock where no initial commit exists for the gatekeeper to branch or diff from. Furthermore, verification commands (`doctor`, `test_cmd`) executed via `--project-dir` must resolve tools against the target project environment rather than the runner repository.
+- **Solution:** Permit `runner.tools.scaffold_sandbox` to author the initial baseline commit (`chore(sandbox): initialize ticket-runner onboarding sandbox`) as a documented one-shot bootstrap exception to ADR 0002. Re-invoking `scaffold_sandbox` without `--force` operates idempotently (0 files generated, preserving existing commit and branches), while `--project-dir <target>` runs pre-flight doctor checks and queue discovery seamlessly against external targets.
+
+
