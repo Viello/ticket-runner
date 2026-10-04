@@ -106,21 +106,6 @@ class TerminalApprovalAdapter(ApprovalGateway):
         else:
             elements.append(Text(f"  • .agent/evidence/{card.ticket_id}/", overflow="fold"))
 
-        # Smoke Scenarios checklist
-        elements.append(Text.from_markup("[bold]Smoke Scenarios:[/bold]"))
-        if card.smoke_scenarios:
-            for item in card.smoke_scenarios:
-                if isinstance(item, dict):
-                    name = item.get("name") or item.get("title") or "Unnamed scenario"
-                    auto = " [also auto-covered]" if item.get("auto_covered") else ""
-                    elements.append(Text(f"  [ ] {name}{auto}", overflow="fold"))
-                elif isinstance(item, str):
-                    elements.append(Text(f"  [ ] {item}", overflow="fold"))
-                else:
-                    elements.append(Text(f"  [ ] {item!s}", overflow="fold"))
-        else:
-            elements.append(Text("  (none)", style="dim"))
-
         # Action instructions
         elements.append(Text(""))
         elements.append(

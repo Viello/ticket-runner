@@ -222,8 +222,11 @@ def test_spec_13_full_lifecycle_with_evidence_triage_and_human_approval(tmp_path
     assert card.ticket_id == ticket_id
     assert card.test_status == "passed"
     # Evidence paths should capture the summary.json written during triage
-    assert any("summary.json" in str(p) for p in card.evidence_paths)
-    assert len(card.smoke_scenarios) == 0
+    assert not hasattr(card, "smoke_scenarios")
+    assert "smoke_scenarios" not in EvidenceCard.__dataclass_fields__
+
+    # Primary verification-loop seam: assert no smoke log is ever written
+    assert not list(runtime_paths.root_dir.glob("smoke_log_*.md"))
 
 
 def test_spec_13_reject_and_retry_preserves_context_and_injects_feedback(tmp_path: Path) -> None:

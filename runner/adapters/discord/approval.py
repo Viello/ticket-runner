@@ -162,63 +162,6 @@ def build_evidence_card_embed(card: EvidenceCard) -> dict[str, Any]:
         "inline": False,
     })
 
-    # 4. Smoke Scenarios
-    scenario_lines: list[str] = []
-    if card.smoke_scenarios:
-        for item in card.smoke_scenarios:
-            if isinstance(item, dict):
-                name = item.get("name") or item.get("title") or "Unnamed scenario"
-                auto = " [also auto-covered]" if item.get("auto_covered") else ""
-                scenario_lines.append(f"[ ] {_scrub_secrets(str(name))}{auto}")
-            elif isinstance(item, str):
-                scenario_lines.append(f"[ ] {_scrub_secrets(item)}")
-            else:
-                scenario_lines.append(f"[ ] {_scrub_secrets(str(item))}")
-    else:
-        scenario_lines.append("*(none)*")
-
-    # Pack scenario lines into fields
-    current_lines: list[str] = []
-    field_idx = 0
-
-    def add_scenario_field(lines_to_add: list[str], is_first: bool) -> None:
-        nonlocal field_idx
-        name = "Smoke Scenarios" if is_first else f"Smoke Scenarios (cont. {field_idx})"
-        field_idx += 1
-        val = "\n".join(lines_to_add)
-        if len(val) > MAX_DISCORD_FIELD_VALUE_LENGTH:
-            suffix = "\n... (truncated)"
-            val = val[: MAX_DISCORD_FIELD_VALUE_LENGTH - len(suffix)] + suffix
-        fields.append({
-            "name": name[:MAX_DISCORD_FIELD_NAME_LENGTH],
-            "value": val,
-            "inline": False,
-        })
-
-    first_scenario_field = True
-    for line in scenario_lines:
-        # Check if adding this line exceeds field limit
-        projected = "\n".join(current_lines + [line])
-        if len(projected) > MAX_DISCORD_FIELD_VALUE_LENGTH:
-            if current_lines:
-                if len(fields) < MAX_DISCORD_FIELDS_COUNT:
-                    add_scenario_field(current_lines, first_scenario_field)
-                    first_scenario_field = False
-                    current_lines = [line]
-                else:
-                    break
-            else:
-                # Single line exceeds limit
-                if len(fields) < MAX_DISCORD_FIELDS_COUNT:
-                    add_scenario_field([line], first_scenario_field)
-                    first_scenario_field = False
-                break
-        else:
-            current_lines.append(line)
-
-    if current_lines and len(fields) < MAX_DISCORD_FIELDS_COUNT:
-        add_scenario_field(current_lines, first_scenario_field)
-
     # Ensure field count strictly clamped to 25
     fields = fields[:MAX_DISCORD_FIELDS_COUNT]
 

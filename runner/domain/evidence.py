@@ -55,7 +55,6 @@ class EvidenceCard:
     test_status: str
     harness_status: str | None = None
     evidence_paths: tuple[str, ...] = ()
-    smoke_scenarios: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.ticket_id, str) or not TICKET_ID_PATTERN.match(self.ticket_id):
@@ -71,10 +70,4 @@ class EvidenceCard:
                 self,
                 "evidence_paths",
                 tuple(str(p) for p in self.evidence_paths),
-            )
-        if not isinstance(self.smoke_scenarios, tuple):
-            object.__setattr__(
-                self,
-                "smoke_scenarios",
-                tuple(self.smoke_scenarios),
             )

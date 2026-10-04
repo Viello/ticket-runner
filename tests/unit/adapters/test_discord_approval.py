@@ -40,10 +40,6 @@ def passing_card() -> EvidenceCard:
         test_status="passed",
         harness_status="passed",
         evidence_paths=(".agent/evidence/T111/log.txt", ".agent/evidence/T111/trace.png"),
-        smoke_scenarios=(
-            {"name": "Scenario 1", "auto_covered": True},
-            {"name": "Scenario 2", "auto_covered": False},
-        ),
     )
 
 
@@ -57,7 +53,7 @@ def test_conformance(fake_gateway: FakeDiscordGateway) -> None:
 async def test_embed_contains_required_fields(
     fake_gateway: FakeDiscordGateway, passing_card: EvidenceCard
 ) -> None:
-    """Evidence card embed contains ticket ID, test status, harness status, evidence paths, and smoke scenarios."""
+    """Evidence card embed contains ticket ID, test status, harness status, and evidence paths without smoke scenarios."""
     adapter = DiscordApprovalAdapter(fake_gateway, thread_id="thread-111")
     adapter.queue_interaction("/approve")
 
@@ -85,11 +81,8 @@ async def test_embed_contains_required_fields(
     assert "Evidence Paths" in field_values
     assert ".agent/evidence/T111/log.txt" in field_values["Evidence Paths"]
 
-    assert any("Smoke" in name for name in field_names)
-    smoke_val = field_values.get("Smoke Scenarios", "")
-    assert "Scenario 1" in smoke_val
-    assert "[also auto-covered]" in smoke_val
-    assert "Scenario 2" in smoke_val
+    assert not any("Smoke" in name for name in field_names)
+    assert "Smoke Scenarios" not in field_values
 
 
 @pytest.mark.anyio
@@ -242,11 +235,6 @@ async def test_interaction_outside_target_thread_rejected_ephemerally(
 
 def test_embed_limits_clamping() -> None:
     """Embed description, field values, and field count enforce Discord limits."""
-    # Build card with huge strings and 40 scenarios
-    many_scenarios = [
-        {"name": f"Scenario {i} with very long description " + ("x" * 200)}
-        for i in range(40)
-    ]
     huge_paths = tuple(f".agent/evidence/long_path_{i}/" + ("p" * 200) for i in range(30))
 
     card = EvidenceCard(
@@ -254,7 +242,6 @@ def test_embed_limits_clamping() -> None:
         test_status="passed",
         harness_status="passed",
         evidence_paths=huge_paths,
-        smoke_scenarios=tuple(many_scenarios),
     )
 
     embed = build_evidence_card_embed(card)
@@ -280,7 +267,6 @@ def test_secrets_are_redacted_from_embed(monkeypatch: pytest.MonkeyPatch) -> Non
         ticket_id="T111",
         test_status=f"passed with token {secret_val}",
         evidence_paths=(f".agent/evidence/{secret_val}/log.txt",),
-        smoke_scenarios=(f"Check secret {secret_val}",),
     )
 
     embed = build_evidence_card_embed(card)

@@ -177,47 +177,8 @@ def test_absent_manual_verification_backward_compatible():
     assert not notified
 
 
-def test_empty_manual_verification_logs_warning():
-    """When manual_verification is present but empty, emit a warning log and no user notification."""
-    ticket = _make_ticket()
-    ready = _LegacyReadySignal(
-        ticket_id=ticket.id,
-        status=SignalStatus.READY_FOR_VERIFICATION,
-        modified_files=("runner/application/gatekeeper.py",),
-        self_review_notes="Done",
-        new_gotchas=(),
-        timestamp=datetime.now(timezone.utc),
-        manual_verification=(),
-        _manual_verification_was_present=True,
-    )
-    assert not ready.manual_verification_is_default
-
-    cycle_result = WorkerRunResult(
-        status=SingleCycleStatus.READY,
-        occupancy=1000,
-        session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
-    )
-    notified: list[str] = []
-    mock_discord = MagicMock()
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=_StubCycleRunner(cycle_result),
-        signal_repository=_StubSignalRepo(ready),
-        executor=_StubExecutor(_passing_report()),
-        intervention_gateway=FakeInterventionGateway(),
-        notify=notified.append,
-    )
-
-    res = asyncio.run(loop.run())
-    assert res.is_passed
-    # Empty manual_verification => warning only, no user-visible notification
-    assert len(notified) == 0
-
-
-def test_populated_manual_verification_terminal_output(sample_scenarios):
-    """When manual_verification contains scenarios, print full Setup/Steps/Expected verbatim."""
+def test_legacy_manual_verification_produces_no_terminal_output_and_no_warnings(sample_scenarios, caplog):
+    """When a legacy ready signal contains manual_verification, Gatekeeper prints no scenarios and emits no warning."""
     ticket = _make_ticket()
     ready = _LegacyReadySignal(
         ticket_id=ticket.id,
@@ -247,21 +208,15 @@ def test_populated_manual_verification_terminal_output(sample_scenarios):
         notify=notified.append,
     )
 
-    res = asyncio.run(loop.run())
+    with caplog.at_level("WARNING"):
+        res = asyncio.run(loop.run())
     assert res.is_passed
-
-    combined_output = "\n".join(notified)
-    for s in sample_scenarios:
-        assert f"Scenario: {s['name']}" in combined_output
-        assert f"Setup: {s['setup']}" in combined_output
-        assert f"Steps: {s['steps']}" in combined_output
-        assert f"Expected: {s['expected']}" in combined_output
+    assert len(notified) == 0
+    assert not any("manual_verification" in r.message for r in caplog.records)
 
 
-
-
-def test_populated_manual_verification_commit_body_injection(sample_scenarios):
-    """Commit body includes 'Manual verification required:' and one bullet per scenario name."""
+def test_legacy_manual_verification_does_not_inject_commit_body(sample_scenarios):
+    """Gatekeeper does not inject scenario checklists into commit bodies."""
     ticket = _make_ticket()
     ready = _LegacyReadySignal(
         ticket_id=ticket.id,
@@ -294,49 +249,7 @@ def test_populated_manual_verification_commit_body_injection(sample_scenarios):
 
     res = asyncio.run(loop.run())
     assert res.is_passed
-
-    mock_git.commit_ticket.assert_called_once()
-    _, kwargs = mock_git.commit_ticket.call_args
-    changes = kwargs.get("changes") or mock_git.commit_ticket.call_args[0][2]
-    assert "Manual verification required:" in changes
-    assert "- Full terminal checklist verification" in changes
-    assert "- Discord summary verification" in changes
-
-
-def test_missing_git_operations_logs_warning_and_does_not_block_pass(sample_scenarios, caplog):
-    """When git_operations is None, loop logs warning and passes successfully."""
-    ticket = _make_ticket()
-    ready = _LegacyReadySignal(
-        ticket_id=ticket.id,
-        status=SignalStatus.READY_FOR_VERIFICATION,
-        modified_files=("runner/application/gatekeeper.py",),
-        self_review_notes="Done",
-        new_gotchas=(),
-        timestamp=datetime.now(timezone.utc),
-        manual_verification=sample_scenarios,
-        _manual_verification_was_present=True,
-    )
-
-    cycle_result = WorkerRunResult(
-        status=SingleCycleStatus.READY,
-        occupancy=1000,
-        session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
-    )
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=_StubCycleRunner(cycle_result),
-        signal_repository=_StubSignalRepo(ready),
-        executor=_StubExecutor(_passing_report()),
-        intervention_gateway=FakeInterventionGateway(),
-        git_operations=None,
-    )
-
-    with caplog.at_level("WARNING"):
-        res = asyncio.run(loop.run())
-    assert res.is_passed
-    assert any("GitOperations not provided to VerificationLoop" in r.message for r in caplog.records)
+    mock_git.commit_ticket.assert_not_called()
 
 
 
@@ -391,50 +304,11 @@ def test_legacy_manual_verification_tolerated_in_signal():
     assert not hasattr(signal, "manual_verification")
 
 
-def test_auto_covered_tag_in_terminal_output(mixed_scenarios: tuple[dict[str, Any], ...]) -> None:
-    """Assert terminal output contains 'Auto-covered scenario [also auto-covered]' while manual-only line has no tag."""
-    ticket = _make_ticket()
-    ready = _LegacyReadySignal(
-        ticket_id=ticket.id,
-        status=SignalStatus.READY_FOR_VERIFICATION,
-        modified_files=("runner/application/gatekeeper.py",),
-        self_review_notes="Done",
-        new_gotchas=(),
-        timestamp=datetime.now(timezone.utc),
-        manual_verification=mixed_scenarios,
-        _manual_verification_was_present=True,
-    )
-    cycle_result = WorkerRunResult(
-        status=SingleCycleStatus.READY,
-        occupancy=1000,
-        session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
-    )
-    notified: list[str] = []
-
-    loop = VerificationLoop(
-        ticket=ticket,
-        cycle_runner=_StubCycleRunner(cycle_result),
-        signal_repository=_StubSignalRepo(ready),
-        executor=_StubExecutor(_passing_report()),
-        intervention_gateway=FakeInterventionGateway(),
-        notify=notified.append,
-    )
-
-    res = asyncio.run(loop.run())
-    assert res.is_passed
-
-    combined_output = "\n".join(notified)
-    assert "Scenario: Auto-covered scenario [also auto-covered]" in combined_output
-    assert "Scenario: Manual-only scenario" in combined_output
-    assert "Manual-only scenario [also auto-covered]" not in combined_output
-
-
-def test_smoke_log_appended_after_pass(
+def test_no_smoke_log_appended_after_pass(
     mixed_scenarios: tuple[dict[str, Any], ...],
     tmp_path: Path,
 ) -> None:
-    """Verify .agent/smoke_log_test-spec.md is created with header, auto-covered scenario, and update notes."""
+    """Verify that after a passing verification cycle, no smoke log is ever written under .agent/."""
     ticket = _make_ticket("T078")
     ready = _LegacyReadySignal(
         ticket_id=ticket.id,
@@ -467,14 +341,6 @@ def test_smoke_log_appended_after_pass(
     res = asyncio.run(loop.run())
     assert res.is_passed
 
-    log_path = runtime_paths.smoke_log_path("test-spec")
-    assert log_path == tmp_path / ".agent" / "smoke_log_test-spec.md"
-    assert log_path.exists()
-
-    content = log_path.read_text(encoding="utf-8")
-    assert "# Smoke Log — test-spec" in content
-    assert "### Auto-covered scenario [also auto-covered]" in content
-    assert "> Updates: T001 — Old scenario name" in content
-    assert "### Manual-only scenario" in content
-    assert "Manual-only scenario [also auto-covered]" not in content
+    smoke_logs = list((tmp_path / ".agent").glob("smoke_log_*.md"))
+    assert len(smoke_logs) == 0
 

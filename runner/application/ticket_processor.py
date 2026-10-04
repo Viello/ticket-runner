@@ -531,13 +531,7 @@ class GatekeeperTicketProcessor:
             if result.is_passed:
                 ready_signal = result.ready_signal
                 if ready_signal is not None:
-                    changes_list = [f"Update {p}" for p in ready_signal.modified_files]
-                    manual_verification = getattr(ready_signal, "manual_verification", ())
-                    if manual_verification:
-                        changes_list.append("Manual verification required:")
-                        for s in manual_verification:
-                            changes_list.append(f"- {s.get('name', '')}")
-                    changes = tuple(changes_list)
+                    changes = tuple(f"Update {p}" for p in ready_signal.modified_files)
                     new_gotchas = ready_signal.new_gotchas
                     scope = ready_signal.scope
                     if ready_signal.self_review_notes and self._printer is not None:
