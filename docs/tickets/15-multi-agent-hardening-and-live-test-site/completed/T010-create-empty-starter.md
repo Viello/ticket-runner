@@ -1,6 +1,7 @@
 # T010 — Create the Empty Starter
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-08T14:42:54Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T009
 Reasoning: low
@@ -55,3 +56,10 @@ T009 specifies what shape the starter should have; T010 actually creates it.
 
 - "Completely empty" means minimal artifacts. Do not over-engineer this
   directory.
+- `.gitkeep` is only "tracked" if a bootstrap commit exists on
+  `agent/ticket-runner`; T009 did not spell one out. Recorded in
+  `docs/tickets/gotchas.md`.
+- The pre-push installer CLI (`python -m
+  runner.adapters.git.pre_push_hook`) emits a benign `RuntimeWarning` because
+  `runner/adapters/git/__init__.py` eagerly imports the module it executes.
+  Recorded in `docs/tickets/gotchas.md`.
