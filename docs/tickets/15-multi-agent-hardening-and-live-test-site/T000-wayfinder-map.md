@@ -193,5 +193,6 @@ developer should be able to:
 - T019 — Push the wayfinder skill fix to Viello/agent-skills main — wayfinder:grilling (HITL) — blocked by T014, T018
 - T020 — Scaffold output sanitization engine — wayfinder:task (HITL) — blocked by T005b, T005c, T005d
 - T021 — All-mode skill catalog enumeration from the public catalog — wayfinder:task (HITL) — blocked by T005d
+- T022 — Fix Doctor worker-provider resolution under single-tier config load — wayfinder:task (HITL) — blocked by none; T099 blocked by T022
 - T099 — Spec-closing alignment ticket — wayfinder:task (HITL) — blocked by all (incl. T019, T020, T021)
 -->

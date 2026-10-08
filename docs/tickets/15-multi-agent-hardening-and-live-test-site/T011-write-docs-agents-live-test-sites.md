@@ -52,6 +52,10 @@ will reference this doc as the canonical list.
   External sandbox section, since the sandbox's `ticket-runner.yaml` ships
   pinned to `antigravity` and a first-time user without `agy` installed will
   hit Doctor remediation.
+- In the External sandbox and In-repo harness sections, state the expected Doctor
+  worker-binary line for an antigravity-pinned site (`agy` verified). Pre-T022
+  `Doctor` misreported the provider (see `docs/tickets/gotchas.md`); document the
+  corrected expectation, not the buggy line.
 
 ### Acceptance Criteria
 
@@ -87,3 +91,7 @@ will reference this doc as the canonical list.
 - The decision matrix should not bury the sandbox case under developer-only
   scenarios. A first-time user landing on the doc should be able to identify the
   sandbox as their starting point within 30 seconds.
+- Antigravity-pinned sites misreported `OpenCode CLI available` before T022 (the
+  Doctor provider-resolution bug recorded in `docs/tickets/gotchas.md`). Document
+  the corrected `agy` expectation and, if T022 has not landed yet, gate this
+  section on it.

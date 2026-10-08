@@ -1,6 +1,7 @@
 # T008 — Scaffold the In-Repo Harness at `D:\Projects\live-test-target/`
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-08T14:13:34Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T007
 Reasoning: medium
@@ -59,3 +60,12 @@ inspect.
 - The pre-push hook for `D:\Projects\live-test-target/.git/hooks/pre-push` is
   independent of the one in `D:\Projects/.git/hooks/pre-push`. They are
   separate repos.
+- Final `docs/tickets/` is empty per T007, so `Doctor.check_queue` will report a
+  failure until a self-test ticket is authored; the remaining pre-flight checks
+  are green (verified with a temporary ticket, since `Doctor.check_git` requires
+  a clean tree — the ticket could not be left untracked).
+- Observation: `doctor` prints `OpenCode CLI available` even though
+  `worker.provider: "antigravity"` — `Doctor._check_worker_binary` single-tier
+  loads `ticket-runner.yaml`, whose `discord:` block omits `token_env`, so the
+  load raises and the provider silently defaults to `opencode` (same behaviour
+  as the T006 external sandbox). Recorded in `docs/tickets/gotchas.md`.

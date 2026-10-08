@@ -2,7 +2,7 @@
 **Type:** wayfinder:task (HITL)
 Status: pending
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
-Blocked by: T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T012, T013, T014, T015, T016, T017, T018, T019, T020, T021
+Blocked by: T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T012, T013, T014, T015, T016, T017, T018, T019, T020, T021, T022
 Reasoning: medium
 
 ### Question

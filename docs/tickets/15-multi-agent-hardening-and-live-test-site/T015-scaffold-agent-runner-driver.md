@@ -65,3 +65,7 @@ pushing manually.
 - The driver does NOT have a remote; the upstream is the skills clone's
   `origin`, not the driver's.
 - The initial scaffold commit is hand-authored (T006/T008 exception pattern).
+- Its "doctor passes all checks" AC can pass for the wrong reason on an
+  antigravity-configured site: pre-T022 `Doctor` misresolved the provider and
+  printed `OpenCode CLI available`. Confirm T022 has landed and that doctor
+  reports the `agy` check (see `docs/tickets/gotchas.md`).
