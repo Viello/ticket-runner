@@ -365,6 +365,46 @@ def parse_sandbox_agents_md(text: str) -> tuple[str, str, str]:
     return DEFAULT_PREAMBLE, "", text.strip()
 
 
+# Fallback when no upstream AGENTS.md is discoverable. Mirrors the default-mode
+# bullet trim (per T005c resolution).
+FALLBACK_CURATED_SUBSET: str = (
+    "## Invariants\n"
+    "- All automated work happens on agent/ticket-runner.\n"
+    "- Commit format: <type>(<scope>): <Title>.\n"
+    "- Worker executes tickets via configured worker.execution_skill.\n\n"
+    "## Environment\n"
+    "- Target platform is Windows/PowerShell.\n\n"
+    "## Agent skills\n"
+    "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+    "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
+)
+
+
+def build_agents_md_content(
+    preamble: str,
+    *,
+    skills_mode: SkillsMode = "default",
+    upstream_agents_md: Path | None = None,
+) -> str:
+    """Build AGENTS.md content from a preamble plus the curated upstream subset.
+
+    Resolves the upstream AGENTS.md (falling back to the default-mode curated
+    subset when none is discoverable), extracts the invariant-bearing sections,
+    and stamps the result with today's sync date. Shared by the sandbox
+    scaffolder and the interactive ``init`` scaffolder.
+    """
+    upstream_file = _resolve_upstream_agents_md(upstream_agents_md)
+    if upstream_file and upstream_file.is_file():
+        curated_subset = extract_curated_subset(
+            upstream_file.read_text(encoding="utf-8"),
+            skills_mode=skills_mode,
+        )
+    else:
+        curated_subset = FALLBACK_CURATED_SUBSET
+    today = datetime.date.today().isoformat()
+    return format_sandbox_agents_md(preamble, today, curated_subset)
+
+
 def _resolve_source_skills_dir(override: Path | None = None) -> Path | None:
     """Locate source .agents/skills directory with fallback logic."""
     if override is not None and override.is_dir():
@@ -528,28 +568,11 @@ def scaffold(
     # 6. AGENTS.md
     agents_file = target / "AGENTS.md"
     if not agents_file.exists() or force:
-        upstream_file = _resolve_upstream_agents_md(upstream_agents_md)
-        if upstream_file and upstream_file.is_file():
-            curated_subset = extract_curated_subset(
-                upstream_file.read_text(encoding="utf-8"),
-                skills_mode=skills_mode,
-            )
-        else:
-            # Fallback when no upstream AGENTS.md is discoverable. Mirrors the
-            # default-mode bullet trim (per T005c resolution).
-            curated_subset = (
-                "## Invariants\n"
-                "- All automated work happens on agent/ticket-runner.\n"
-                "- Commit format: <type>(<scope>): <Title>.\n"
-                "- Worker executes tickets via configured worker.execution_skill.\n\n"
-                "## Environment\n"
-                "- Target platform is Windows/PowerShell.\n\n"
-                "## Agent skills\n"
-                "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
-                "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
-            )
-        today = datetime.date.today().isoformat()
-        agents_content = format_sandbox_agents_md(DEFAULT_PREAMBLE, today, curated_subset)
+        agents_content = build_agents_md_content(
+            DEFAULT_PREAMBLE,
+            skills_mode=skills_mode,
+            upstream_agents_md=upstream_agents_md,
+        )
         agents_file.write_text(
             apply_sanitization(agents_content, "agents_md"),
             encoding="utf-8",

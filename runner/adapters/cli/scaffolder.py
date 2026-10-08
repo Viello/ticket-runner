@@ -14,6 +14,14 @@ from runner.application.scaffolding import ProjectSniffer
 from runner.domain.config import VALID_WORKER_PROVIDERS
 from runner.domain.scaffolding import ProjectHeuristics, ScaffoldReport
 from runner.ports.skills_client import SkillsClient, SkillsSyncResult
+from runner.tools.sanitize import apply_sanitization
+from runner.tools.scaffold_sandbox import (
+    GITIGNORE_CONTENT,
+    SAMPLE_APP_INIT,
+    SAMPLE_APP_TEST,
+    WELCOME_TICKET_CONTENT,
+    build_agents_md_content,
+)
 
 __all__ = ["ProjectScaffolder", "ScaffoldReport"]
 
@@ -22,6 +30,13 @@ GOTCHAS_TEMPLATE = """# Global Gotchas & Lessons Learned
 A chronological record of runtime quirks, platform pitfalls, and architectural lessons discovered during ticket implementations. Subsequent ticket sessions ingest these lessons to prevent recurring mistakes.
 """
 
+INIT_AGENTS_PREAMBLE = (
+    "Welcome to your Ticket Runner project — initialized by `ticket-runner init`.\n"
+    "First stop: run `ticket-runner --project-dir . doctor` to confirm the project is wired.\n"
+    "Tickets live in `docs/tickets/`.\n"
+    "`.agent/` holds runtime state and is git-ignored; the generated artifacts are safe to reset."
+)
+
 REQUIRED_DIRECTORIES = (
     "docs/specs",
     "docs/tickets",
@@ -29,7 +44,17 @@ REQUIRED_DIRECTORIES = (
     ".agent/archive/completed",
     ".agent/signals",
     ".agent/questions",
+    ".agent/logs",
     ".agent/checkpoints",
+    ".agent/evidence",
+)
+
+# Runnable-artifact content (shared with the sandbox scaffolder). Written only
+# when missing so `init` stays idempotent against pre-existing projects.
+RUNNABLE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
+    ("docs/tickets/00-welcome/T001-hello-world.md", WELCOME_TICKET_CONTENT, "welcome_ticket"),
+    ("src/sample_app/__init__.py", SAMPLE_APP_INIT, "python_src"),
+    ("tests/test_smoke.py", SAMPLE_APP_TEST, "python_test"),
 )
 
 
@@ -140,7 +165,10 @@ class ProjectScaffolder:
         gitignore_path = _safe_resolve_target(target_dir, ".gitignore")
         gitignore_updated = False
         if not gitignore_path.exists():
-            gitignore_path.write_text(".agent/\n", encoding="utf-8")
+            gitignore_path.write_text(
+                apply_sanitization(GITIGNORE_CONTENT, "gitignore"),
+                encoding="utf-8",
+            )
             created_files.append(gitignore_path)
             gitignore_updated = True
         else:
@@ -224,7 +252,29 @@ class ProjectScaffolder:
         if config_path not in created_files:
             created_files.append(config_path)
 
-        # 7. Skills synchronization
+        # 7. Runnable artifacts: AGENTS.md + welcome ticket + sample app + smoke test
+        agents_path = _safe_resolve_target(target_dir, "AGENTS.md")
+        if not agents_path.exists():
+            agents_path.write_text(
+                apply_sanitization(
+                    build_agents_md_content(INIT_AGENTS_PREAMBLE),
+                    "agents_md",
+                ),
+                encoding="utf-8",
+            )
+            created_files.append(agents_path)
+
+        for rel_path, content, kind in RUNNABLE_ARTIFACTS:
+            artifact_path = _safe_resolve_target(target_dir, rel_path)
+            if not artifact_path.exists():
+                artifact_path.parent.mkdir(parents=True, exist_ok=True)
+                artifact_path.write_text(
+                    apply_sanitization(content, kind),
+                    encoding="utf-8",
+                )
+                created_files.append(artifact_path)
+
+        # 8. Skills synchronization
         sync_result: SkillsSyncResult | None = None
         if sync_skills:
             sync_result = self.skills_client.sync_skills(project_dir=target_dir)
