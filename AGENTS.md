@@ -69,3 +69,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 - `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline (`worker.execution_skill`).
 - `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
 
+## Session Orienting & Status
+- At the start of every session or when resuming, read root `STATUS.md` if present.
+- Present the 4-bullet "Welcome Back" briefing and confirm the active ticket and immediate next step before modifying code.
+- Before concluding a session or handing off, invoke `/retro`, `/handoff`, or `/status save` to refresh `STATUS.md`.

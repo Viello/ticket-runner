@@ -70,14 +70,14 @@ developer should be able to:
 
 <!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
 
-- [T001 — Confirm `AGENT_ANTIGRAVITY_BIN` and write ADR-0023](T001-confirm-agent-antigravity-bin-env-var-and-adr-0023.md):
+- [T001 — Confirm `AGENT_ANTIGRAVITY_BIN` and write ADR-0023](completed/T001-confirm-agent-antigravity-bin-env-var-and-adr-0023.md):
   locked single-underscore family convention `AGENT_ANTIGRAVITY_BIN` (and symmetric
   `AGENT_OPENCODE_BIN`); rejected double-underscore (`__`) per Rails/pydantic-settings
   nested-key precedent being inapplicable to flat category:provider:field triples;
   resolution priority is env-var → `shutil.which`; case-sensitive (POSIX); fail loud
   if env-var points at invalid path. Research: branch `research/agent-backend-env-var-convention`
   (commit `652b209`).
-- [T002 — Empirical `agy` CLI flag surface](T002-empirical-agy-cli-flag-surface.md):
+- [T002 — Empirical `agy` CLI flag surface](completed/T002-empirical-agy-cli-flag-surface.md):
   `agy` 1.2.16 has no `run` subcommand and no `--auto` flag; canonical invocation is
   `agy -p "<prompt>" --output-format stream-json [--effort low|medium|high|xhigh|max]
   [--model <slug>] [--continue|--conversation <uuid>] [--print-timeout <dur>]`;
@@ -87,7 +87,7 @@ developer should be able to:
   `conversation_id` (UUID, not `ses_*`); exit codes 0/1/2/3. **Comprehensive drift
   between adapter and reality → new ticket T018.** Research: branch
   `research/agy-flag-surface` (commit `0c30f9a`).
-- [T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\`](T005-lock-layout-of-external-sandbox.md):
+- [T005 — Lock the layout of `D:\Sandbox\ticket-runner-live-target\`](completed/T005-lock-layout-of-external-sandbox.md):
   realistic user-facing onboarding sandbox (not a disposable playground); own git
   repo (`main` base, `agent/ticket-runner` branch); pre-push hook via
   `PrePushHookInstaller.install()` self-contained default; smoke test
@@ -103,7 +103,7 @@ developer should be able to:
   stamped with sync date; `scripts/sync_agents_md.py` does one-way drift
   detection; initial commit `chore(sandbox): initialize ticket-runner onboarding
   sandbox`.
-- [T005c — Lock the curated `AGENTS.md` subset and preamble](T005c-lock-curated-agents-md-subset.md):
+- [T005c — Lock the curated `AGENTS.md` subset and preamble](completed/T005c-lock-curated-agents-md-subset.md):
   locked preamble (5 lines, opens "Welcome to your Ticket Runner sandbox…", no
   top-level heading) and sync stamp `<!-- mirrored from D:\Projects/AGENTS.md on
   YYYY-MM-DD -->`; section rubric (`## Invariants` + `## Environment` + `## Agent
@@ -116,7 +116,7 @@ developer should be able to:
   Literal["default", "all"]` parameter on `extract_curated_subset` and `scaffold`,
   `--skills {default,all}` CLI flag, fallback curated-subset updated to match;
   `scripts/sync_agents_md.py` mirrors the `--skills` flag.
-- [T005d — Add `sandbox.skills` config flag for skill catalog mode](T005d-add-sandbox-skills-config-flag.md):
+- [T005d — Add `sandbox.skills` config flag for skill catalog mode](completed/T005d-add-sandbox-skills-config-flag.md):
   locked nested `sandbox.skills: default|all` key (Q1=a) with mode-resolution
   priority CLI > `ticket-runner.yaml` > `"default"` mirrored in both
   `scaffold_sandbox` and `sync_agents_md` (Q2=a); scaffold self-documents the
@@ -125,6 +125,15 @@ developer should be able to:
   the `sandbox.skills` line carries a flip-and-re-sync footnote (Q5=b); new
   `sync_agents_md --apply` opt-in auto-rewrites on YAML-mode drift (Q6=b);
   `worker.execution_skill` is unaffected — the flag governs bullet trim only.
+- [T009 — Lock the empty-starter design](completed/T009-lock-empty-starter-design.md):
+  **Pure Empty** candidate (directory ships only `.gitkeep`; user runs
+  `ticket-runner init` and watches every artifact scaffold); standalone path
+  `D:\Repos\empty-starter\` (sibling to the future agent-skills driver, not under
+  `D:\Sandbox\`, not nested in the driver); **disposable** lifecycle (reset via
+  `rm -rf` except `.gitkeep`, or delete-and-recreate); own git repo on
+  `agent/ticket-runner` with `DEFAULT_STANDALONE_HOOK` pre-push, no remote, and
+  `.gitkeep` as the only tracked file (scaffold output never committed). Resolves
+  the map's open question on where the empty starter lives.
 
 ## Not yet specified
 
@@ -137,8 +146,9 @@ developer should be able to:
 - Whether `scripts/publish_agent_skills.py` (current manual one-off publication to
   Viello/agent-skills) is replaced by a ticket-driven publication flow in the agent-skills
   driver, or whether the two coexist.
-- Whether the empty starter lives alongside `D:\Repos\agent-runner-driver\` or in a
-  separate scratch location.
+- ~~Whether the empty starter lives alongside `D:\Repos\agent-runner-driver\` or in a
+  separate scratch location~~ — resolved by T009: standalone `D:\Repos\empty-starter\`,
+  a sibling of the driver.
 - Whether the agent-skills driver needs its own `.gitignore` in
   `D:\Repos\agent-runner-driver\.gitignore` or relies on the runner's defaults.
 - Whether the agent-skills driver's `--project-dir` setup is replicated via a
@@ -180,7 +190,7 @@ developer should be able to:
 - T006 — Scaffold the external sandbox — wayfinder:task (AFK) — blocked by T005, T005a, T005b, T005c, T005d
 - T007 — Lock the in-repo harness layout and `.gitignore` rules — wayfinder:grilling (HITL)
 - T008 — Scaffold the in-repo harness at `D:\Projects\live-test-target/` — wayfinder:task (AFK) — blocked by T007
-- T009 — Lock the empty-starter design — wayfinder:grilling (HITL)
+- T009 — Lock the empty-starter design — CLOSED — wayfinder:grilling (HITL)
 - T010 — Create the empty starter — wayfinder:task (AFK) — blocked by T009
 - T011 — Write `docs/agents/live-test-sites.md` describing all four sites — wayfinder:task (HITL) — blocked by T006, T008, T010, T015
 - T012 — Does each live-test site need a `verify-<app>` skill? — wayfinder:grilling (HITL) — blocked by T006, T008, T015
