@@ -1,6 +1,7 @@
 # T014 — Clone Viello/agent-skills and Install Pre-Push Hook
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-14T06:31:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T013
 Reasoning: medium
@@ -64,3 +65,13 @@ execution against the skills repo is unsafe.
   "Never `git push`" invariant applies regardless of the hook.
 - The clone's `.gitignore` may already include `.agent/` and similar patterns
   from upstream. Verify before adding duplicates.
+
+### Resolution
+
+- Cloned `https://github.com/Viello/agent-skills` into `D:\Repos\agent-skills\`.
+- Cloned HEAD commit SHA: `727a94f70cad35438cd89ccb896174b44f2ff38a` (`feat: publish canonical agent skills catalog`), which advanced past chart-time SHA `e4eb54cd006a66229020009898035a5289ac7e73` upon publishing the 45-skill catalog.
+- Created and checked out local branch `agent/ticket-runner`.
+- Installed pre-push guardrail hook into `D:\Repos\agent-skills\.git\hooks\pre-push` using `runner.adapters.git.pre_push_hook`.
+- Created `.gitignore` in `D:\Repos\agent-skills\` specifying `.agent/` and `docs/tickets/.queue.lock`, committed on `agent/ticket-runner`.
+- Verified Smoke Scenario: `git push origin agent/ticket-runner` fails with `ERROR: Direct git push is blocked on agent/ticket-runner branch.`.
+- Source files in the clone remain untouched.
