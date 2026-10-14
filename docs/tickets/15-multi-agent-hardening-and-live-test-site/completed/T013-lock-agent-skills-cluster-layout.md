@@ -1,6 +1,7 @@
 # T013 — Lock Agent-Skills Cluster Layout
 **Type:** wayfinder:grilling (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-14T06:21:25Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: none
 Reasoning: medium
@@ -23,6 +24,48 @@ must eventually reconcile with the public repo. The layout decision determines:
   `AGENTS.md` "Never `git push`").
 - Whether `scripts/publish_agent_skills.py` coexists or is replaced.
 - How the user reviews accumulated commits before pushing manually.
+
+### Resolution
+
+- **Driver — `D:\Repos\agent-runner-driver\`** (minimal invocation stub):
+  - `git init -b main` → `git checkout -b agent/ticket-runner`
+  - Pre-push hook installed via `PrePushHookInstaller.install()` with
+    `DEFAULT_STANDALONE_HOOK` (no remote, matches T006/T008/T009/T014)
+  - `.gitignore` covers `.agent/`, `docs/tickets/.queue.lock`
+  - Initial scaffold commit authored by hand (T006/T008 exception pattern)
+  - `scripts/start.ps1` hard-codes `--project-dir D:\Repos\agent-skills`
+    (header comment documents the implicit path)
+  - **No `ticket-runner.yaml`, no `.agent/`, no `docs/tickets/`** in the driver —
+    discipline rule: the driver carries no file the runner parses, so an
+    accidental `ticket-runner start` from the driver's CWD cannot drift provider
+    or scan empty signal directories
+  - No remote (`origin` unset)
+- **Skills clone — `D:\Repos\agent-skills\`**:
+  - `git clone https://github.com/Viello/agent-skills` to that path
+  - HEAD SHA recorded by T014 at close time (`e4eb54cd006a66229020009898035a5289ac7e73`
+    at chart date; T014 confirms the actual current upstream SHA)
+  - `git checkout -b agent/ticket-runner` from `main`
+  - Pre-push hook installed (same `DEFAULT_STANDALONE_HOOK` mechanism)
+  - `.gitignore`: add `.agent/` and `docs/tickets/.queue.lock` **only if upstream
+    does not already cover them**; do not add any other patterns
+  - **Escalation**: if upstream `.gitignore` lacks `docs/tickets/.queue.lock`,
+    open a small ADR instead of carving a one-off entry
+- **Parent — `D:\Repos\`**:
+  - 5-line `README.md` declaring the cluster's taxonomy ("External target projects
+    operated on by `D:\Projects` ticket-runner"); parent of the driver, the
+    skills clone, and the empty-starter (T009)
+  - Out of scope of every child's `.gitignore`; no remote; pure prose the
+    runner never reads
+- **`ticket-runner.yaml` provider setting**: `worker.provider: antigravity`
+  (matches `D:\Projects\config.yaml:11-13`; aligns the driver with the
+  sandbox (T005) and the empty-starter (T009) on the same backend)
+- **`project_dir` representation**: CLI flag `--project-dir` only; no YAML
+  `project_dir:` key. `YamlConfigLoader` schema unchanged.
+- **`scripts/publish_agent_skills.py` status**: **TBD — delegated to T016**.
+  This placeholder will be overwritten at T016 close.
+- **Bootstrap command**: `pwsh D:\Repos\agent-runner-driver\scripts\start.ps1`
+
+T014, T015 may proceed.
 
 ### Requirements
 

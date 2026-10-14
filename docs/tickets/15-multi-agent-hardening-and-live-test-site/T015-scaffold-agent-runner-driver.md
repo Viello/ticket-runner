@@ -25,21 +25,25 @@ pushing manually.
 - Install pre-push hook (same mechanism as T006/T008/T014).
 - Author an initial scaffold commit (per the T006/T008 exception pattern — no
   gatekeeper has run yet).
-- Write `ticket-runner.yaml` with:
-  - `worker.provider` set per T013's decision (default candidate: `"antigravity"`).
-  - `project_dir: D:\Repos\agent-skills\` (per Spec 11 `project_dir:` key support,
-    OR document that `--project-dir` is required on the CLI).
-  - Standard verification commands (placeholder until T016 resolves demo tickets).
-- Create `.agent/` with the standard subdirs (`signals/`, `questions/`, `logs/`,
-  `checkpoints/`, `evidence/`, `archive/`).
-- Create `docs/tickets/` (empty for now; T017 may seed demo tickets).
-- Create `.gitignore` covering `.agent/`, `docs/tickets/.queue.lock`.
+- Per T013's minimal-stub discipline rule, **do not** create `ticket-runner.yaml`,
+  `.agent/`, or `docs/tickets/` inside the driver. The driver is an invocation
+  stub; the skills clone (Target Project) owns those artifacts.
+- Create `.gitignore` covering `.agent/`, `docs/tickets/.queue.lock` (defensive,
+  even though the directories are not created now — prevents accidental
+  commits if they are added later).
+- Create `scripts/start.ps1` per the bootstrap command documented in T013's
+  Resolution. Body is essentially:
+  `python D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills start @args`
+  with a header comment declaring the implicit `--project-dir` path.
 
 ### Acceptance Criteria
 
-- `D:\Repos\agent-runner-driver\` exists with the scaffold shape.
-- `ticket-runner.yaml` exists and contains the `project_dir` (or notes that
-  `--project-dir` is required).
+- `D:\Repos\agent-runner-driver\` exists with the minimal-stub shape: `git/`,
+  pre-push hook, `.gitignore`, the initial scaffold commit, and
+  `scripts/start.ps1` — and **no** `ticket-runner.yaml`, `.agent/`, or
+  `docs/tickets/`.
+- `scripts/start.ps1` exists and its body hard-codes
+  `--project-dir D:\Repos\agent-skills` with the documented header comment.
 - `agent/ticket-runner` branch exists with the initial scaffold commit.
 - `git log` from `D:\Repos\agent-runner-driver` shows the commit.
 - `ticket-runner --project-dir D:\Repos\agent-skills doctor` (run from
@@ -65,6 +69,10 @@ pushing manually.
 - The driver does NOT have a remote; the upstream is the skills clone's
   `origin`, not the driver's.
 - The initial scaffold commit is hand-authored (T006/T008 exception pattern).
+- The minimal-stub shape (no `ticket-runner.yaml`, no `.agent/`, no
+  `docs/tickets/`) is a deliberate T013 decision. The `.gitignore` still
+  references those paths so an accidentally-created directory stays untracked
+  rather than being mistaken for an active Target Project.
 - Its "doctor passes all checks" AC can pass for the wrong reason on an
   antigravity-configured site: pre-T022 `Doctor` misresolved the provider and
   printed `OpenCode CLI available`. Confirm T022 has landed and that doctor
