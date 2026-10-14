@@ -188,6 +188,7 @@ presence:
 
 discord:
   enabled: false
+  token_env: "DISCORD_BOT_TOKEN"
 
 lifecycle:
   queue_completion: "standby"

@@ -1804,4 +1804,84 @@ async def test_doctor_run_with_antigravity_halts_on_missing_binary(tmp_path: Pat
     assert "Install Antigravity CLI" in (report.checks[0].remediation or "")
 
 
+# ==============================================================================
+# T022: Fix Doctor Worker-Provider Resolution Under Single-Tier Config Load
+# ==============================================================================
+
+@pytest.mark.anyio
+async def test_check_worker_binary_resolves_antigravity_from_overlay_without_discord_token_env(
+    tmp_path: Path,
+) -> None:
+    """Doctor resolves worker.provider from two-tier overlay even when discord.token_env is omitted."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    overlay_file = tmp_path / "ticket-runner.yaml"
+    overlay_yaml = (
+        "project:\n"
+        '  name: "test-project"\n'
+        '  base_branch: "main"\n'
+        "worker:\n"
+        '  provider: "antigravity"\n'
+        "verification:\n"
+        '  test_cmd: "pytest"\n'
+        "discord:\n"
+        "  enabled: false\n"
+    )
+    overlay_file.write_text(overlay_yaml, encoding="utf-8")
+
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 2.0.0\n")
+
+    doctor = Doctor(
+        command_runner=runner,
+        cwd=tmp_path,
+        config_loader=YamlConfigLoader(),
+        path_resolver=lambda cmd: r"C:\bin\agy.exe" if cmd == "agy" else (r"C:\bin\opencode.exe" if cmd == "opencode" else None),
+    )
+
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "agy" in result.message
+    assert "opencode" not in result.message.lower()
+    # Confirm opencode version check was never invoked
+    assert runner.commands == []
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_skips_when_config_is_genuinely_unloadable(
+    tmp_path: Path,
+) -> None:
+    """Doctor binary check does not masquerade as opencode when project config is genuinely broken."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    broken_file = tmp_path / "ticket-runner.yaml"
+    broken_file.write_text("worker: [malformed yaml", encoding="utf-8")
+
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 2.0.0\n")
+
+    doctor = Doctor(
+        command_runner=runner,
+        cwd=tmp_path,
+        config_loader=YamlConfigLoader(),
+        path_resolver=lambda cmd: r"C:\bin\opencode.exe" if cmd == "opencode" else None,
+    )
+
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "skipped" in result.message.lower()
+    assert runner.commands == []
+
+    # The failure must surface via check_config
+    config_result = await doctor.check_config()
+    assert config_result.passed is False
+    assert config_result.name == CHECK_CONFIG
+    assert "failed" in config_result.message.lower()
+
+
+
 

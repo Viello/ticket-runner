@@ -206,18 +206,64 @@ class Doctor:
         """Configured target project root directory, if any."""
         return self._cwd
 
-    def _get_worker_provider(self) -> str:
+    def _has_project_config_file(self) -> bool:
+        """Return True if a candidate project configuration file exists on disk."""
+        if getattr(self, "_config_path_explicit", False):
+            return self._config_path.is_file()
+        if self._cwd is not None:
+            return (self._cwd / "ticket-runner.yaml").is_file() or (self._cwd / "config.yaml").is_file()
+        return Path("ticket-runner.yaml").is_file() or Path("config.yaml").is_file()
+
+    def _load_configuration(self) -> RunnerConfig:
+        """Load and cache configuration via two-tier resolution or fallback to single-tier."""
+        if self._loaded_config is not None:
+            return self._loaded_config
+        if self._config_loader is None:
+            raise ConfigError("No configuration loader available.")
+
+        if hasattr(self._config_loader, "load_two_tier"):
+            target_project_dir = self._cwd if self._cwd is not None else (
+                self._config_path.parent if self._config_path.is_absolute() else Path.cwd().resolve()
+            )
+            overlay_path = self._config_path if getattr(self, "_config_path_explicit", False) else None
+            try:
+                loaded = self._config_loader.load_two_tier(
+                    project_dir=target_project_dir,
+                    project_config_path=overlay_path,
+                )
+                self._loaded_config = loaded
+                self._config_load_source = f"loaded via two-tier resolution for '{target_project_dir}'."
+                return loaded
+            except Exception as two_tier_exc:
+                if self._config_path.is_file():
+                    try:
+                        loaded = self._config_loader.load(self._config_path)
+                        self._loaded_config = loaded
+                        self._config_load_source = f"loaded from '{self._config_path}'."
+                        return loaded
+                    except Exception:
+                        pass
+                raise two_tier_exc
+        else:
+            loaded = self._config_loader.load(self._config_path)
+            self._loaded_config = loaded
+            self._config_load_source = f"loaded from '{self._config_path}'."
+            return loaded
+
+    def _get_worker_provider(self) -> str | None:
         """Resolve the configured worker provider name ('opencode' or 'antigravity')."""
         if self._loaded_config is not None:
             return getattr(self._loaded_config.worker, "provider", "opencode")
         if self._config_loader is not None:
             try:
-                loaded = self._config_loader.load(self._config_path)
+                loaded = self._load_configuration()
                 if loaded is not None:
-                    self._loaded_config = loaded
                     return getattr(loaded.worker, "provider", "opencode")
-            except Exception:
-                pass
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if ("not found" in exc_str or "no such file" in exc_str) and not self._has_project_config_file():
+                    return "opencode"
+                return None
         return "opencode"
 
     def _binary_override_failure(self, name: str, env_var: str) -> CheckResult | None:
@@ -247,6 +293,13 @@ class Doctor:
              literal binary name (``agy`` / ``opencode``).
         """
         provider = self._get_worker_provider()
+        if provider is None:
+            return CheckResult(
+                name=name,
+                passed=True,
+                message="Worker binary check skipped (configuration not loaded).",
+                remediation=None,
+            )
         if provider == "antigravity":
             binary = "agy"
             env_var = ANTIGRAVITY_BIN_ENV_VAR
@@ -499,43 +552,18 @@ class Doctor:
     async def check_config(self) -> CheckResult:
         """Load and validate configuration using ConfigLoader."""
         try:
-            if hasattr(self._config_loader, "load_two_tier"):
-                target_project_dir = self._cwd if self._cwd is not None else (
-                    self._config_path.parent if self._config_path.is_absolute() else Path.cwd().resolve()
-                )
-                overlay_path = self._config_path if getattr(self, "_config_path_explicit", False) else None
-                try:
-                    self._loaded_config = self._config_loader.load_two_tier(
-                        project_dir=target_project_dir,
-                        project_config_path=overlay_path,
-                    )
-                    return CheckResult(
-                        name=CHECK_CONFIG,
-                        passed=True,
-                        message=f"Configuration valid: loaded via two-tier resolution for '{target_project_dir}'.",
-                        remediation=None,
-                    )
-                except Exception as two_tier_exc:
-                    if self._config_path.is_file():
-                        try:
-                            self._loaded_config = self._config_loader.load(self._config_path)
-                            return CheckResult(
-                                name=CHECK_CONFIG,
-                                passed=True,
-                                message=f"Configuration valid: loaded from '{self._config_path}'.",
-                                remediation=None,
-                            )
-                        except Exception:
-                            pass
-                    raise two_tier_exc
-            else:
-                self._loaded_config = self._config_loader.load(self._config_path)
-                return CheckResult(
-                    name=CHECK_CONFIG,
-                    passed=True,
-                    message=f"Configuration valid: loaded from '{self._config_path}'.",
-                    remediation=None,
-                )
+            self._load_configuration()
+            source = getattr(
+                self,
+                "_config_load_source",
+                f"loaded from '{self._config_path}'.",
+            )
+            return CheckResult(
+                name=CHECK_CONFIG,
+                passed=True,
+                message=f"Configuration valid: {source}",
+                remediation=None,
+            )
         except (ConfigError, OSError, Exception) as exc:
             self._loaded_config = None
             remediation = f"Verify that '{self._config_path}' exists and satisfies the RunnerConfig schema."
@@ -816,10 +844,9 @@ class Doctor:
             channel_id = self._loaded_config.discord.channel_id
         elif self._config_loader is not None:
             try:
-                loaded = self._config_loader.load(self._config_path)
+                loaded = self._load_configuration()
                 if loaded is not None and hasattr(loaded, "discord"):
                     channel_id = loaded.discord.channel_id
-                    self._loaded_config = loaded
             except Exception:
                 pass
 

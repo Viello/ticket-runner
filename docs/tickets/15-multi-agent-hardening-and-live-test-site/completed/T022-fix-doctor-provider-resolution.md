@@ -1,6 +1,7 @@
 # T022 — Fix Doctor Worker-Provider Resolution Under Single-Tier Config Load
 **Type:** wayfinder:task (HITL)
-Status: pending
+Status: completed
+Completed: 2026-10-14T07:30:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: none
 Reasoning: medium
