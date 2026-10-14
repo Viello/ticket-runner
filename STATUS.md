@@ -54,7 +54,7 @@ stopped_at:
 
 ## 🚧 Exact Work-In-Progress
 - **Branch**: `agent/ticket-runner`
-- **Uncommitted Files**: `STATUS.md`, `docs/tickets/gotchas.md`, and completed `T015` ticket
+- **Uncommitted Files**: None (working tree clean, commit `791dd35`)
 - **Last Stopped At**: T015 completed; ready to execute T022
 
 ## 📦 Recent Completed Work & Key Decisions
