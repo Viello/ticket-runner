@@ -30,3 +30,19 @@ Structure the document with:
 - Redact credentials, tokens, or sensitive values.
 - Tailor the document to any focus area specified in arguments.
 
+## Status Tracker Synchronization
+
+After writing the handoff document:
+1. Check if root `STATUS.md` exists in the project workspace.
+2. **If `STATUS.md` exists**:
+   Synchronize it with:
+   - **Active Tickets & Progress**: Current ticket or goal context.
+   - **Exact Work-In-Progress**: Current branch, uncommitted files, and exact file/function/line where paused.
+   - **Recent Completed Work & Decisions**: Summarized changes and rationale from this session.
+   - **Blockers & Gotchas**: Unresolved errors, open seams, or environment traps.
+   - **Next 1–3 Actionable Steps**: Concrete immediate next steps.
+3. **If `STATUS.md` does NOT exist**:
+   Prompt the user:
+   > "No `STATUS.md` found in this project. Would you like me to bootstrap one via `/status` to track your WIP and next steps for your return? [y/n]"
+   If confirmed, invoke the `status` skill bootstrap sequence.
+
