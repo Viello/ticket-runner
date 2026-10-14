@@ -1,6 +1,7 @@
 # T015 — Scaffold `D:\Repos\agent-runner-driver\`
 **Type:** wayfinder:task (AFK)
-Status: pending
+Status: completed
+Completed: 2026-10-14T06:52:00Z
 Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
 Blocked by: T013
 Reasoning: medium
@@ -77,3 +78,14 @@ pushing manually.
   antigravity-configured site: pre-T022 `Doctor` misresolved the provider and
   printed `OpenCode CLI available`. Confirm T022 has landed and that doctor
   reports the `agy` check (see `docs/tickets/gotchas.md`).
+
+### Resolution
+
+- Created `D:\Repos\agent-runner-driver\` directory.
+- Initialized empty git repo with branch `agent/ticket-runner`.
+- Installed pre-push guardrail hook into `D:\Repos\agent-runner-driver\.git\hooks\pre-push` using `runner.adapters.git.pre_push_hook`. Verified direct push is blocked.
+- Created defensive `.gitignore` covering `.agent/` and `docs/tickets/.queue.lock`.
+- Created `scripts/start.ps1` with the documented header comment, hardcoded `--project-dir D:\Repos\agent-skills`, and python launcher (`py -3`/`python`) autodetection. Also authored `scripts/start.bat` for cmd.exe execution.
+- Maintained minimal-stub discipline: driver contains strictly `.git`, pre-push hook, `.gitignore`, and `scripts/` (no `ticket-runner.yaml`, no `.agent/`, no `docs/tickets/`).
+- Authored initial root scaffold commit on `agent/ticket-runner`: `6214c1e` (`chore(driver): scaffold agent-skills driver invocation stub`).
+- Verified smoke scenarios: running Doctor from `D:\Repos\agent-runner-driver` with `--project-dir D:\Repos\agent-skills` cleanly inspects the Target Project on branch `agent/ticket-runner` (pre-flight queue validation notes `docs/tickets/` awaiting seeding via T016/T017).
