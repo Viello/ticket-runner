@@ -1,4 +1,8 @@
-# Spec 15 — Multi-Agent Hardening & External Live-Test Site
+# T000 — Multi-Agent Hardening & External Live-Test Site
+**Type:** wayfinder:map
+Status: completed
+Spec: docs/specs/15-multi-agent-hardening-and-live-test-site.md
+
 
 ## Destination
 
