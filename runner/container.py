@@ -22,6 +22,7 @@ from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.adapters.opencode.opencode_worker import OpenCodeWorker
 from runner.adapters.ui.terminal import RichTerminalDisplay
+from runner.adapters.ui.terminal_approval import TerminalApprovalAdapter
 from runner.adapters.ui.terminal_detector import TerminalHostDetector
 from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
 from runner.adapters.ui.tui_launcher import TuiLauncher
@@ -288,11 +289,15 @@ def build_container(
         signal_repository=resolved_signal_repo,
     )
 
-    resolved_approval_gateway: ApprovalGateway | None = (
-        approval_gateway
-        if resolved_config.lifecycle.approval_mode == "human"
-        else None
-    )
+    resolved_approval_gateway: ApprovalGateway | None = None
+    if resolved_config.lifecycle.approval_mode == "human":
+        # Default to the terminal adapter so human mode always has a gateway
+        # (it fails closed on non-interactive consoles); an injected gateway wins.
+        resolved_approval_gateway = (
+            approval_gateway
+            if approval_gateway is not None
+            else TerminalApprovalAdapter(console=console)
+        )
 
     resolved_processor = processor or TicketProcessor(
         coordinator=resolved_coordinator,
