@@ -1,24 +1,49 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-15T21:32:00
+last_updated: 2026-10-15T23:53:50
 author: Gab
 branch: agent/ticket-runner
-active_ticket: None
-status: ready
+active_ticket: orchestrate-runner-first-run
+status: paused
 stopped_at:
-  file: "docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md"
-  symbol: "# T000 — Multi-Agent Hardening & External Live-Test Site"
+  file: "D:/Projects/runner/container.py"
+  symbol: "resolved_approval_gateway (approval-gateway wiring gap)"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Spec 15 (Multi-Agent Hardening & External Live-Test Site) — Ticket headers formatted; Doctor pre-flight passes clean
-- **Last Touchpoint**: [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) on branch `agent/ticket-runner` (clean working tree)
-- **Blockers**: None (Doctor pre-flight verification passing 100%)
-- **Next Step**: Run live verification via `/live-qa` or begin next ticket execution (T018 / T011)
+- **Focus**: Execute the `orchestrate-runner` first-run sequence against `D:\Repos\agent-skills` (T101 → T102). Phase 1 environment verification green; **paused before any run** on a discovered blocker: the HITL approval gate is not wired into the `start` command (human mode resolves `approval_gateway: None` → fail-closed abort at the first Evidence Card). No execution performed; no Runner/target edits made.
+- **Last Touchpoint**: `D:\Projects\runner\container.py` (`resolved_approval_gateway`, ~line 291) on branch `agent/ticket-runner` (STATUS.md refresh committed with this update)
+- **Blockers**: (1) approval-gateway wiring gap — fix venue to be decided; (2) target `.agents/skills/` absent → Doctor `skills` check will fail; (3) overlay edits, spec move, and Doctor still pending
+- **Next Step**: Decide the fix venue and implement the wiring fix + regression test; then apply the overlay edits, provision skills, and run `doctor --local-only`
 
 ## 🎯 Active Tickets & Progress
+- [ ] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **PAUSED pre-flight**
+  - Context / Spec: `C:\Users\Acer\.opencode\plan\orchestrate-runner.md` (canonical home decided: `D:\Repos\agent-skills\docs\specs\orchestrate-runner.md`; move pending)
+  - Handoff: `C:\Users\Acer\AppData\Local\Temp\opencode\handoff-orchestrate-runner-first-run-paused.md`
+  - Subtasks:
+    - [x] Phase 1 environment verification (branch, `agy` path, `.agent` writable + ignored, overlay loads, queue, clean tree, 37-file pre-T101 state)
+    - [x] Discover + reproduce Blocker A (HITL approval gate unwired: `ticket_runner.py:456` → `container.py:291` → `gatekeeper.py:1107`)
+    - [x] Discover Blocker B (target `.agents/skills/` missing → Doctor `check_skills` will fail)
+    - [x] User decisions: no Runner edits this session; invoke protocol by hand; spec home = target clone
+    - [ ] Implement Blocker-A wiring fix + regression test (venue TBD; recommended: Spec-15 queue ticket before T099)
+    - [ ] Apply overlay edits (`provider: antigravity`; `model.models: []`; `lifecycle.approval_mode: human`)
+    - [ ] Provision `.agents/skills/` in target (`implement`, `code-review`, `diagnosing-bugs` at minimum)
+    - [ ] Run `doctor --local-only`; move spec to target `docs/specs/`
+    - [ ] Phase 4 by hand (+ `observations/T101.md` / `T102.md` predictions)
+    - [ ] Phases 5–6 `start --local-only` in an interactive console (HITL `[y]` per Evidence Card)
+    - [ ] Phases 7–9 post-mortem, `/live-qa`, cleanup
+- [ ] `env-prep-agent-skills`: Prepare `D:\Repos\agent-skills` to run the seeded demo queue — NO TICKET (session work)
+  - Context / Spec: `D:\Repos\agent-runner-driver\docs\specs\01-runner-live-test-bootstrap.md`
+  - Subtasks:
+    - [x] Scaffold clone via `init --yes --no-skills` (avoids clobbering the catalog source)
+    - [x] Restore `.gitignore` (removed scaffolder's BOM-induced duplicate `.agent/` line)
+    - [x] Prune scaffolder noise: `docs/tickets/00-welcome/`, `src/`, `tests/`, generated `AGENTS.md`
+    - [x] One-time copy of spec + T101/T102 into the clone's `docs/specs/` + `docs/tickets/01-runner-live-test-bootstrap/`
+    - [x] Override `test_cmd` (schema forbids empty; `python -m pytest` exits 5 with no tests) → YAML-integrity one-liner
+    - [x] Decide worker provider → `antigravity` (settled; overlay edit queued)
+    - [ ] Run `doctor --local-only`, then `start --local-only` — carried into `orchestrate-runner-first-run` (paused pre-flight)
 - [x] `T017-seed-demo-ticket-queue`: Seed the demo ticket queue (conditional) — CLOSED via `ec2c590`
   - Context / Spec: [docs/tickets/15-multi-agent-hardening-and-live-test-site/completed/T017-seed-demo-ticket-queue.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/completed/T017-seed-demo-ticket-queue.md)
   - Subtasks:
@@ -33,7 +58,7 @@ stopped_at:
   - Subtasks:
     - [x] Decide starter-queue option: **Yes** — pre-seed 2 demo tickets in driver under `01-runner-live-test-bootstrap`
     - [x] Decide publication script: **Coexist** — keep `scripts/publish_agent_skills.py`; no relocation follow-up
-    - [x] Decide queue location: **Driver** — `D:\Repos\agent-runner-driver\docs/tickets/01-runner-live-test-bootstrap/`
+    - [x] Decide queue location: **Driver** — `D:\Repos\agent-runner-driver\docs\tickets\01-runner-live-test-bootstrap\`
     - [x] Decide spec file: **Yes** — 1-paragraph spec alongside the queue scaffold
     - [x] Reconcile prior cluster-layout discipline: bootstrap `--project-dir` indirection preserves the spirit; prior ticket stays as historical record
     - [x] Defer specific ticket content to next ticket in chain (Round-1 candidates partly stale)
@@ -72,11 +97,13 @@ stopped_at:
     - [x] Decide D:\Repos\agent-runner-driver\ scripts/start.ps1 as canonical bootstrap
 
 ## 🚧 Exact Work-In-Progress
-- **Branch**: `agent/ticket-runner`
-- **Uncommitted Files**: None (working tree clean)
-- **Last Stopped At**: [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) line 1; Doctor pre-flight passes 100% clean
+- **Branch**: `agent/ticket-runner` (both `D:\Projects` and `D:\Repos\agent-skills`)
+- **Uncommitted Files**: `D:\Projects`: only `STATUS.md` (this refresh — committed with this update). `D:\Repos\agent-skills`: untracked `docs/` + `ticket-runner.yaml` (unchanged this session)
+- **Last Stopped At**: `D:\Projects\runner\container.py` → `resolved_approval_gateway` (~line 291; missing terminal-approval default for `approval_mode: human`). Handoff: `C:\Users\Acer\AppData\Local\Temp\opencode\handoff-orchestrate-runner-first-run-paused.md`
 
 ## 📦 Recent Completed Work & Key Decisions
+- **orchestrate-runner first-run (this session)**: Resumed the canonical sequence; Phase 1 verification green (target branch, `agy` path, `.agent` writable + ignored, overlay loads, T101/T102 queue, 37-file pre-T101 state, README anatomy block at `README.md:87`). Discovered and empirically reproduced **Blocker A**: no production path constructs an `ApprovalGateway` — `run_start` builds the container without one (`ticket_runner.py:456`), `container.py:291` resolves `None`, and `gatekeeper.py:1107` fail-closes at the first green check in human mode (so `start --local-only` would abort in human mode or commit without cards in autonomous mode). Also found **Blocker B**: the `--no-skills` scaffold left the target without `.agents/skills/`, so Doctor's `skills` check will fail (`implement`, `code-review`, `diagnosing-bugs` required). Per user decision: **no Runner edits, no execution — session paused**; decided by-hand protocol invocation (Skill file remains future work) and spec home `D:\Repos\agent-skills\docs\specs\`. Full details: `C:\Users\Acer\AppData\Local\Temp\opencode\handoff-orchestrate-runner-first-run-paused.md`.
+- **env-prep-agent-skills (prior session)**: Prepared `D:\Repos\agent-skills` to execute the seeded T101/T102 queue. Ran `ticket_runner.py init --yes --no-skills` (skills sync suppressed so the catalog source isn't clobbered). Restored `.gitignore` after the scaffolder appended a duplicate `.agent/` (a BOM on line 1 defeated its dedupe check). Pruned `00-welcome/`, `src/`, `tests/`, and the generated `AGENTS.md` (the Runner preamble is irrelevant to a markdown/YAML catalog). One-time copied the spec + T101/T102 into the clone (the spec copy is required because tickets reference `docs/specs/01-runner-live-test-bootstrap.md` relative to the target root). Overrode `test_cmd`: the schema forbids an empty value and the scaffolder's `python -m pytest` exits 5 with no tests, so it was replaced with a YAML-integrity one-liner (`python -c "... yaml.safe_load over */agents/openai.yaml ..."`), verified live to validate 37 files at exit 0 and resolve its leading token on PATH. **No ticket execution, no commits.** Full details: `C:\Users\Acer\AppData\Local\Temp\opencode\handoff-agent-skills-runner-setup.md`.
 - **b38c2c5**: Formatted [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) with `# T000 — Multi-Agent Hardening & External Live-Test Site` and `Status: completed` metadata; formatted driver demo tickets [T101](file:///D:/Repos/agent-runner-driver/docs/tickets/01-runner-live-test-bootstrap/T101-add-codex-interface-metadata-to-skills-lacking-it.md) and [T102](file:///D:/Repos/agent-runner-driver/docs/tickets/01-runner-live-test-bootstrap/T102-document-agents-openai-yaml-in-skill-anatomy.md) with standard `# T<NNN> — <Title>` headers. Unblocked queue verification across Doctor and Ticket Store parsers.
 - **T017**: Seeded the live-test bootstrap spec (`D:\Repos\agent-runner-driver\docs\specs\01-runner-live-test-bootstrap.md`) and 2 demo tickets under `D:\Repos\agent-runner-driver\docs\tickets\01-runner-live-test-bootstrap\` (`T101` adds `agents/openai.yaml` to 8 catalog skills lacking it; `T102` documents the interface file in the catalog anatomy README block). Both H1s are T<NNN>-free per the demo-ticket title constraint; both carry standard wayfinder sections; both target real chart-time catalog hygiene (8 of 45 skills missing Codex interface metadata; README silent on `agents/`). Initialized driver-local `docs/tickets/gotchas.md` with the cluster-layout reconciliation narrative and the Unicode-tree-character discipline. Demo tickets are seeded (not executed) — execution is the next step. Driver commit landed at `9af978e`; runner-source relocation at `ec2c590`.
 - **T016**: Decided starter-queue (yes, 2 demo tickets in driver under `01-runner-live-test-bootstrap`) and publication-script (coexist, no follow-up). Reconciled prior cluster-layout discipline via bootstrap `--project-dir` indirection (driver's `docs/tickets/` permitted as a queue home; runner never reads it). Authored 1-paragraph spec alongside queue scaffold (per agent-guidelines pattern). Defer specific ticket content to next ticket in chain.
@@ -91,12 +118,19 @@ stopped_at:
 - **039b1d0**: Create empty starter fresh-slate target at `D:\Repos\empty-starter` (T010)
 
 ## ⚠️ Blockers & Gotchas
+- **HITL approval gate unwired (open — the pause reason)**: `start` has no path to construct an `ApprovalGateway`. Evidence: `ticket_runner.py:456` (`build_container` without a gateway; `git log -S "approval_gateway" -- ticket_runner.py` is empty), `runner/container.py:291–295` (resolves `None` unless one is injected), `runner/application/gatekeeper.py:1107–1111` (human mode + `None` → fail-closed `UserAbortError`); reproduced by building the container as `start` does under `approval_mode: human` → `approval_gateway: None`. Recommended fix: default `TerminalApprovalAdapter()` in `build_container` when human mode and none injected (+ regression test). Fix venue undecided — recommended: Spec-15 queue ticket (next free ID ≈ T023) before T099. Discord/away-mode approval is likewise unwired (separate future work).
+- **Target `.agents/skills/` missing (open)**: `init --no-skills` left no `.agents/`; `doctor.check_skills` (`doctor.py:1025`) requires `.agents/skills/{implement,code-review,diagnosing-bugs}/SKILL.md` → Doctor will fail until provisioned. Remedy: `skills sync --project-dir` (pulls `Viello/agent-skills@main`; may drift from clone HEAD `727a94f`) or targeted copy from the clone root (sources exist there). The Worker prompt (`prompt_builder.py:170`) also reads `.agents/skills/implement/SKILL.md`.
+- **`start` requires an interactive console (HITL)**: terminal approval reads raw keys via `msvcrt` + `isatty`; piped/background shells fail closed (and REJECT loops burn verification attempts). The human runs `start --local-only`; the orchestrator observes `.agent/`.
+- **Model selection**: the machine-default config carries two OpenCode-style models → interactive prompt + `--model` passthrough to `agy`. Plan: `model.models: []` in the overlay → silent `None`, no `--model` flag, no prompt.
+- **Worker-provider mismatch (resolved-pending-edit)**: decided `antigravity` (T013); the overlay still says `opencode` — edit queued.
+- **`test_cmd` cannot be empty**: `runner/domain/config.py:64` raises `ConfigError` on a blank `test_cmd`. The scaffolder default `python -m pytest` exits **5** ("no tests ran") on this catalog — the Gatekeeper treats nonzero as failure (`gatekeeper.py:262`). Current value is a YAML-integrity one-liner (validates `*/agents/openai.yaml`).
+- **`init` has a BOM bug**: on a `.gitignore` whose first line carries a UTF-8 BOM, the dedupe check (`scaffolder.py:176–184`) fails and appends a duplicate `.agent/`. Fix is `git checkout -- .gitignore` (done). Possible upstream bug worth a ticket.
 - **Spec 15 spec file is missing**: every ticket in `docs/tickets/15-multi-agent-hardening-and-live-test-site/` references `docs/specs/15-multi-agent-hardening-and-live-test-site.md` which does not exist; the de facto spec lives at `T000-wayfinder-map.md`. ADR-0011 spec-context-excerpt injection would FileNotFoundError on every Spec-15 Worker prompt. T099 owns this fix.
 - `scripts/start.ps1` (per T013 resolution) requires `pwsh` (PowerShell 7); boxes with only `powershell.exe` 5.1 will fail silently. Consider dual `scripts/start.bat` fallback or a pure-Python `scripts/start.py`.
 - Never `git push` on `agent/ticket-runner` — pre-push hook is installed.
 - All external path resolution inside `.agent/`, `docs/tickets/`, `ticket-runner.yaml` resolves relative to Target Project root.
 
 ## ⏭️ Next 1–3 Actionable Steps
-1. `Execute seeded demo tickets`: Run the Ticket Runner from the driver (`pwsh D:\Repos\agent-runner-driver\scripts/start.ps1 start`) so the Worker picks up T101 (Codex interface metadata), the Gatekeeper verifies, and T102 (README anatomy) follows.
-2. `Run Doctor against agent-skills`: Verify `doctor` passes when invoked from driver or with `--project-dir D:\Repos\agent-skills`, now that the queue is seeded.
-3. `T018 / T019`: Rewrite Antigravity adapter (empirical flag surface) and push the wayfinder skill fix upstream.
+1. `Fix Blocker A`: Decide the venue (recommended: ticket in `docs/tickets/15-multi-agent-hardening-and-live-test-site/`, before T099) and implement the terminal-approval-gateway default + regression test; commit in `D:\Projects`.
+2. `Prepare the target`: apply the queued overlay edits (`provider: antigravity`; `model.models: []`; `lifecycle.approval_mode: human`); provision `.agents/skills/`; run `py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills doctor --local-only`; move the spec to `D:\Repos\agent-skills\docs\specs\`.
+3. `Resume the run`: Phase-4 by-hand pre-flight + prediction MDs (`observations/T101.md`, `T102.md`) → `start --local-only` in an interactive console (HITL `[y]` at each Evidence Card) → post-mortem → `/live-qa` → cleanup.
