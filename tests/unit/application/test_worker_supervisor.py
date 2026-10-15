@@ -2431,6 +2431,94 @@ def test_worker_supervisor_error_when_no_agent_worker_and_no_factory() -> None:
         WorkerSupervisor.set_default_agent_worker_factory(saved_factory)
 
 
+# --- Empty-Success Result Anomaly (truncated Antigravity turn) ---
+
+
+def test_supervisor_surfaces_worker_event_anomaly(tmp_path: Path) -> None:
+    """A decoded WorkerEvent carrying an anomaly is recorded and notified, not treated as normal."""
+    from runner.domain.telemetry import WorkerEvent
+    from tests.fakes.fake_agent_worker import FakeAgentWorker
+
+    session_id = "ses_anomaly001"
+    ticket = _make_ticket("T101")
+    anomaly_text = (
+        "Antigravity reported a SUCCESS result with zero token usage and an empty "
+        "response; treating as an anomalous, non-productive turn"
+    )
+
+    stream_lines = [
+        json.dumps({"type": "init", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "result", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_worker = FakeAgentWorker(
+        canned_events=[
+            WorkerEvent(type="init", session_id=session_id, is_known=True),
+            WorkerEvent(
+                type="result", session_id=session_id, is_known=True, anomaly=anomaly_text
+            ),
+        ]
+    )
+    expected_cmd = ["opencode", "run", "--format", "json", "--auto", "prompt text"]
+
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(expected_cmd, stdout_lines=stream_lines, exit_code=0)
+
+    recorded_notices: list[str] = []
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=fake_worker,
+        notify=recorded_notices.append,
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    assert result.session_id == session_id
+    assert any(
+        "Worker anomaly" in diag and anomaly_text in diag for diag in result.diagnostics
+    )
+    assert any("Worker anomaly" in notice and anomaly_text in notice for notice in recorded_notices)
+
+
+def test_supervisor_ignores_events_without_anomaly(tmp_path: Path) -> None:
+    """Events whose decoded anomaly is None produce no anomaly diagnostic or notice."""
+    from runner.domain.telemetry import WorkerEvent
+    from tests.fakes.fake_agent_worker import FakeAgentWorker
+
+    session_id = "ses_anomaly002"
+    ticket = _make_ticket("T102")
+
+    stream_lines = [
+        json.dumps({"type": "init", "sessionID": session_id}) + "\n",
+        json.dumps({"type": "step_finish", "sessionID": session_id}) + "\n",
+    ]
+
+    fake_worker = FakeAgentWorker(
+        canned_events=[
+            WorkerEvent(type="init", session_id=session_id, is_known=True),
+            WorkerEvent(type="step_finish", session_id=session_id, is_known=True),
+        ]
+    )
+    expected_cmd = ["opencode", "run", "--format", "json", "--auto", "prompt text"]
+
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(expected_cmd, stdout_lines=stream_lines, exit_code=0)
+
+    recorded_notices: list[str] = []
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=fake_worker,
+        notify=recorded_notices.append,
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="prompt text"))
+
+    assert not any("Worker anomaly" in diag for diag in result.diagnostics)
+    assert not any("Worker anomaly" in notice for notice in recorded_notices)
+
+
 
 
 

@@ -37,8 +37,15 @@ from runner.ports.agent_worker import AgentWorker
 # Maximum permitted line length to prevent memory exhaustion from oversized lines
 MAX_LINE_CHARS: int = 5_000_000
 
-# Default print-timeout ceiling to prevent unbounded execution (agy default is 0s)
-DEFAULT_PRINT_TIMEOUT: str = "5s"
+# Print-mode time limit passed via `--print-timeout`. "0" restores agy's documented
+# "wait until the turn completes" semantics (agy's own default). Any positive value
+# is an agy-side ceiling: when a turn outruns it, agy prints
+# "[agy] print timeout after Ns with turn in progress; returning partial output" and
+# still exits 0 with a well-formed envelope whose result is SUCCESS-shaped but has an
+# empty response and all-zero token usage — silently useless and invisible. A real
+# ticket turn runs for minutes, so an agy-side ceiling cannot be safe here. The Runner
+# already supervises the subprocess; a wall-clock ceiling belongs there, not in agy.
+DEFAULT_PRINT_TIMEOUT: str = "0"
 
 # Closed set of event types emitted by agy headless stream-json
 KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
@@ -75,7 +82,10 @@ def build_antigravity_run_command(
             Accepts 'continue' for most recent session, or a UUID string for --conversation.
         variant: Optional reasoning effort flag passed via ``--effort`` (low|medium|high|xhigh|max).
         model_id: Optional model identifier flag passed via ``--model``.
-        print_timeout: Wall-clock timeout ceiling passed via ``--print-timeout`` (default '5s').
+        print_timeout: agy print-mode time limit passed via ``--print-timeout``.
+            Defaults to '0', which waits until the turn completes (agy's own default).
+            A positive value truncates long turns, yielding a SUCCESS-shaped but empty,
+            zero-usage result.
 
     Returns:
         Token list: ['agy', '-p', prompt, '--output-format', 'stream-json', ...]
@@ -181,6 +191,41 @@ def _extract_token_usage(tokens_data: Any) -> TokenUsage | None:
         return None
 
 
+def _detect_empty_success_result(event_type: str, part: Mapping[str, Any] | None) -> str | None:
+    """Flag a SUCCESS-shaped ``result`` that produced no work as an anomaly.
+
+    agy emits a well-formed ``result`` with ``status: SUCCESS`` but an empty response
+    and all-zero (or absent) usage when a turn is truncated (e.g. by
+    ``--print-timeout``). Such a turn did no work yet looks normal to the supervisor,
+    so it is surfaced explicitly rather than being treated as a productive empty turn.
+
+    Usage is read from the ``result`` envelope itself, not from any sibling envelope, so
+    the verdict is judged against the usage the result actually reported.
+
+    Returns a diagnostic message when the anomaly is present, otherwise ``None``.
+    """
+    if event_type != "result" or not isinstance(part, Mapping):
+        return None
+    if part.get("status") != "SUCCESS":
+        return None
+
+    response = part.get("response")
+    if isinstance(response, str) and response.strip():
+        return None
+
+    usage_data = part.get("usage")
+    result_usage = _extract_token_usage(usage_data) if isinstance(usage_data, Mapping) else None
+    if result_usage is not None and result_usage.occupancy != 0:
+        return None
+
+    usage_detail = "absent" if result_usage is None else "zero"
+    return (
+        f"Antigravity reported a SUCCESS result with {usage_detail} token usage "
+        "and an empty response; treating as an anomalous, non-productive turn "
+        "(likely a truncated or stalled print time-out)"
+    )
+
+
 def decode_event(line: str) -> WorkerEvent | None:
     """Decode a single raw stdout line into a normalized WorkerEvent domain model.
 
@@ -243,6 +288,8 @@ def decode_event(line: str) -> WorkerEvent | None:
 
     token_usage = _extract_token_usage(tokens_data) if tokens_data is not None else None
 
+    anomaly = _detect_empty_success_result(event_type, part)
+
     return WorkerEvent(
         type=event_type,
         session_id=session_id,
@@ -251,6 +298,7 @@ def decode_event(line: str) -> WorkerEvent | None:
         part=part,
         raw=payload,
         is_known=is_known,
+        anomaly=anomaly,
     )
 
 

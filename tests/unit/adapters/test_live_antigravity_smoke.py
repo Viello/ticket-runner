@@ -13,6 +13,7 @@ import shutil
 import pytest
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
+from runner.adapters.antigravity.antigravity_worker import build_antigravity_run_command
 from runner.ports.command_runner import ProcessHandle
 
 pytestmark = pytest.mark.skipif(
@@ -46,7 +47,7 @@ def test_live_antigravity_json_streaming_smoke(tmp_path) -> None:
             "--output-format",
             "stream-json",
             "--print-timeout",
-            "5s",
+            "0",
         ]
         handle = await runner.spawn(cmd, cwd=tmp_path)
         assert isinstance(handle, ProcessHandle)
@@ -84,3 +85,56 @@ def test_live_antigravity_json_streaming_smoke(tmp_path) -> None:
         assert found_valid_event, f"Expected at least one event with type in {valid_events}, got: {events}"
 
     asyncio.run(_run())
+
+
+def test_live_antigravity_default_turn_completes(tmp_path) -> None:
+    """The adapter's default argv must let a real turn finish (non-empty response, non-zero usage).
+
+    Regression for the hard-coded `--print-timeout 5s` default that truncated every Worker
+    turn into an empty-but-SUCCESS result.
+    """
+    agy_bin = _resolve_agy_binary()
+    if not agy_bin:
+        pytest.skip("Antigravity CLI binary 'agy' is not installed or accessible on PATH")
+
+    cmd = build_antigravity_run_command(
+        prompt="Respond with exactly: PROBE_OK",
+        model_id="gemini-3.8-flash-high",
+    )
+    # The adapter emits the bare 'agy' token; swap in the resolved binary path.
+    cmd[0] = agy_bin
+
+    runner = SubprocessRunner()
+
+    async def _run() -> tuple[int, dict | None]:
+        handle = await runner.spawn(cmd, cwd=tmp_path)
+        assert isinstance(handle, ProcessHandle)
+
+        result_event: dict | None = None
+        async for line in handle.stdout_lines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            try:
+                event = json.loads(line_str)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and event.get("event") == "result":
+                result_event = event
+
+        exit_code = await handle.wait()
+        return exit_code, result_event
+
+    exit_code, result_event = asyncio.run(_run())
+
+    assert exit_code == 0, f"Process exited with code {exit_code}"
+    assert result_event is not None, "Expected a 'result' event from agy"
+
+    result = result_event.get("result", {})
+    assert result.get("status") == "SUCCESS"
+    assert result.get("response", "").strip() != "", (
+        f"Expected a non-empty response from a completed turn, got: {result!r}"
+    )
+    assert result.get("usage", {}).get("total_tokens", 0) > 0, (
+        f"Expected non-zero token usage from a completed turn, got: {result.get('usage')!r}"
+    )

@@ -685,6 +685,11 @@ class WorkerSupervisor:
                 if self._on_event is not None:
                     self._on_event(event)
 
+                if event.anomaly:
+                    anomaly_line = f"[{ticket_id}] Worker anomaly: {event.anomaly}"
+                    diagnostics.append(anomaly_line)
+                    self._notify(anomaly_line)
+
                 if self._ui_event_sink is not None and event.type in ("tool_call", "tool_use"):
                     try:
                         tool_msg = _format_tool_event(event)

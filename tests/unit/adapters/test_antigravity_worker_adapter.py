@@ -4,6 +4,7 @@ import json
 import pytest
 
 from runner.adapters.antigravity.antigravity_worker import (
+    DEFAULT_PRINT_TIMEOUT,
     AntigravityWorker,
     AntigravityWorkerCli,
     build_antigravity_run_command,
@@ -42,7 +43,7 @@ def test_build_antigravity_run_command_basic() -> None:
         "--output-format",
         "stream-json",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -60,7 +61,7 @@ def test_build_antigravity_run_command_with_conversation_uuid() -> None:
         "--conversation",
         "d3336873-0561-4a98-b9a9-13da3c00b3af",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -77,7 +78,7 @@ def test_build_antigravity_run_command_with_continue_flag() -> None:
         "stream-json",
         "--continue",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -95,7 +96,7 @@ def test_build_antigravity_run_command_with_model() -> None:
         "--model",
         "gemini-3.8-flash-low",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -113,7 +114,7 @@ def test_build_antigravity_run_command_with_effort_variant() -> None:
         "--effort",
         "high",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -162,7 +163,7 @@ def test_build_antigravity_run_command_adapter_instance_delegates() -> None:
         "--effort",
         "low",
         "--print-timeout",
-        "5s",
+        "0",
     ]
 
 
@@ -178,7 +179,7 @@ def test_build_antigravity_run_command_security_parameterization() -> None:
     assert cmd[3] == "--output-format"
     assert cmd[4] == "stream-json"
     assert cmd[5] == "--print-timeout"
-    assert cmd[6] == "5s"
+    assert cmd[6] == "0"
     assert len(cmd) == 7
 
 
@@ -440,3 +441,124 @@ def test_extract_resource_access_via_worker_instance() -> None:
 def test_extract_resource_access_empty() -> None:
     assert extract_resource_access() == frozenset()
     assert extract_resource_access(raw_line="Just regular output") == frozenset()
+
+
+# --- Print Timeout Default (regression: truncated Worker turns) ---
+
+
+def test_default_print_timeout_waits_for_turn_completion() -> None:
+    """The default print timeout must not truncate a long turn (agy: 0 waits until done)."""
+    assert DEFAULT_PRINT_TIMEOUT == "0"
+
+    cmd = build_antigravity_run_command("Implement ticket T018")
+    assert cmd[-2:] == ["--print-timeout", "0"]
+    assert "5s" not in cmd
+
+
+# --- Empty-Success Anomaly Detection ---
+
+
+def test_decode_event_flags_empty_success_result_as_anomaly() -> None:
+    """A SUCCESS result with an empty response and zero usage is surfaced as an anomaly."""
+    payload = {
+        "event": "result",
+        "result": {
+            "conversation_id": "d3336873-0561-4a98-b9a9-13da3c00b3af",
+            "status": "SUCCESS",
+            "response": "",
+            "duration_seconds": 0,
+            "num_turns": 1,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 0,
+            },
+        },
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is not None
+    assert "zero token usage" in event.anomaly
+    assert "empty response" in event.anomaly
+
+
+def test_decode_event_does_not_flag_productive_success_result() -> None:
+    """A SUCCESS result that consumed tokens is a normal turn, not an anomaly."""
+    payload = {
+        "event": "result",
+        "result": {
+            "status": "SUCCESS",
+            "response": "PROBE_OK\n",
+            "usage": {"input_tokens": 13874, "output_tokens": 64, "total_tokens": 13938},
+        },
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is None
+
+
+def test_decode_event_does_not_flag_zero_usage_failure_result() -> None:
+    """A non-SUCCESS result is not anomalous even with zero usage."""
+    payload = {
+        "event": "result",
+        "result": {
+            "status": "FAILED",
+            "response": "",
+            "usage": {"total_tokens": 0},
+        },
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is None
+
+
+def test_decode_event_does_not_flag_zero_usage_non_result_events() -> None:
+    """Only 'result' events are eligible for the empty-success anomaly."""
+    payload = {
+        "event": "step_update",
+        "step_update": {"state": "DONE", "usage": {"total_tokens": 0}},
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is None
+
+
+def test_decode_event_flags_success_result_with_absent_usage_as_anomaly() -> None:
+    """A SUCCESS result with no usage block and an empty response is still anomalous."""
+    payload = {
+        "event": "result",
+        "result": {"status": "SUCCESS", "response": ""},
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is not None
+    assert "absent token usage" in event.anomaly
+
+
+def test_decode_event_does_not_flag_success_result_without_usage_but_with_response() -> None:
+    """A SUCCESS result missing usage but carrying a response is not treated as anomalous."""
+    payload = {
+        "event": "result",
+        "result": {"status": "SUCCESS", "response": "did work\n"},
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.anomaly is None
+
+
+def test_decode_event_judges_anomaly_on_result_usage_not_sibling_envelope() -> None:
+    """The anomaly verdict uses the result envelope's own usage, not a sibling envelope's."""
+    payload = {
+        "event": "result",
+        "step_update": {"usage": {"input_tokens": 999, "total_tokens": 999}},
+        "result": {"status": "SUCCESS", "response": "", "usage": {"total_tokens": 0}},
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    # Cumulative token_usage still resolves from step_update first ...
+    assert event.token_usage is not None and event.token_usage.occupancy == 999
+    # ... but the anomaly is judged on the result's own zero usage.
+    assert event.anomaly is not None

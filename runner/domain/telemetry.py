@@ -21,6 +21,7 @@ class WorkerEvent:
     part: Mapping[str, Any] | None = None
     raw: Mapping[str, Any] | None = None
     is_known: bool = True
+    anomaly: str | None = None
 
 
 class BudgetAction(str, Enum):
