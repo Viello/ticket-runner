@@ -1,22 +1,22 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-14T17:30:00
+last_updated: 2026-10-15T21:32:00
 author: Gab
 branch: agent/ticket-runner
 active_ticket: None
 status: ready
 stopped_at:
-  file: "D:\\Repos\\agent-runner-driver\\docs\\tickets\\01-runner-live-test-bootstrap\\T101-add-codex-interface-metadata-to-skills-lacking-it.md"
-  symbol: "### Question"
+  file: "docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md"
+  symbol: "# T000 — Multi-Agent Hardening & External Live-Test Site"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Spec 15 (Multi-Agent Hardening & External Live-Test Site) — T017 closed; live-test bootstrap spec and 2 demo tickets seeded in driver
-- **Last Touchpoint**: T017 closed via `/implement`; driver scaffold seeded with `docs/specs/01-runner-live-test-bootstrap.md` and 2 demo tickets under `docs/tickets/01-runner-live-test-bootstrap/`
-- **Blockers**: None (T017 unblocked execution of T101 and T102 against the live clone)
-- **Next Step**: Run Doctor against `D:\Repos\agent-skills` from driver, or execute the seeded demo tickets (T101 → T102)
+- **Focus**: Spec 15 (Multi-Agent Hardening & External Live-Test Site) — Ticket headers formatted; Doctor pre-flight passes clean
+- **Last Touchpoint**: [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) on branch `agent/ticket-runner` (clean working tree)
+- **Blockers**: None (Doctor pre-flight verification passing 100%)
+- **Next Step**: Run live verification via `/live-qa` or begin next ticket execution (T018 / T011)
 
 ## 🎯 Active Tickets & Progress
 - [x] `T017-seed-demo-ticket-queue`: Seed the demo ticket queue (conditional) — CLOSED via `ec2c590`
@@ -73,10 +73,11 @@ stopped_at:
 
 ## 🚧 Exact Work-In-Progress
 - **Branch**: `agent/ticket-runner`
-- **Uncommitted Files**: STATUS update for T017 closure (in flight)
-- **Last Stopped At**: T017 closed via `/implement`; demo queue seeded in driver; ready to execute T101 against the live clone or run Doctor
+- **Uncommitted Files**: None (working tree clean)
+- **Last Stopped At**: [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) line 1; Doctor pre-flight passes 100% clean
 
 ## 📦 Recent Completed Work & Key Decisions
+- **b38c2c5**: Formatted [T000-wayfinder-map.md](file:///d:/Projects/docs/tickets/15-multi-agent-hardening-and-live-test-site/T000-wayfinder-map.md) with `# T000 — Multi-Agent Hardening & External Live-Test Site` and `Status: completed` metadata; formatted driver demo tickets [T101](file:///D:/Repos/agent-runner-driver/docs/tickets/01-runner-live-test-bootstrap/T101-add-codex-interface-metadata-to-skills-lacking-it.md) and [T102](file:///D:/Repos/agent-runner-driver/docs/tickets/01-runner-live-test-bootstrap/T102-document-agents-openai-yaml-in-skill-anatomy.md) with standard `# T<NNN> — <Title>` headers. Unblocked queue verification across Doctor and Ticket Store parsers.
 - **T017**: Seeded the live-test bootstrap spec (`D:\Repos\agent-runner-driver\docs\specs\01-runner-live-test-bootstrap.md`) and 2 demo tickets under `D:\Repos\agent-runner-driver\docs\tickets\01-runner-live-test-bootstrap\` (`T101` adds `agents/openai.yaml` to 8 catalog skills lacking it; `T102` documents the interface file in the catalog anatomy README block). Both H1s are T<NNN>-free per the demo-ticket title constraint; both carry standard wayfinder sections; both target real chart-time catalog hygiene (8 of 45 skills missing Codex interface metadata; README silent on `agents/`). Initialized driver-local `docs/tickets/gotchas.md` with the cluster-layout reconciliation narrative and the Unicode-tree-character discipline. Demo tickets are seeded (not executed) — execution is the next step. Driver commit landed at `9af978e`; runner-source relocation at `ec2c590`.
 - **T016**: Decided starter-queue (yes, 2 demo tickets in driver under `01-runner-live-test-bootstrap`) and publication-script (coexist, no follow-up). Reconciled prior cluster-layout discipline via bootstrap `--project-dir` indirection (driver's `docs/tickets/` permitted as a queue home; runner never reads it). Authored 1-paragraph spec alongside queue scaffold (per agent-guidelines pattern). Defer specific ticket content to next ticket in chain.
 - **T022**: Resolved Doctor worker-provider resolution by unifying configuration loading in `Doctor._load_configuration` with two-tier resolution (`load_two_tier`). Suppressed silent `"opencode"` fallback on unloadable configs so errors surface via `check_config` without masquerading as valid providers. Added `discord.token_env: "DISCORD_BOT_TOKEN"` default to sandbox template and added regression tests in `tests/unit/application/test_doctor.py`. Verified on `D:\Sandbox\ticket-runner-live-target` and `D:\Projects\live-test-target`.
