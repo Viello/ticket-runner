@@ -1,13 +1,13 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-25T19:53:00
+last_updated: 2026-10-25T20:21:00
 author: Gab
 branch: agent/ticket-runner
 active_ticket: orchestrate-runner-first-run
 status: paused
 stopped_at:
   file: "D:/Projects/runner/adapters/antigravity/antigravity_worker.py"
-  symbol: "build_antigravity_run_command + display pause guards landed; ready for human re-run"
+  symbol: "build_antigravity_run_command + display pause guards landed (b1bf1d2); ready for human re-run"
 ---
 
 # Project Status: ticket-runner
@@ -109,14 +109,14 @@ stopped_at:
 
 ## 🚧 Exact Work-In-Progress
 - **Branch**: `agent/ticket-runner` (both `D:\Projects` and `D:\Repos\agent-skills`)
-- **Uncommitted Files**: `D:\Projects`: ready to commit with this fix (`git status -sb` clean of dirty build artifacts). `D:\Repos\agent-skills`: clean; runtime state (`.agent/`, `.agents/`, `observations/`) is gitignored
-- **Last Stopped At**: `D:\Projects\runner\adapters\antigravity\antigravity_worker.py` and `runner/adapters/ui/terminal_prompts.py` — model normalizer and terminal display pause guards landed; live re-run is the next action.
+- **Uncommitted Files**: `D:\Projects`: clean (fix committed in `b1bf1d2`). `D:\Repos\agent-skills`: clean; runtime state (`.agent/`, `.agents/`, `observations/`) is gitignored
+- **Last Stopped At**: `D:\Projects\runner\adapters\antigravity\antigravity_worker.py` and `runner/adapters/ui/terminal_prompts.py` — model normalizer and terminal display pause guards landed in `b1bf1d2`; live re-run is the next action.
 
 ## 📦 Recent Completed Work & Key Decisions
-- **`agy` model/effort normalizer and Rich Live display pause guards landed (this session)**:
+- **`agy` model/effort normalizer and Rich Live display pause guards landed (`b1bf1d2`)**:
   1. Resolved `agy` CLI argument conflict (`--model "gemini-3.8-flash-high" conflicts with --effort=medium`): `build_antigravity_run_command` in `runner/adapters/antigravity/antigravity_worker.py` inspects `model_id`. When both `model_id` and reasoning `variant` are specified, it strips any embedded effort suffix (`-high`, `-medium`, `-low`, `-xhigh`, `-max`) from `model_id` so that `agy.exe` receives the base model family (e.g. `--model gemini-3.8-flash`) along with the requested reasoning effort flag (e.g. `--effort medium`) without argument conflict. If no effort variant is requested, the configured model identifier is preserved as-is.
-  2. Resolved Rich Live display swallowing interactive `input()`: `TerminalInterventionGateway._read_line` (`runner/adapters/ui/terminal_prompts.py`), `default_recovery_confirmation` (`runner/application/handoff_coordinator.py`), and `TerminalApprovalAdapter.request_approval` (`runner/adapters/ui/terminal_approval.py`) pause/stop the active `RichTerminalDisplay` before prompting standard input and resume it in a `finally` block. Container dependency injection in `runner/container.py` wires `resolved_terminal_display` to the intervention gateway, approval adapter, and handoff coordinator.
-  3. Comprehensive regression coverage across unit suites: 1796 passed / 4 skipped.
+  2. Resolved Rich Live display swallowing interactive `input()`: Added `paused_display` context manager to `TerminalDisplay` port (`runner/ports/terminal_display.py`). `TerminalInterventionGateway._read_line` (`runner/adapters/ui/terminal_prompts.py`), `default_recovery_confirmation` (`runner/application/handoff_coordinator.py`), and `TerminalApprovalAdapter.request_approval` (`runner/adapters/ui/terminal_approval.py`) pause/stop the active `RichTerminalDisplay` before prompting standard input and resume it in a `finally` block. Container dependency injection in `runner/container.py` wires `resolved_terminal_display` to the intervention gateway, approval adapter, and handoff coordinator confirmation callback, keeping `HandoffCoordinator` cleanly decoupled from presentation lifecycles.
+  3. Comprehensive regression coverage across unit suites: 125 passed across touched suites, 1796 passed / 4 skipped across full repository. Two-axis `/code-review` passed. Committed in `b1bf1d2` on `agent/ticket-runner`.
 - **Blocker F fixed — `agy` print timeout no longer truncates Worker turns (prior session)**: Set `DEFAULT_PRINT_TIMEOUT` `"5s"` → `"0"` (`runner/adapters/antigravity/antigravity_worker.py`), restoring `agy`'s documented "wait until the turn completes" semantics. Bundled the zero-usage anomaly detector. Full suite 1901 passed / 4 skipped; committed `87bd1cc`.
 
 ## ⚠️ Blockers & Gotchas
