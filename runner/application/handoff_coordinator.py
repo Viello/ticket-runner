@@ -32,6 +32,7 @@ from runner.domain.runtime_paths import (
 from runner.domain.telemetry import BudgetAction
 from runner.domain.ticket import Ticket
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.terminal_display import TerminalDisplay, paused_display
 
 CLOCK_SLACK_SECONDS: float = 2.0
 """Clock slack in seconds for checkpoint freshness validation (ADR 0014).
@@ -111,7 +112,10 @@ class EscalationNotice:
         return super().__eq__(other)
 
 
-def default_recovery_confirmation(escalation: EscalationNotice | Any) -> bool:
+def default_recovery_confirmation(
+    escalation: EscalationNotice | Any,
+    display: TerminalDisplay | None = None,
+) -> bool:
     """Default interactive terminal prompt mirroring CleanSlateArchiver's confirmation.
 
     Safely declines (returns False) on closed stdin, EOF, OSError, or non-interactive runs.
@@ -123,8 +127,9 @@ def default_recovery_confirmation(escalation: EscalationNotice | Any) -> bool:
         f"Synthesize emergency checkpoint and resume with a fresh session? [Y/n]: "
     )
     try:
-        response = input(prompt).strip().lower()
-        return response in ("y", "yes", "")
+        with paused_display(display):
+            response = input(prompt).strip().lower()
+            return response in ("y", "yes", "")
     except (EOFError, KeyboardInterrupt, OSError):
         return False
 

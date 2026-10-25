@@ -215,6 +215,9 @@ def build_container(
     resolved_terminal_display = terminal_display or RichTerminalDisplay(console=console)
     resolved_event_sink = ui_event_sink or resolved_terminal_display
 
+    if hasattr(resolved_intervention_gateway, "display") and resolved_intervention_gateway.display is None and resolved_terminal_display is not None:
+        resolved_intervention_gateway.display = resolved_terminal_display
+
     resolved_executor = executor or GatekeeperCommandExecutor(
         command_runner=resolved_command_runner,
         cwd=effective_dir,
@@ -275,6 +278,9 @@ def build_container(
     if hasattr(resolved_supervisor, "status_publisher") and resolved_supervisor.status_publisher is None:
         resolved_supervisor.status_publisher = resolved_status_publisher
 
+    def _confirm_recovery_with_display(escalation: EscalationNotice) -> bool:
+        return default_recovery_confirmation(escalation, display=resolved_terminal_display)
+
     resolved_coordinator = coordinator or HandoffCoordinator(
         supervisor=resolved_supervisor,
         prompt_builder=resolved_prompt_builder,
@@ -287,6 +293,7 @@ def build_container(
         notify=notify,
         git_operations=resolved_git_ops,
         signal_repository=resolved_signal_repo,
+        confirm_recovery=_confirm_recovery_with_display,
     )
 
     resolved_approval_gateway: ApprovalGateway | None = None
@@ -296,8 +303,10 @@ def build_container(
         resolved_approval_gateway = (
             approval_gateway
             if approval_gateway is not None
-            else TerminalApprovalAdapter(console=console)
+            else TerminalApprovalAdapter(console=console, display=resolved_terminal_display)
         )
+        if hasattr(resolved_approval_gateway, "display") and resolved_approval_gateway.display is None and resolved_terminal_display is not None:
+            resolved_approval_gateway.display = resolved_terminal_display
 
     resolved_processor = processor or TicketProcessor(
         coordinator=resolved_coordinator,

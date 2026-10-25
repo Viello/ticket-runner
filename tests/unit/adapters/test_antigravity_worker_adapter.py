@@ -122,7 +122,7 @@ def test_build_antigravity_run_command_with_all_options() -> None:
     cmd = build_antigravity_run_command(
         prompt="Implement ticket T018",
         session_id="d3336873-0561-4a98-b9a9-13da3c00b3af",
-        model_id="gemini-3.8-flash-low",
+        model_id="gemini-pro",
         variant="medium",
         print_timeout="30s",
     )
@@ -135,12 +135,69 @@ def test_build_antigravity_run_command_with_all_options() -> None:
         "--conversation",
         "d3336873-0561-4a98-b9a9-13da3c00b3af",
         "--model",
-        "gemini-3.8-flash-low",
+        "gemini-pro",
         "--effort",
         "medium",
         "--print-timeout",
         "30s",
     ]
+
+
+@pytest.mark.parametrize(
+    ("model_slug", "expected_base_model"),
+    [
+        ("gemini-3.8-flash-high", "gemini-3.8-flash"),
+        ("gemini-3.8-flash-medium", "gemini-3.8-flash"),
+        ("gemini-3.8-flash-low", "gemini-3.8-flash"),
+        ("gemini-4-argon-medium", "gemini-4-argon"),
+        ("gemini-4-argon-high", "gemini-4-argon"),
+        ("gemini-4-argon-low", "gemini-4-argon"),
+        ("claude-opus-5-5-high", "claude-opus-5-5"),
+        ("claude-sonnet-5-5-high", "claude-sonnet-5-5"),
+        ("custom-model-xhigh", "custom-model"),
+        ("custom-model-max", "custom-model"),
+        ("GEMINI-3.8-FLASH-HIGH", "GEMINI-3.8-FLASH"),
+    ],
+)
+def test_build_antigravity_run_command_normalizes_model_and_passes_effort(
+    model_slug: str,
+    expected_base_model: str,
+) -> None:
+    cmd = build_antigravity_run_command(
+        prompt="Implement ticket T018",
+        model_id=model_slug,
+        variant="medium",
+    )
+    assert "--model" in cmd
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == expected_base_model
+    assert "--effort" in cmd
+    effort_idx = cmd.index("--effort")
+    assert cmd[effort_idx + 1] == "medium"
+
+
+def test_build_antigravity_run_command_retains_model_without_effort_when_variant_omitted() -> None:
+    cmd = build_antigravity_run_command(
+        prompt="Implement ticket T018",
+        model_id="gemini-3.8-flash-high",
+        variant=None,
+    )
+    assert "--model" in cmd
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "gemini-3.8-flash-high"
+    assert "--effort" not in cmd
+
+
+def test_build_antigravity_run_command_includes_effort_when_model_has_no_effort_suffix() -> None:
+    cmd = build_antigravity_run_command(
+        prompt="Implement ticket T018",
+        model_id="gemini-pro",
+        variant="medium",
+    )
+    assert "--model" in cmd
+    assert "gemini-pro" in cmd
+    assert "--effort" in cmd
+    assert "medium" in cmd
 
 
 def test_build_antigravity_run_command_adapter_instance_delegates() -> None:

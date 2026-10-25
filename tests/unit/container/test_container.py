@@ -292,3 +292,32 @@ def test_build_container_human_mode_defaults_terminal_approval_gateway(tmp_path:
     assert isinstance(container.approval_gateway, TerminalApprovalAdapter)
     assert container.processor._approval_gateway is container.approval_gateway
     assert container.processor._approval_mode == "human"
+
+
+
+def test_build_container_wires_terminal_display_to_prompts_and_coordinator(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from runner.container import _default_config
+    from runner.domain.config import LifecycleConfig
+    from runner.adapters.ui.terminal import RichTerminalDisplay
+
+    class FakeDisplay:
+        def __init__(self) -> None:
+            self.is_active = False
+
+        def stop(self) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    display = FakeDisplay()
+    base_cfg = _default_config()
+    cfg = replace(base_cfg, lifecycle=LifecycleConfig(approval_mode="human"))
+
+    container = build_container(config=cfg, cwd=tmp_path, terminal_display=display)
+
+    assert container.terminal_display is display
+    assert container.processor._intervention_gateway.display is display
+    assert container.approval_gateway.display is display
+    assert callable(container.coordinator.confirm_recovery)

@@ -48,6 +48,13 @@ MAX_LINE_CHARS: int = 5_000_000
 DEFAULT_PRINT_TIMEOUT: str = "0"
 
 # Closed set of event types emitted by agy headless stream-json
+KNOWN_EFFORT_SUFFIXES: tuple[str, ...] = (
+    "-high",
+    "-medium",
+    "-low",
+    "-xhigh",
+    "-max",
+)
 KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     "init",
     "step_update",
@@ -112,19 +119,34 @@ def build_antigravity_run_command(
         else:
             cmd.extend(["--conversation", clean_session_id])
 
+    effective_model_id: str | None = None
     if model_id is not None:
         if not isinstance(model_id, str):
             raise TypeError(f"Model ID must be a string, got {type(model_id).__name__}")
         clean_model_id = model_id.strip()
         if clean_model_id:
-            cmd.extend(["--model", clean_model_id])
+            effective_model_id = clean_model_id
 
+    clean_variant: str | None = None
     if variant is not None:
         if not isinstance(variant, str):
             raise TypeError(f"Variant must be a string, got {type(variant).__name__}")
-        clean_variant = variant.strip()
-        if clean_variant:
-            cmd.extend(["--effort", clean_variant])
+        stripped_variant = variant.strip()
+        if stripped_variant:
+            clean_variant = stripped_variant
+
+    if effective_model_id is not None and clean_variant is not None:
+        model_slug = effective_model_id.lower()
+        for sfx in KNOWN_EFFORT_SUFFIXES:
+            if model_slug.endswith(sfx):
+                effective_model_id = effective_model_id[: -len(sfx)]
+                break
+
+    if effective_model_id:
+        cmd.extend(["--model", effective_model_id])
+
+    if clean_variant:
+        cmd.extend(["--effort", clean_variant])
 
     if not isinstance(print_timeout, str):
         raise TypeError(f"Print timeout must be a string, got {type(print_timeout).__name__}")

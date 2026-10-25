@@ -15,6 +15,7 @@ from rich.text import Text
 from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import NonInteractiveError
 from runner.ports.approval_gateway import ApprovalGateway
+from runner.ports.terminal_display import TerminalDisplay, paused_display
 
 _INTERACTIVE_EXCEPTIONS = (NonInteractiveError, EOFError, OSError)
 
@@ -50,12 +51,23 @@ class TerminalApprovalAdapter(ApprovalGateway):
         input_fn: Callable[[str], str] | None = None,
         stdin: Any = None,
         is_interactive: Callable[[], bool] | bool | None = None,
+        display: TerminalDisplay | None = None,
     ) -> None:
         self._console = console if console is not None else Console()
         self._read_key_fn = read_key
         self._input_fn = input_fn
         self._stdin = stdin
         self._is_interactive_override = is_interactive
+        self._display = display
+
+    @property
+    def display(self) -> TerminalDisplay | None:
+        """Attached terminal display, if any."""
+        return self._display
+
+    @display.setter
+    def display(self, value: TerminalDisplay | None) -> None:
+        self._display = value
 
     def is_interactive(self) -> bool:
         """Check whether the active console/stdin session is interactive."""
@@ -165,42 +177,43 @@ class TerminalApprovalAdapter(ApprovalGateway):
 
     async def request_approval(self, card: EvidenceCard) -> ApprovalDecision:
         """Present verification evidence and wait for operator keystroke sign-off."""
-        panel = self.render_card(card)
-        self._console.print(panel)
+        with paused_display(self._display):
+            panel = self.render_card(card)
+            self._console.print(panel)
 
-        if not self.is_interactive():
-            return ApprovalDecision.REJECT("non-interactive terminal")
-
-        await asyncio.sleep(0)
-
-        while True:
-            try:
-                raw_key = self._read_single_key()
-            except _INTERACTIVE_EXCEPTIONS:
+            if not self.is_interactive():
                 return ApprovalDecision.REJECT("non-interactive terminal")
 
-            if not raw_key:
-                return ApprovalDecision.REJECT("non-interactive terminal")
+            await asyncio.sleep(0)
 
-            key = raw_key.strip().lower()
-            if key in ("\r", "\n", ""):
-                continue
-
-            if key == "y":
-                return ApprovalDecision.APPROVE
-            elif key == "d":
-                return ApprovalDecision.DIAGNOSE
-            elif key == "n":
+            while True:
                 try:
-                    reason = self._read_line("Rejection reason (leave blank for none): ")
+                    raw_key = self._read_single_key()
                 except _INTERACTIVE_EXCEPTIONS:
                     return ApprovalDecision.REJECT("non-interactive terminal")
-                clean_reason = reason.strip() if reason and reason.strip() else None
-                return ApprovalDecision.REJECT(clean_reason or "rejected by operator")
-            else:
-                self._console.print(
-                    "[yellow]Invalid key. Press [y] to approve, [n] to reject, or [d] to diagnose.[/yellow]"
-                )
+
+                if not raw_key:
+                    return ApprovalDecision.REJECT("non-interactive terminal")
+
+                key = raw_key.strip().lower()
+                if key in ("\r", "\n", ""):
+                    continue
+
+                if key == "y":
+                    return ApprovalDecision.APPROVE
+                elif key == "d":
+                    return ApprovalDecision.DIAGNOSE
+                elif key == "n":
+                    try:
+                        reason = self._read_line("Rejection reason (leave blank for none): ")
+                    except _INTERACTIVE_EXCEPTIONS:
+                        return ApprovalDecision.REJECT("non-interactive terminal")
+                    clean_reason = reason.strip() if reason and reason.strip() else None
+                    return ApprovalDecision.REJECT(clean_reason or "rejected by operator")
+                else:
+                    self._console.print(
+                        "[yellow]Invalid key. Press [y] to approve, [n] to reject, or [d] to diagnose.[/yellow]"
+                    )
 
     def request_approval_sync(self, card: EvidenceCard) -> ApprovalDecision:
         """Synchronously request approval, running request_approval on an event loop."""

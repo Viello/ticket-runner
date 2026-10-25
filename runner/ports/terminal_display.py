@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Protocol, runtime_checkable
 
 from runner.domain.state import RunnerState
@@ -27,6 +29,11 @@ class UiEventSink(Protocol):
 @runtime_checkable
 class TerminalDisplay(UiEventSink, Protocol):
     """Abstract protocol for terminal dashboard display."""
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the interactive terminal display is currently active."""
+        ...
 
     def update_state(self, state: RunnerState, queue_remaining: int) -> None:
         """Update active runner state and remaining tickets count.
@@ -57,3 +64,17 @@ class TerminalDisplay(UiEventSink, Protocol):
     def refresh(self) -> None:
         """Force a visual refresh of the terminal dashboard."""
         ...
+
+
+@contextmanager
+def paused_display(display: TerminalDisplay | None) -> Iterator[None]:
+    """Context manager temporarily suspending an active terminal display during interactive input."""
+    should_pause = display is not None and getattr(display, "is_active", False)
+    if should_pause:
+        display.stop()
+    try:
+        yield
+    finally:
+        if should_pause:
+            display.start()
+

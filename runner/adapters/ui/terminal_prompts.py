@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import sys
+from typing import Any
 
 from runner.domain.exceptions import NonInteractiveError
 from runner.domain.signal import QuestionSignal, QuestionType
@@ -13,6 +14,7 @@ from runner.ports.intervention import (
     InterventionDecision,
     InterventionGateway,
 )
+from runner.ports.terminal_display import TerminalDisplay, paused_display
 
 _RETRY_WORDS = ("r", "retry")
 _SKIP_WORDS = ("s", "skip")
@@ -28,20 +30,33 @@ class TerminalInterventionGateway:
     Args:
         input_fn: Callable reading one line from the human; defaults to input().
         output_fn: Callable emitting status lines; defaults to print().
+        display: Optional TerminalDisplay whose Live display must be paused while reading input.
     """
 
     def __init__(
         self,
         input_fn: Callable[[str], str] | None = None,
         output_fn: Callable[[str], None] | None = None,
+        display: TerminalDisplay | None = None,
     ) -> None:
         self._input_fn = input_fn if input_fn is not None else input
         self._output_fn = output_fn if output_fn is not None else print
+        self._display = display
+
+    @property
+    def display(self) -> TerminalDisplay | None:
+        """Attached terminal display, if any."""
+        return self._display
+
+    @display.setter
+    def display(self, value: TerminalDisplay | None) -> None:
+        self._display = value
 
     def _read_line(self, prompt: str) -> str | None:
         """Read one line, mapping non-interactive stdin failures to None."""
         try:
-            return self._input_fn(prompt)
+            with paused_display(self._display):
+                return self._input_fn(prompt)
         except _INTERACTIVE_FAILURES:
             return None
 

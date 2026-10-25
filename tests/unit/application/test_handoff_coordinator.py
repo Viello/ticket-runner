@@ -1940,3 +1940,34 @@ def test_question_pending_with_injected_fake_signal_repository(tmp_path: Path) -
     assert len(fake_signal_repo.write_answer_calls) == 0
 
 
+
+
+
+def test_default_recovery_confirmation_pauses_and_resumes_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDisplay:
+        def __init__(self, is_active: bool = True) -> None:
+            self.is_active = is_active
+            self.actions: list[str] = []
+
+        def stop(self) -> None:
+            self.actions.append("stop")
+            self.is_active = False
+
+        def start(self) -> None:
+            self.actions.append("start")
+            self.is_active = True
+
+    display = FakeDisplay(is_active=True)
+    monkeypatch.setattr("builtins.input", lambda p: "y")
+    res = default_recovery_confirmation("T022", display=display)
+    assert res is True
+    assert display.actions == ["stop", "start"]
+
+    # When input raises, display is still restored
+    display_err = FakeDisplay(is_active=True)
+    def raise_err(p: str = "") -> str:
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", raise_err)
+    res_err = default_recovery_confirmation("T022", display=display_err)
+    assert res_err is False
+    assert display_err.actions == ["stop", "start"]
