@@ -1,5 +1,6 @@
 # T123 — Sanitize agent-skills Target Project and Audit Spec 16 Alignment
-Status: pending
+Status: completed
+Completed: 2026-10-27T14:26:00Z
 Spec: docs/specs/16-live-run-gatekeeper-and-antigravity-telemetry-remediation.md
 Blocked by: T120, T121, T122
 Reasoning: medium

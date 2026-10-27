@@ -3,7 +3,7 @@
 Ticket Runner: an external multi-agent Python orchestrator that drives AI coding agents (OpenCode, Antigravity CLI) through a sequential directory queue under Target Project's `docs/tickets/` with independent verification, context handoffs, and Discord/terminal interaction.
 
 ## Implementation status
-Specs 01–14 are implemented and tested; Spec 15 (Multi-Agent Hardening & Live-Test Site) is in flight under docs/tickets/15-multi-agent-hardening-and-live-test-site/.
+Specs 01–16 are implemented and tested; live-test sequence under Target Project (`agent-skills`) is ready to resume.
 
 ## Read before designing
 - `ARCHITECTURE.md` — target Clean Architecture directory tree.
