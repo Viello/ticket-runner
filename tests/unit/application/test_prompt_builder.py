@@ -162,6 +162,22 @@ def test_prompt_forbids_git_add_and_git_commit() -> None:
     assert "forbid" in prompt_lower or "prohibit" in prompt_lower or "do not" in prompt_lower or "never" in prompt_lower
 
 
+def test_prompt_forbids_queue_file_mutations_and_gotchas_direct_edits() -> None:
+    ticket = _make_ticket()
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement/SKILL.md",
+    )
+
+    assert "No Git Staging, Commits, or Queue File Mutations" in prompt
+    assert "docs/tickets/gotchas.md" in prompt
+    prompt_lower = prompt.lower()
+    assert "do not edit `docs/tickets/gotchas.md` directly" in prompt_lower or "do not edit docs/tickets/gotchas.md directly" in prompt_lower
+    assert "modifying, moving, or deleting any ticket markdown file under `docs/tickets/`" in prompt_lower or "modify, move, or delete any ticket markdown file under `docs/tickets/`" in prompt_lower
+
+
 def test_prompt_ready_signal_instruction_with_real_ticket_id() -> None:
     ticket = _make_ticket(ticket_id="T042")
     prompt = build_prompt(

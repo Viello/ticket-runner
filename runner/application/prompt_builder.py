@@ -195,7 +195,7 @@ Full specification reference: `{resolved_spec_path}`
 ## Operational Guardrails & Completion Protocol
 {invariants_text}
 
-1. **No Git Staging or Commits**: Do NOT run `git add` or `git commit`. Worker git commits and staging are strictly forbidden. Git staging and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
+1. **No Git Staging, Commits, or Queue File Mutations**: Do NOT run `git add` or `git commit`. Do NOT edit `docs/tickets/gotchas.md` directly. Do NOT modify, move, or delete any Ticket markdown file under `docs/tickets/` (including the active ticket file). Worker git staging, commits, and queue file mutations are strictly forbidden. Ticket relocation, status updates, gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
 2. **Review Self-Checks**:
    - Mandatory Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and summarize standards and spec verification findings in `self_review_notes`.{security_review_line}
 3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs/SKILL.md` using your file-reading tool.
