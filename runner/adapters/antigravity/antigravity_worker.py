@@ -158,7 +158,11 @@ def build_antigravity_run_command(
     return cmd
 
 
-def _extract_token_usage(tokens_data: Any) -> TokenUsage | None:
+def _extract_token_usage(
+    tokens_data: Any,
+    *,
+    is_step_update: bool = False,
+) -> TokenUsage | None:
     """Safely extract a TokenUsage domain entity from empirical agy usage dictionary.
 
     Wire keys mapping:
@@ -168,14 +172,23 @@ def _extract_token_usage(tokens_data: Any) -> TokenUsage | None:
     - cache_read_tokens (or cache.read) -> cache_read
     - cache_write_tokens (or cache.write) -> cache_write
     - total_tokens (or total) -> total
+
+    Per ADR 0015 and Spec 16:
+    For step_update events (is_step_update=True), total is forced to None because agy's
+    step_update.usage.total_tokens equals input_tokens + output_tokens (omitting cached prompt
+    and reasoning tokens). Forcing total=None enables TokenUsage.occupancy to calculate
+    input + output + reasoning + cache_read + cache_write, reflecting true context occupancy.
     """
     if not isinstance(tokens_data, Mapping):
         return None
 
     try:
-        total = tokens_data.get("total_tokens")
-        if total is None:
-            total = tokens_data.get("total")
+        if is_step_update:
+            total = None
+        else:
+            total = tokens_data.get("total_tokens")
+            if total is None:
+                total = tokens_data.get("total")
 
         input_tokens = tokens_data.get("input_tokens")
         if input_tokens is None:
@@ -303,12 +316,18 @@ def decode_event(line: str) -> WorkerEvent | None:
     tokens_data = None
     step_update = payload.get("step_update")
     result = payload.get("result")
+    is_step_update = False
     if isinstance(step_update, Mapping) and isinstance(step_update.get("usage"), Mapping):
         tokens_data = step_update["usage"]
+        is_step_update = True
     elif isinstance(result, Mapping) and isinstance(result.get("usage"), Mapping):
         tokens_data = result["usage"]
 
-    token_usage = _extract_token_usage(tokens_data) if tokens_data is not None else None
+    token_usage = (
+        _extract_token_usage(tokens_data, is_step_update=is_step_update)
+        if tokens_data is not None
+        else None
+    )
 
     anomaly = _detect_empty_success_result(event_type, part)
 

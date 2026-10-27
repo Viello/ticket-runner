@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime, timezone
@@ -123,28 +123,45 @@ def _default_notify(notice: str) -> None:
 def _format_tool_event(event: WorkerEvent) -> str:
     """Format an agent tool event into a human-readable telemetry line."""
     tool_name = ""
-    part = event.part if isinstance(event.part, dict) else {}
-    raw = event.raw if isinstance(event.raw, dict) else {}
+    part = event.part if isinstance(event.part, (dict, Mapping)) else {}
+    raw = event.raw if isinstance(event.raw, (dict, Mapping)) else {}
 
-    for container in (part, raw):
-        for k in ("tool", "name", "tool_name"):
-            v = container.get(k)
+    tool_info = (
+        part.get("tool_info")
+        if isinstance(part.get("tool_info"), (dict, Mapping))
+        else (raw.get("tool_info") if isinstance(raw.get("tool_info"), (dict, Mapping)) else None)
+    )
+
+    if tool_info:
+        for k in ("name", "tool", "tool_name"):
+            v = tool_info.get(k)
             if isinstance(v, str) and v.strip():
                 tool_name = v.strip()
                 break
-        if tool_name:
-            break
+
+    if not tool_name:
+        for container in (part, raw):
+            for k in ("tool", "name", "tool_name", "title"):
+                v = container.get(k)
+                if isinstance(v, str) and v.strip():
+                    tool_name = v.strip()
+                    break
+            if tool_name:
+                break
 
     target = ""
     input_dicts: list[dict[str, Any]] = []
-    if isinstance(part.get("state"), dict) and isinstance(part["state"].get("input"), dict):
-        input_dicts.append(part["state"]["input"])
+    if tool_info and isinstance(tool_info.get("parameters"), (dict, Mapping)):
+        input_dicts.append(dict(tool_info["parameters"]))
+
+    if isinstance(part.get("state"), (dict, Mapping)) and isinstance(part["state"].get("input"), (dict, Mapping)):
+        input_dicts.append(dict(part["state"]["input"]))
 
     for container in (part, raw):
         for key in ("input", "args", "arguments", "parameters"):
             val = container.get(key)
-            if isinstance(val, dict):
-                input_dicts.append(val)
+            if isinstance(val, (dict, Mapping)):
+                input_dicts.append(dict(val))
             elif isinstance(val, str):
                 try:
                     parsed = json.loads(val)
@@ -411,16 +428,22 @@ class WorkerSupervisor:
         except BaseException:
             pass
 
-    def _is_signal_present(self, ticket_id: str) -> bool:
-        """Check whether either the ready Signal or a pending/new question Signal exists."""
+    def _is_ready_signal_present(self, ticket_id: str) -> bool:
+        """Check whether the active ticket's ready signal exists on disk."""
         if self._runtime_paths.ready_signal_path(ticket_id).is_file():
             return True
         if self._signal_repository is not None:
             try:
-                if self._signal_repository.read_ready(ticket_id) is not None:
-                    return True
+                return self._signal_repository.read_ready(ticket_id) is not None
             except Exception:
-                return True
+                return False
+        return False
+
+    def _is_signal_present(self, ticket_id: str) -> bool:
+        """Check whether either the ready Signal or a pending/new question Signal exists."""
+        if self._is_ready_signal_present(ticket_id):
+            return True
+        if self._signal_repository is not None:
             try:
                 if self._signal_repository.read_pending_question(ticket_id) is not None:
                     return True
@@ -515,6 +538,7 @@ class WorkerSupervisor:
         last_line_time = start_time
         last_step_time = start_time
         step_counter = 0
+        step_usage_observed = False
 
         # Heartbeat background task
         async def _heartbeat_worker() -> None:
@@ -690,7 +714,22 @@ class WorkerSupervisor:
                     diagnostics.append(anomaly_line)
                     self._notify(anomaly_line)
 
-                if self._ui_event_sink is not None and event.type in ("tool_call", "tool_use"):
+                part = event.part if isinstance(event.part, (dict, Mapping)) else {}
+
+                # Decouple stall heartbeat: advance last_step_time on active tool invocations
+                is_active_tool = event.type in ("tool_call", "tool_use") or (
+                    event.type == "step_update" and part.get("step_type") == "tool"
+                )
+                if is_active_tool:
+                    last_step_time = self._clock()
+
+                # UI tool event forwarding (OpenCode tool_call/tool_use, Antigravity ACTIVE tool step_update)
+                is_active_tool_invocation = event.type in ("tool_call", "tool_use") or (
+                    event.type == "step_update"
+                    and part.get("step_type") == "tool"
+                    and part.get("state") == "ACTIVE"
+                )
+                if self._ui_event_sink is not None and is_active_tool_invocation:
                     try:
                         tool_msg = _format_tool_event(event)
                         self._ui_event_sink.emit("worker", tool_msg)
@@ -712,25 +751,54 @@ class WorkerSupervisor:
                 if event.type == "error":
                     has_error_event = True
 
-                if event.type == "step_finish":
+                # Extract assistant narration text (guard missing key/substructures)
+                narration = ""
+                for k in ("text", "text_delta", "title", "response"):
+                    v = part.get(k)
+                    if isinstance(v, str) and v.strip():
+                        narration = v.strip()
+                        break
+                if not narration and isinstance(event.raw, (dict, Mapping)):
+                    raw_part = event.raw.get("part")
+                    if isinstance(raw_part, (dict, Mapping)) and isinstance(raw_part.get("text"), str):
+                        narration = raw_part.get("text") or ""
+                summary = narration[:120]
+
+                # Step completion detection: OpenCode step_finish, Antigravity step_update with DONE or ERROR
+                is_completed_step = (
+                    event.type == "step_finish"
+                    or (
+                        event.type == "step_update"
+                        and part.get("state") in ("DONE", "ERROR")
+                    )
+                )
+                if is_completed_step:
                     last_step_time = self._clock()
                     step_counter += 1
 
-                    # Extract assistant narration text (guard missing key/substructures)
-                    narration = ""
-                    part = event.part if isinstance(event.part, dict) else {}
-                    if isinstance(part.get("text"), str):
-                        narration = part.get("text") or ""
-                    elif isinstance(event.raw, dict):
-                        raw_part = event.raw.get("part")
-                        if isinstance(raw_part, dict) and isinstance(raw_part.get("text"), str):
-                            narration = raw_part.get("text") or ""
-                    summary = narration[:120]
-
-                    if event.token_usage is not None:
+                # Token usage observation & budget monitor
+                status_published = False
+                if event.token_usage is not None:
+                    # ADR 0015 / Spec 16: suppress Antigravity's cumulative result.usage sum
+                    # whenever per-step step_update usage was already observed during the turn
+                    skip_usage = (event.type == "result" and step_usage_observed)
+                    if not skip_usage:
+                        if event.type != "result":
+                            step_usage_observed = True
                         action = self._budget_monitor.observe(event.token_usage)
-                        if self._on_budget_action is not None:
-                            self._on_budget_action(action, self._budget_monitor.latest_occupancy)
+
+                        if self._on_budget_action is not None and action is not None:
+                            ready_present = (
+                                self._signal_first_seen_at is not None
+                                or self._is_ready_signal_present(ticket_id)
+                            )
+                            if action in (BudgetAction.HANDOFF, BudgetAction.CEILING) and ready_present:
+                                logger.info(
+                                    f"[{ticket_id}] Suppressing budget action {action} "
+                                    f"because ready signal is already present on disk."
+                                )
+                            else:
+                                self._on_budget_action(action, self._budget_monitor.latest_occupancy)
 
                         if self._state_coordinator is not None:
                             curr_state = self._state_coordinator.current_state
@@ -741,6 +809,24 @@ class WorkerSupervisor:
                                 warning_sent=warning_sent,
                             )
 
+                        if self._status_publisher is not None:
+                            try:
+                                status_event = StatusEvent(
+                                    ticket_id=ticket_id,
+                                    run_state=RunState.RUNNING,
+                                    attempt=1,
+                                    max_attempts=self._max_attempts,
+                                    token_count=self._budget_monitor.latest_occupancy,
+                                    token_budget=self._budget_monitor.effective_ceiling,
+                                    last_step_summary=summary,
+                                    last_step_at=datetime.now(timezone.utc).isoformat(),
+                                    last_event="STEP_FINISHED",
+                                )
+                                self._status_publisher.publish(status_event)
+                                status_published = True
+                            except Exception as pub_exc:
+                                logger.warning(f"[{ticket_id}] Failed to publish status event: {pub_exc}")
+
                         if action == BudgetAction.WARN:
                             notice = (
                                 f"[{ticket_id}] Token budget warning: occupancy reached "
@@ -749,12 +835,13 @@ class WorkerSupervisor:
                             )
                             self._notify(notice)
 
+                if is_completed_step:
                     tokens_k = self._budget_monitor.latest_occupancy // 1000
                     if self._presence_mode == "nearby":
                         display_line = f"[{ticket_id} | step {step_counter} | {tokens_k}k tokens] {summary}"
                         self._printer(display_line[:120])
 
-                    if self._status_publisher is not None:
+                    if not status_published and self._status_publisher is not None:
                         try:
                             status_event = StatusEvent(
                                 ticket_id=ticket_id,

@@ -1373,10 +1373,10 @@ def test_bounded_run_enforces_signal_grace(tmp_path: Path) -> None:
     assert handle.terminated is True
 
 
-def test_ceiling_takes_precedence_over_signal_grace(tmp_path: Path) -> None:
-    """If ceiling is breached after signal appears, KILLED_CEILING takes priority."""
+def test_ready_signal_takes_precedence_over_ceiling_breach(tmp_path: Path) -> None:
+    """Per Spec 16 (T121), ready signal on disk takes precedence over late ceiling breach."""
     fake_runner = FakeCommandRunner()
-    session_id = "ses_ceilingWins"
+    session_id = "ses_readySignalWins"
     clock_time = [0.0]
 
     def fake_clock() -> float:
@@ -1419,7 +1419,7 @@ def test_ceiling_takes_precedence_over_signal_grace(tmp_path: Path) -> None:
             return self.stdout_lines()
 
         async def wait(self) -> int:
-            return -15
+            return 0
 
         async def terminate(self) -> None:
             self.terminated = True
@@ -1436,15 +1436,20 @@ def test_ceiling_takes_precedence_over_signal_grace(tmp_path: Path) -> None:
         clock=fake_clock,
     )
 
+    budget_actions_invoked = []
+
     def _on_action(action, occ):
+        budget_actions_invoked.append(action)
         if action in ("ceiling", "CEILING"):
             supervisor.request_kill(RunTerminationReason.KILLED_CEILING)
 
     supervisor.on_budget_action = _on_action
 
     result = asyncio.run(supervisor.run("T030", prompt="prompt"))
-    assert result.reason == RunTerminationReason.KILLED_CEILING
-    assert handle.terminated is True
+    assert result.reason in (RunTerminationReason.EXITED, RunTerminationReason.KILLED_SIGNAL)
+    assert result.ready_signal_present is True
+    # Action must be suppressed because ready signal is present
+    assert len(budget_actions_invoked) == 0
 
 
 # --- AC 14: Resource Telemetry and Skill Access Tracking (T045) ---
@@ -2525,3 +2530,395 @@ def test_supervisor_ignores_events_without_anomaly(tmp_path: Path) -> None:
 
 
 
+
+
+# --- T121: Antigravity Token Occupancy, Stall Heartbeat, and Precedence ---
+
+
+def test_supervisor_antigravity_step_update_records_tokens_and_advances_counter(tmp_path: Path) -> None:
+    """Antigravity step_update (DONE) records true context occupancy and advances step_counter."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+    from runner.application.state_coordinator import StateCoordinator
+    from tests.fakes.fake_state_store import FakeStateStore
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "step_index": 1,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "text_delta": "Thinking complete",
+                "usage": {
+                    "input_tokens": 20000,
+                    "cache_read_tokens": 15000,
+                    "output_tokens": 400,
+                    "thinking_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "total_tokens": 20400,  # agy omits cache_read_tokens
+                },
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Done",
+                "usage": {
+                    "input_tokens": 20000,
+                    "cache_read_tokens": 15000,
+                    "output_tokens": 400,
+                    "total_tokens": 20400,
+                },
+            },
+        }) + "\n",
+    ]
+
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    state_store = FakeStateStore()
+    state_coord = StateCoordinator(state_store=state_store)
+    status_pub = FakeStatusPublisher()
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        agent_worker=worker,
+        state_coordinator=state_coord,
+        status_publisher=status_pub,
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    # Expected context occupancy: 20000 + 15000 + 400 = 35400
+    assert result.occupancy == 35400
+    assert state_coord.current_state is not None
+    assert state_coord.current_state.tokens.current == 35400
+    assert len(status_pub.events) >= 1
+    assert status_pub.events[-1].token_count == 35400
+    assert status_pub.events[-1].last_event == "STEP_FINISHED"
+
+
+def test_supervisor_antigravity_result_cumulative_usage_suppressed_when_step_usage_observed(
+    tmp_path: Path,
+) -> None:
+    """Closing result with cumulative sum (e.g. 175k) does not falsely trip 150k ceiling."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "usage": {
+                    "input_tokens": 25000,
+                    "cache_read_tokens": 5000,
+                    "output_tokens": 500,
+                    "total_tokens": 25500,
+                },
+            },
+        }) + "\n",
+        # Closing result cumulative sum over 30 turns: 175,000 tokens (would breach 150k ceiling)
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Finished",
+                "usage": {
+                    "input_tokens": 160000,
+                    "output_tokens": 15000,
+                    "total_tokens": 175000,
+                },
+            },
+        }) + "\n",
+    ]
+
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=worker,
+        budget_config=TokenBudgetConfig(ceiling=150000),
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    # Occupancy must stay at per-step context occupancy (30500), not cumulative 175000
+    assert result.occupancy == 30500
+    assert result.reason == RunTerminationReason.EXITED
+
+
+def test_supervisor_antigravity_result_usage_used_when_no_step_usage_observed(
+    tmp_path: Path,
+) -> None:
+    """When a single-shot turn produces no step_update usage, result usage is observed."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Single shot response",
+                "usage": {
+                    "input_tokens": 25000,
+                    "output_tokens": 500,
+                    "total_tokens": 25500,
+                },
+            },
+        }) + "\n",
+    ]
+
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=worker,
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    assert result.occupancy == 25500
+    assert result.reason == RunTerminationReason.EXITED
+
+
+def test_supervisor_antigravity_tool_step_advances_stall_heartbeat_even_without_usage(
+    tmp_path: Path,
+) -> None:
+    """Antigravity tool step_update events without usage advance last_step_time."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "step_type": "tool",
+                "state": "ACTIVE",
+                "tool_info": {"name": "run_command", "parameters": {"command": "pytest"}},
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "step_type": "tool",
+                "state": "DONE",
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Done",
+            },
+        }) + "\n",
+    ]
+
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=worker,
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+    assert result.reason == RunTerminationReason.EXITED
+
+
+def test_supervisor_antigravity_active_tool_emits_to_ui_event_sink(tmp_path: Path) -> None:
+    """Antigravity active tool invocations are formatted and emitted to ui_event_sink."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "step_type": "tool",
+                "state": "ACTIVE",
+                "tool_info": {
+                    "name": "edit_file",
+                    "parameters": {"path": "runner/domain/model.py"},
+                },
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Done",
+            },
+        }) + "\n",
+    ]
+
+    class FakeSink:
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def emit(self, channel: str, message: str) -> None:
+            self.messages.append((channel, message))
+
+    fake_sink = FakeSink()
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=worker,
+        ui_event_sink=fake_sink,  # type: ignore[arg-type]
+    )
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    assert len(fake_sink.messages) == 1
+    channel, msg = fake_sink.messages[0]
+    assert channel == "worker"
+    assert "Edit_file" in msg
+    assert "runner/domain/model.py" in msg
+
+
+def test_supervisor_mid_turn_antigravity_step_update_triggers_budget_actions(
+    tmp_path: Path,
+) -> None:
+    """Mid-turn Antigravity step_update crossing budget limits triggers actions."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+    from runner.domain.telemetry import BudgetAction
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "state": "DONE",
+                "usage": {"input_tokens": 121000, "output_tokens": 100, "total_tokens": 121100},
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "state": "DONE",
+                "usage": {"input_tokens": 136000, "output_tokens": 100, "total_tokens": 136100},
+            },
+        }) + "\n",
+    ]
+
+    budget_actions: list[tuple[BudgetAction, int]] = []
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=RuntimePaths(root_dir=tmp_path / ".agent"),
+        agent_worker=worker,
+        on_budget_action=lambda action, occ: budget_actions.append((action, occ)),
+    )
+
+    asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    assert (BudgetAction.WARN, 121100) in budget_actions
+    assert (BudgetAction.HANDOFF, 136100) in budget_actions
+
+
+def test_supervisor_suppresses_budget_kills_when_ready_signal_present(
+    tmp_path: Path,
+) -> None:
+    """When ready signal exists on disk, supervisor suppresses HANDOFF and CEILING kills."""
+    from runner.adapters.antigravity.antigravity_worker import AntigravityWorker
+    from runner.domain.telemetry import BudgetAction
+
+    session_id = "d3336873-0561-4a98-b9a9-13da3c00b3af"
+    ticket = _make_ticket("T121")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ready_file = runtime_paths.ready_signal_path("T121")
+    ready_file.write_text(json.dumps({"status": "ready_for_verification", "ticket_id": "T121"}), encoding="utf-8")
+
+    stream_lines = [
+        json.dumps({"event": "init", "conversation_id": session_id}) + "\n",
+        json.dumps({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": session_id,
+                "state": "DONE",
+                "usage": {"input_tokens": 152000, "output_tokens": 100, "total_tokens": 152100},
+            },
+        }) + "\n",
+        json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": session_id,
+                "status": "SUCCESS",
+                "response": "Done",
+            },
+        }) + "\n",
+    ]
+
+    budget_actions: list[tuple[BudgetAction, int]] = []
+    worker = AntigravityWorker()
+    cmd = worker.build_run_command(prompt="implement", session_id=None)
+    fake_runner = FakeCommandRunner()
+    fake_runner.register_spawn(cmd, stdout_lines=stream_lines, exit_code=0)
+
+    supervisor = WorkerSupervisor(
+        command_runner=fake_runner,
+        runtime_paths=runtime_paths,
+        agent_worker=worker,
+        on_budget_action=lambda action, occ: budget_actions.append((action, occ)),
+    )
+
+    result = asyncio.run(supervisor.run(ticket=ticket, prompt="implement"))
+
+    # HANDOFF/CEILING budget action must be suppressed from killing the worker
+    assert len(budget_actions) == 0
+    assert result.reason in (RunTerminationReason.EXITED, RunTerminationReason.KILLED_SIGNAL)
+    assert result.ready_signal_present is True

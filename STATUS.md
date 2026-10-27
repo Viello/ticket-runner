@@ -3,20 +3,20 @@ project: ticket-runner
 last_updated: 2026-10-25T21:30:00
 author: Gab
 branch: agent/ticket-runner
-active_ticket: T121-unify-antigravity-token-occupancy-and-ready-signal-precedence
+active_ticket: T122-enforce-gatekeeper-ticket-ownership-and-idempotent-finalization
 status: in_progress
 stopped_at:
-  file: "D:/Projects/docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation/T121-unify-antigravity-token-occupancy-and-ready-signal-precedence.md"
-  symbol: "T120 completed; ready to execute T121"
+  file: "D:/Projects/docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation/T122-enforce-gatekeeper-ticket-ownership-and-idempotent-finalization.md"
+  symbol: "T121 completed; ready to execute T122"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
 - **Focus**: Implement Spec 16 (`16-live-run-gatekeeper-and-antigravity-telemetry-remediation` — `T120` → `T123`) to remediate the three architectural defects surfaced during the live `orchestrate-runner` `T101` run against `D:\Repos\agent-skills` (`cmd.exe /d /s /c` quote escaping, Antigravity per-step context occupancy & ready-signal precedence, and autonomous `docs/tickets/` ownership), then sanitize `D:\Repos\agent-skills` and re-run `T101` → `T102`.
-- **Last Touchpoint**: [`docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation/`](file:///D:/Projects/docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation) (`T120`–`T123` authored and verified via `DirectoryTicketStore.list_pending`) from [`docs/specs/16-live-run-gatekeeper-and-antigravity-telemetry-remediation.md`](file:///D:/Projects/docs/specs/16-live-run-gatekeeper-and-antigravity-telemetry-remediation.md) on branch `agent/ticket-runner`.
-- **Blockers**: Three live-run remediation slices (`T120`, `T121`, `T122`) and Target Project sanitization (`T123`) must land before re-running `start --local-only` on `D:\Repos\agent-skills`.
-- **Next Step**: Execute `T120` (`T120-preserve-windows-shell-quoting-in-gatekeeper-commands.md`), `T121` (`T121-unify-antigravity-token-occupancy-and-ready-signal-precedence.md`), `T122` (`T122-enforce-gatekeeper-ticket-ownership-and-idempotent-finalization.md`), and `T123` (`T123-sanitize-target-project-and-audit-spec-16-alignment.md`), then re-run `py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills start --local-only` in a real console.
+- **Last Touchpoint**: [`T121`](file:///D:/Projects/docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation/completed/T121-unify-antigravity-token-occupancy-and-ready-signal-precedence.md) completed on branch `agent/ticket-runner`.
+- **Blockers**: Two live-run remediation slices (`T122`, `T123`) must land before re-running `start --local-only` on `D:\Repos\agent-skills`.
+- **Next Step**: Execute `T122` (`T122-enforce-gatekeeper-ticket-ownership-and-idempotent-finalization.md`), then `T123` (`T123-sanitize-target-project-and-audit-spec-16-alignment.md`), then re-run `py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills start --local-only` in a real console.
 
 ## 🎯 Active Tickets & Progress
 - [ ] `Spec 16 Queue` (`16-live-run-gatekeeper-and-antigravity-telemetry-remediation`): Remediate live-run Gatekeeper shell quoting, Antigravity telemetry parity, and autonomous ticket boundary ownership
@@ -25,7 +25,7 @@ stopped_at:
     - [x] Author and settle Spec 16 (`docs/specs/16-live-run-gatekeeper-and-antigravity-telemetry-remediation.md`)
     - [x] Decompose Spec 16 into tracer-bullet tickets (`T120`–`T123`) under `docs/tickets/16-live-run-gatekeeper-and-antigravity-telemetry-remediation/`
     - [x] `T120`: Preserve Windows shell quoting in Gatekeeper verification commands (`SubprocessRunner`, `GatekeeperCommandExecutor`; `Security: required`)
-    - [ ] `T121`: Unify Antigravity token occupancy, stall heartbeat, and ready-signal precedence (`AntigravityWorker`, `WorkerSupervisor`, `HandoffCoordinator`)
+    - [x] `T121`: Unify Antigravity token occupancy, stall heartbeat, and ready-signal precedence (`AntigravityWorker`, `WorkerSupervisor`, `HandoffCoordinator`)
     - [ ] `T122`: Enforce Gatekeeper ownership of `docs/tickets/` and idempotent ticket finalization (`.agents/skills/implement/SKILL.md`, `PromptBuilder`, `DirectoryTicketStore`)
     - [ ] `T123`: Sanitize `agent-skills` Target Project (`6912328` baseline + synced `implement/SKILL.md`) and audit Spec 16 alignment (`tests/specs/test_spec_16_live_run_remediation.py`, `AGENTS.md`, `gotchas.md`)
 - [ ] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **PAUSED pending Spec 16 (`T120`–`T123`)**

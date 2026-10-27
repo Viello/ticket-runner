@@ -1,5 +1,6 @@
 # T121 — Unify Antigravity Token Occupancy, Stall Heartbeat, and Ready-Signal Precedence
-Status: pending
+Status: completed
+Completed: 2026-10-27T13:47:30Z
 Spec: docs/specs/16-live-run-gatekeeper-and-antigravity-telemetry-remediation.md
 Blocked by: None
 Reasoning: medium

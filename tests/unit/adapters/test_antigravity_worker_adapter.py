@@ -356,8 +356,42 @@ def test_decode_event_step_update_with_usage() -> None:
         reasoning=100,
         cache_read=50,
         cache_write=15,
-        total=21466,
+        total=None,
     )
+    assert event.token_usage.occupancy == 21466
+
+
+def test_decode_event_step_update_computes_true_context_occupancy_with_total_none() -> None:
+    """In agy, step_update.usage.total_tokens omits cache_read_tokens and thinking_tokens.
+
+    Setting total=None allows TokenUsage.occupancy to reflect the true context window
+    (input + output + reasoning + cache_read + cache_write) per ADR 0015.
+    """
+    payload = {
+        "event": "step_update",
+        "step_update": {
+            "conversation_id": "d3336873-0561-4a98-b9a9-13da3c00b3af",
+            "step_index": 1,
+            "state": "DONE",
+            "step_type": "agent_response",
+            "text_delta": "PONG\n",
+            "usage": {
+                "input_tokens": 1200,
+                "output_tokens": 300,
+                "thinking_tokens": 500,
+                "cache_read_tokens": 35000,
+                "cache_write_tokens": 20,
+                "total_tokens": 1500,  # agy wire total = input + output only
+            },
+        },
+    }
+    event = decode_event(json.dumps(payload))
+    assert event is not None
+    assert event.token_usage is not None
+    assert event.token_usage.total is None
+    # True occupancy includes cached prompt (35k) and thinking (500)
+    assert event.token_usage.occupancy == 1200 + 300 + 500 + 35000 + 20
+
 
 
 def test_decode_event_result_with_usage() -> None:
