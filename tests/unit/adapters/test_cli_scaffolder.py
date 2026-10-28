@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -268,7 +267,7 @@ def test_scaffold_emits_runnable_artifacts_and_runtime_dirs(tmp_path: Path) -> N
     assert (tmp_path / "AGENTS.md").is_file()
     welcome_ticket = tmp_path / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
     assert welcome_ticket.is_file()
-    assert "Status: pending" in welcome_ticket.read_text(encoding="utf-8")
+    assert "**Status:** pending" in welcome_ticket.read_text(encoding="utf-8")
     sample_app = tmp_path / "src" / "sample_app" / "__init__.py"
     assert sample_app.is_file()
     assert "def greet(name: str) -> str:" in sample_app.read_text(encoding="utf-8")

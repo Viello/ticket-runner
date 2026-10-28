@@ -16,8 +16,8 @@ Ticket Runner operates within a decoupled three-repository ecosystem:
 ┌─────────────────────────────────────────────────────────┐
 │                   Viello/agent-skills                   │
 │               (Reusable Skills Catalog)                 │
-│  - Reusable agent skills: implement, code-review, etc.  │
-│  - Meta-skills: verify-<app> scaffolding & maintenance  │
+│  - Dual-track skills: to-ticket-runner & implement-ticket-runner │
+│  - Human+AI skills: to-tickets, implement, & 3-axis code-review  │
 └────────────────────────────┬────────────────────────────┘
                              │ ticket-runner skills sync / init
                              ▼
@@ -67,7 +67,7 @@ ticket-runner/
 │   │
 │   ├── domain/                       # Pure Domain Entities & Invariants (zero I/O, zero deps)
 │   │   ├── __init__.py
-│   │   ├── ticket.py                 # Ticket, TicketStatus, requirements, gotchas
+│   │   ├── ticket.py                 # Ticket (mode, status_note, jump_start, checked_criteria), TicketStatus
 │   │   ├── state.py                  # RunnerState, StateStatus, crash recovery state
 │   │   ├── signal.py                 # ReadySignal, QuestionSignal, SignalStatus, verification models
 │   │   ├── status_event.py           # Domain events for queue and worker state changes
@@ -85,7 +85,7 @@ ticket-runner/
 │   │   ├── queue_orchestrator.py     # Sequential ticket loop (standby vs terminate)
 │   │   ├── worker_supervisor.py      # Multi-agent worker lifecycle via AgentWorker port
 │   │   ├── handoff_coordinator.py    # Token budget rules (120k warn, 135k handoff, 150k ceiling)
-│   │   ├── gatekeeper.py             # Test/build verification, harness driving, & Circuit Breaker
+│   │   ├── gatekeeper.py             # Test/build verification, Pre-Dispatch HITL gate, dispatch baseline, & Circuit Breaker
 │   │   ├── ticket_processor.py       # Ticket execution seam driving verification loop & outcome mapping
 │   │   ├── presence_coordinator.py   # Nearby vs Away mode & 3-min idle escalation timer
 │   │   ├── git_operations.py         # Branch isolation, conventional commits, tree resets
@@ -139,9 +139,9 @@ ticket-runner/
 │       ├── markdown/
 │       │   ├── __init__.py
 │       │   ├── file_lock.py          # Windows msvcrt sentinel file locking context manager (.queue.lock)
-│       │   ├── parser.py             # Frontmatter and markdown parser for ticket files
+│       │   ├── parser.py             # Specimen A parser with dialect guard rejecting Specimen B (Human+AI)
 │       │   ├── spec_parser.py        # Spec excerpt parser for ticket prompt context injection
-│       │   ├── serializer.py         # Serializer, status updater, and completed/ archiver
+│       │   ├── serializer.py         # In-place bold-label header serializer and completed/ archiver
 │       │   ├── gotchas_store.py      # Persistent parser and updater for docs/tickets/gotchas.md
 │       │   ├── atomic_write.py       # Windows-safe atomic file replace utility
 │       │   └── ticket_store.py       # Implements TicketRepository for docs/tickets/ directory

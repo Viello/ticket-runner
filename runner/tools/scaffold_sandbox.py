@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import io
-import os
 from pathlib import Path
 import platform
 import re
@@ -107,30 +106,43 @@ STAMP_PATTERN = re.compile(
 )
 
 WELCOME_TICKET_CONTENT: str = """# T001 — Hello World Welcome Ticket
-**Type:** wayfinder:task (AFK)
-Status: pending
-Spec: docs/specs/00-welcome.md
-Blocked by: none
-Reasoning: low
+**Mode:** AFK
+**Status:** pending
+**Spec:** docs/specs/00-welcome.md
+**Blocked by:** none
+**Security:** optional
+**Reasoning:** low
 
-### Question
-Verify that Ticket Runner executes this welcome ticket against sample_app.
+## What to build
 
-### Why this matters
-Proves end-to-end autonomous queue execution in the onboarding sandbox.
+Verify that Ticket Runner executes this welcome ticket against sample_app. Proves end-to-end autonomous queue execution in the onboarding sandbox.
 
-### Requirements
-- Verify `src/sample_app/__init__.py` has `greet(name: str) -> str`.
-- Verify `tests/test_smoke.py` passes under `pytest`.
+## Jump-start
 
-### Acceptance Criteria
-- Smoke test passes.
-- Welcome ticket can be processed by Ticket Runner worker and gatekeeper.
+- **Files/areas to touch:**
+  - `src/sample_app/__init__.py`
+  - `tests/test_smoke.py`
+- **Seams:** sample_app greeting function and pytest verification.
+- **Existing-code anchors:** `greet(name: str) -> str`.
+- **Verification commands:** `pytest`
+- Orientation starts here — follow the code where it leads.
 
-### Smoke Scenarios
-- Run `pytest` to assert `greet("world") == "hello, world!"`.
+## Acceptance criteria
 
-### Gotchas
+- [ ] Smoke test passes.
+- [ ] Welcome ticket can be processed by Ticket Runner worker and gatekeeper.
+
+## Smoke scenarios
+
+- [ ] Scenario: Smoke test passes
+  - Setup: Repository scaffolded with sample_app and test_smoke.py
+  - Why: Asserts greet("world") returns "hello, world!"
+  - Steps:
+    1. Run `pytest`
+  - Expected: All tests pass with exit code 0.
+
+## Gotchas
+
 - None.
 """
 

@@ -40,14 +40,15 @@ Entry points: `ticket_runner.py` (CLI), `runner/` (engine), `tests/` (pytest), `
 
 ## Invariants
 - Agent backends (OpenCode, Antigravity CLI) are invoked as subprocesses, never daemons. Resumption uses the session id each emits (`ses_…` or `conversation_id` UUID).
-- Worker implements via configured `worker.execution_skill`; commits, ticket moves, and `docs/tickets/gotchas.md` edits stay with the Runner.
+- Worker implements via configured `worker.execution_skill` (defaulting to `.agents/skills/implement-ticket-runner/SKILL.md`); Worker may tick `- [ ]` to `- [x]` in `## Acceptance criteria`, while commits, ticket moves, and `docs/tickets/gotchas.md` edits stay with the Runner.
+- Pre-Dispatch HITL gate: Tickets with `**Mode:** HITL` (or `**Status:** blocked`) halt before worker dispatch, transitioning to `WAITING_FOR_USER` to prompt the operator via Discord or Terminal.
 - Worker ↔ Runner state is durable JSON: `.agent/signals/{ticket_id}_ready.json` and `.agent/questions/{ticket_id}.json`. State comes from those files, not model stdout.
 - Only the Gatekeeper passes a ticket by running configured test/build commands. Worker self-reports don't count; 3 failed attempts trip the Circuit Breaker.
 - Verification evidence stays out-of-band in `.agent/evidence/<ticket_id>/`; the Worker sees at most a 30-line / 1,000-character excerpt.
 - In human mode (`lifecycle.approval_mode: "human"`), green checks produce an Evidence Card and the commit waits for human approval.
 - Before signaling ready, confirm the suite is not stuck per `/diagnosing-bugs` § Stuck-Test-Suite Protocol.
 - Token budget: warn 120k, handoff 135k, ceiling 150k. Handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff/SKILL.md`.
-- Gatekeeper approval authors exactly one commit containing code, tests, gotchas, and the relocated ticket. Ticket frontmatter records `Status: completed`; the commit SHA stays in git.
+- Gatekeeper approval authors exactly one commit containing code, tests, gotchas, and the relocated ticket. Ticket frontmatter records `**Status:** completed` and `**Completed:** <timestamp>`; the commit SHA stays in git.
 - All automated work happens on `agent/ticket-runner`; commit locally. `.git/hooks/pre-push` blocks pushes (ADR 0005).
 - `.agent/` is untracked runtime state; git-ignore it.
 - Human verification runs after green checks in a human-invoked `/live-qa` session; the human records the verdict.
@@ -81,6 +82,7 @@ If a test or build fails twice after a fix attempt: stop editing, summarize the 
 ## Agent skills
 - `.agents/skills/` vendors the user's global skill catalog; `handoff`, `claude-handoff`, `to-tickets` have project-specific edits. Edit only the named skill; don't bulk-reformat or overwrite local copies with the global ones.
 - `.agents/skills/handoff/SKILL.md` is load-bearing; the Runner's handoff protocol calls it by path. Keep it at that path.
+- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline (`worker.execution_skill`).
 - `.agents/skills/implement/SKILL.md` defines the interactive Human+AI worker implementation discipline.
 - `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
 
