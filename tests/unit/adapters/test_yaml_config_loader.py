@@ -384,7 +384,7 @@ def test_load_config_example_yaml() -> None:
     assert isinstance(config, RunnerConfig)
     assert config.project.name == "ticket-runner"
     assert config.project.branch == "agent/ticket-runner"
-    assert config.worker.execution_skill == ".agents/skills/implement/SKILL.md"
+    assert config.worker.execution_skill == ".agents/skills/implement-ticket-runner/SKILL.md"
     assert config.verification.test_cmd == "python -m pytest"
     assert config.verification.silence_window_seconds == 60
     assert config.verification.per_test_timeout_seconds == 0

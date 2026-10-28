@@ -45,12 +45,14 @@ ENV_BULLETS_KEEP_PREFIXES: tuple[str, ...] = (
 
 AGENT_BULLETS_KEEP_PREFIXES_DEFAULT: tuple[str, ...] = (
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
 )
 
 AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
     "`.agents/skills/` vendors the user's global skill catalog",
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
     "`.agents/skills/security-review/SKILL.md` defines",
 )
@@ -58,7 +60,7 @@ AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
 SkillsMode = Literal["default", "all"]
 
 CURATED_SKILLS: tuple[str, ...] = (
-    "implement",
+    "implement-ticket-runner",
     "code-review",
     "diagnosing-bugs",
     "handoff",
@@ -161,7 +163,7 @@ TICKET_RUNNER_YAML_TEMPLATE: str = """project:
 
 worker:
   provider: "antigravity"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 sandbox:
   # Flip + re-run sync_agents_md.py --write --skills <default|all> to apply.
@@ -378,7 +380,7 @@ FALLBACK_CURATED_SUBSET: str = (
     "- Target platform is Windows/PowerShell.\n\n"
     "## Agent skills\n"
     "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
-    "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
+    "- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline."
 )
 
 DEFAULT_UPSTREAM_AGENTS_MD: str = """# AGENTS.md
@@ -402,7 +404,7 @@ Target Project operating rules for Ticket Runner autonomous queue execution.
 ## Agent skills
 - `.agents/skills/` vendors the user's global skill catalog; handoff, claude-handoff, to-tickets have project-specific edits.
 - `.agents/skills/handoff/SKILL.md` is load-bearing.
-- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.
 - `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
 """
 

@@ -45,7 +45,7 @@ DEFAULT_BRANCH = "agent/ticket-runner"
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
 DEFAULT_AGENTS_MD_PATH = Path("AGENTS.md")
-DEFAULT_EXECUTION_SKILL = ".agents/skills/implement/SKILL.md"
+DEFAULT_EXECUTION_SKILL = ".agents/skills/implement-ticket-runner/SKILL.md"
 REQUIRED_SKILL_PATHS = (
     ".agents/skills/code-review/SKILL.md",
     ".agents/skills/diagnosing-bugs/SKILL.md",

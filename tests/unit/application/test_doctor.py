@@ -25,7 +25,7 @@ from runner.application.doctor import (
     DoctorReport,
 )
 from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
-from runner.domain.config import RunnerConfig, UIConfig
+from runner.domain.config import ModelConfig, RunnerConfig, UIConfig
 from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError
 from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
@@ -107,7 +107,7 @@ class FakeHookInstaller:
 def _make_config(
     test_cmd: str = "python -m pytest",
     build_cmd: str = "",
-    execution_skill: str = ".agents/skills/implement/SKILL.md",
+    execution_skill: str = ".agents/skills/implement-ticket-runner/SKILL.md",
     model: ModelConfig | None = None,
     ui: UIConfig | None = None,
     provider: str = "opencode",
@@ -784,7 +784,7 @@ async def test_check_agents_md_custom_path(tmp_path: Path) -> None:
 async def test_check_skills_passes_when_all_skills_present(tmp_path: Path) -> None:
     """Verify check_skills passes when execution skill and required review skills exist."""
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -807,7 +807,7 @@ async def test_check_skills_fails_when_all_skills_missing(tmp_path: Path) -> Non
     assert result.passed is False
     assert result.name == CHECK_SKILLS
     assert result.remediation is not None
-    assert ".agents/skills/implement/SKILL.md" in result.remediation
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.remediation
     assert ".agents/skills/code-review/SKILL.md" in result.remediation
     assert ".agents/skills/diagnosing-bugs/SKILL.md" in result.remediation
 
@@ -816,8 +816,8 @@ async def test_check_skills_fails_when_all_skills_missing(tmp_path: Path) -> Non
 async def test_check_skills_fails_naming_specifically_missing_skills(tmp_path: Path) -> None:
     """Verify check_skills failure specifically names only the absent skill files."""
     skills_dir = tmp_path / ".agents" / "skills"
-    # Create implement and code-review, but omit diagnosing-bugs
-    for name in ("implement", "code-review"):
+    # Create implement-ticket-runner and code-review, but omit diagnosing-bugs
+    for name in ("implement-ticket-runner", "code-review"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -830,7 +830,7 @@ async def test_check_skills_fails_naming_specifically_missing_skills(tmp_path: P
     assert result.remediation is not None
     assert "diagnosing-bugs/SKILL.md" in result.remediation
     assert "code-review/SKILL.md" not in result.remediation
-    assert "implement/SKILL.md" not in result.remediation
+    assert "implement-ticket-runner/SKILL.md" not in result.remediation
 
 
 @pytest.mark.anyio
@@ -871,7 +871,7 @@ async def test_doctor_run_includes_agents_md_and_skills_checks(tmp_path: Path) -
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -907,7 +907,7 @@ async def test_doctor_run_order_includes_model_after_config(tmp_path: Path) -> N
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -945,7 +945,7 @@ async def test_doctor_run_order_includes_terminal_host_after_model(tmp_path: Pat
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -1436,7 +1436,7 @@ async def test_doctor_run_passes_live_true_to_check_discord(tmp_path: Path) -> N
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")

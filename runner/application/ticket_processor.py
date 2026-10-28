@@ -316,7 +316,7 @@ class GatekeeperTicketProcessor:
         execution_skill = (
             self._worker_config.execution_skill
             if self._worker_config is not None
-            else ".agents/skills/implement/SKILL.md"
+            else ".agents/skills/implement-ticket-runner/SKILL.md"
         )
 
         return self._prompt_builder.build(

@@ -11,7 +11,7 @@ from runner.domain.ticket import Ticket
 
 DEFAULT_INVARIANTS = """## Invariants
 - OpenCode is invoked as a subprocess, never a daemon: `opencode run --format json --session <id> --auto "<prompt>"`; resume with the same session id (ADR 0001).
-- Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement/SKILL.md`), performing pre-signal reviews, but never commits directly
+- Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement-ticket-runner/SKILL.md`), performing pre-signal reviews, but never commits directly
 - Worker↔Runner messages are durable JSON files (`.agent/signals/{ticket_id}_ready.json`, `.agent/questions/{ticket_id}.json`) — never parse model stdout for state (ADR 0004).
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker (ADR 0002).
 - All automated work happens on `agent/ticket-runner`; the Runner stages and commits, and `.git/hooks/pre-push` blocks pushes (ADR 0005). Never `git push`.
@@ -69,7 +69,7 @@ def extract_invariants(agents_path: str | Path = "AGENTS.md") -> str:
         "- Human verification happens after green checks via a `/live-qa` session the human runs; "
         "the Worker drafts no scenarios and self-reports no manual verification."
     )
-    if not any("live-qa" in l for l in filtered_lines):
+    if not any("live-qa" in line_str for line_str in filtered_lines):
         filtered_lines.append(live_qa_invariant)
 
     extracted = "\n".join(filtered_lines).strip()
@@ -117,7 +117,7 @@ def build_prompt(
     ticket: Ticket,
     spec_excerpt: SpecExcerpt | str,
     gotchas_path: str | Path = "docs/tickets/gotchas.md",
-    execution_skill: str | Path = ".agents/skills/implement/SKILL.md",
+    execution_skill: str | Path = ".agents/skills/implement-ticket-runner/SKILL.md",
     *,
     spec_path: str | None = None,
     global_gotchas: str | None = None,
@@ -148,7 +148,10 @@ def build_prompt(
 
     resolved_spec_path = Path(resolved_spec_path).as_posix()
 
-    requirements_text = _format_bullets(ticket.requirements)
+    what_to_build_text = _format_bullets(ticket.requirements)
+    jump_start_block = ""
+    if ticket.jump_start:
+        jump_start_block = f"\n### Jump-start\n{_format_bullets(ticket.jump_start)}\n"
     ac_text = _format_bullets(ticket.acceptance_criteria)
     gotchas_text = _format_bullets(ticket.gotchas)
     effective_gotchas = global_gotchas if global_gotchas is not None else gotchas_path
@@ -159,9 +162,9 @@ def build_prompt(
     security_review_line = ""
     if ticket.security_required:
         security_review_line = (
-            "\n   - Mandatory Security Review: Read `.agents/skills/security-review/SKILL.md` "
-            "using your file-reading tool as required by ticket frontmatter (`Security: required`) "
-            "and summarize findings in `self_review_notes`."
+            "\n   - Explicit Security Mandate: This ticket is explicitly marked `Security: required` in ticket frontmatter. "
+            "Perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
+            "documenting detailed security findings in `self_review_notes`."
         )
 
     prompt = f"""# Ticket Task: {ticket.id} — {ticket.title}
@@ -181,10 +184,10 @@ Full specification reference: `{resolved_spec_path}`
 ## Active Ticket Details
 ### {ticket.id} — {ticket.title}
 
-### Requirements
-{requirements_text}
-
-### Acceptance Criteria
+### What to build
+{what_to_build_text}
+{jump_start_block}
+### Acceptance criteria
 {ac_text}
 
 ### Ticket Gotchas
@@ -195,9 +198,16 @@ Full specification reference: `{resolved_spec_path}`
 ## Operational Guardrails & Completion Protocol
 {invariants_text}
 
-1. **No Git Staging, Commits, or Queue File Mutations**: Do NOT run `git add` or `git commit`. Do NOT edit `docs/tickets/gotchas.md` directly. Do NOT modify, move, or delete any Ticket markdown file under `docs/tickets/` (including the active ticket file). Worker git staging, commits, and queue file mutations are strictly forbidden. Ticket relocation, status updates, gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
-2. **Review Self-Checks**:
-   - Mandatory Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and summarize standards and spec verification findings in `self_review_notes`.{security_review_line}
+1. **No Git Staging, Commits, or Queue File Mutations**:
+   - Checkbox Ticking Permission Boundary: The Worker must flip satisfied criteria from `- [ ]` to `- [x]` under `## Acceptance criteria` in the active ticket file before emitting `.agent/signals/{ticket.id}_ready.json`.
+   - Strict Queue Immutability: The Worker is strictly forbidden from modifying any other line or section of the active ticket file (the bold-label header, `## What to build`, `## Jump-start`, criterion wording, or `## Gotchas`), editing `docs/tickets/gotchas.md` directly, or touching any other file under `docs/tickets/`. Modifying, moving, or deleting any ticket markdown file under `docs/tickets/` (other than checking off satisfied acceptance criteria in the active ticket file) is strictly prohibited. Ticket relocation, header finalization (`**Status:** completed`), gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
+   - Do NOT run `git add` or `git commit`. Worker git staging and commits are strictly forbidden. Do not edit `docs/tickets/gotchas.md` directly.
+2. **Review Self-Checks & Severity-Gated Escalation**:
+   - 3-Axis Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and evaluate changes across three axes: `Standards`, `Spec`, and `Security` (referencing `.agents/skills/security-review/SKILL.md`). Summarize verification findings in `self_review_notes`.{security_review_line}
+   - Severity-Gated Escalation:
+     - Low and Medium findings never interrupt the human; remediate in-pass or summarize findings in `self_review_notes`.
+     - Critical and High findings must be remediated in-pass before signalling readiness.
+     - Only if remediation is blocked by an architectural decision or missing secret does the Worker emit `.agent/questions/{ticket.id}.json` and stop working immediately.
 3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs/SKILL.md` using your file-reading tool.
 4. **Ready Signal Protocol**: When implementation and self-reviews are complete, emit the ready signal by writing `.agent/signals/{ticket.id}_ready.json`.
    The ready Signal JSON payload must follow this exact schema:
@@ -235,7 +245,7 @@ class _BuildDispatcher:
                 ticket: Ticket,
                 spec_excerpt: SpecExcerpt | str,
                 gotchas_path: str | Path = "docs/tickets/gotchas.md",
-                execution_skill: str | Path = ".agents/skills/implement/SKILL.md",
+                execution_skill: str | Path = ".agents/skills/implement-ticket-runner/SKILL.md",
                 *,
                 spec_path: str | None = None,
                 global_gotchas: str | None = None,
@@ -262,7 +272,7 @@ class _BuildDispatcher:
             global_gotchas: str | None = None,
             agents_path: str | Path | None = None,
         ) -> str:
-            skill = execution_skill or instance.default_execution_skill or ".agents/skills/implement/SKILL.md"
+            skill = execution_skill or instance.default_execution_skill or ".agents/skills/implement-ticket-runner/SKILL.md"
             path = gotchas_path or instance.default_gotchas_path
             agents = agents_path or instance.default_agents_path
             return build_prompt(

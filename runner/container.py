@@ -65,7 +65,7 @@ def _default_config() -> RunnerConfig:
     """Construct safe fallback configuration when no config file is provided."""
     return RunnerConfig(
         project=ProjectConfig(name="ticket-runner", branch="agent/ticket-runner", base_branch="main"),
-        worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
+        worker=WorkerConfig(execution_skill=".agents/skills/implement-ticket-runner/SKILL.md"),
         verification=VerificationConfig(test_cmd="pytest"),
         tokens=TokenBudgetConfig(),
         presence=PresenceConfig(),

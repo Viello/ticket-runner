@@ -131,7 +131,7 @@ def test_scaffold_happy_path(tmp_path: Path) -> None:
         assert (target / ".agent" / sub).is_dir()
 
     # 2. .agents/skills
-    for skill in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+    for skill in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
         skill_file = target / ".agents" / "skills" / skill / "SKILL.md"
         assert skill_file.is_file()
 
@@ -401,7 +401,7 @@ def test_scaffold_all_mode_network_fallback(
     # Ships 4 curated skills on fallback
     target_skills = list((target / ".agents" / "skills").iterdir())
     assert len(target_skills) == 4
-    for skill_name in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+    for skill_name in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
         assert (target / ".agents" / "skills" / skill_name / "SKILL.md").is_file()
 
     assert "[scaffold] Warning: Failed to fetch skill catalog from Viello/agent-skills" in captured

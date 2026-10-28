@@ -1,22 +1,22 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-28T12:38:00
+last_updated: 2026-10-28T15:48:00
 author: Gab
 branch: agent/ticket-runner
-active_ticket: docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md
+active_ticket: docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md
 status: ready
 stopped_at:
-  file: "docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md"
-  symbol: "Spec 17 decomposed into T124–T129; AGENTS.md aligned with Human+AI workflow and dual-backend parity (b045307); ready to implement T124"
+  file: "docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md"
+  symbol: "T127 completed and verified; ready to implement T128"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Decomposed [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into 6 tracer-bullet tickets (`T124`–`T129`) under `docs/tickets/17-human-first-ticket-document-format/`.
-- **Last Touchpoint**: Committed `b045307` (`docs(adapters): Update AGENTS.md for Human+AI Workflow and Dual-Backend Parity`), decoupling `scaffold_sandbox.py` and updating [AGENTS.md](file:///D:/Projects/AGENTS.md).
+- **Focus**: Executing [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) tracer-bullet tickets (`T124`–`T129`).
+- **Last Touchpoint**: Implemented `T127` (`feat(application): Plumb Default implement-ticket-runner Skill and Canonical Prompt Builder`), verified across targeted and full suites (142 and 1,766 passed), code-reviewed.
 - **Blockers**: None.
-- **Next Step**: Implement [T124-canonical-ticket-model-parser-and-serializer.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md) test-first via `/implement`.
+- **Next Step**: Implement [T128-dual-track-skills-catalog-and-vendoring.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md) test-first via `/implement`.
 
 ## 🎯 Active Tickets & Progress
 - [x] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **COMPLETED**
@@ -33,10 +33,10 @@ stopped_at:
   - Subtasks:
     - [x] Author and settle Spec 17 ([docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md))
     - [x] Decompose Spec 17 into tracer-bullet tickets (`T124`–`T129`) under `docs/tickets/17-human-first-ticket-document-format/`
-    - [ ] `T124`: [Canonical `to-ticket-runner` Document Model, Parser, Dialect Guard, and In-Place Bold-Label Serializer](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md)
-    - [ ] `T125`: [Gatekeeper Dispatch-Baseline Tick Boundary and Evidence Card Unticked Criteria](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T125-gatekeeper-dispatch-baseline-tick-boundary-and-evidence-card.md)
-    - [ ] `T126`: [Pre-Dispatch `HITL` Gate in Gatekeeper, Intervention Port, and Terminal/Discord Prompts](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T126-pre-dispatch-hitl-gate-and-intervention-prompts.md)
-    - [ ] `T127`: [Default `implement-ticket-runner` Execution Skill Plumbing and Canonical Prompt Builder](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T127-default-implement-ticket-runner-skill-and-prompt-builder.md)
+    - [x] `T124`: [Canonical `to-ticket-runner` Document Model, Parser, Dialect Guard, and In-Place Bold-Label Serializer](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T124-canonical-ticket-model-parser-and-serializer.md)
+    - [x] `T125`: [Gatekeeper Dispatch-Baseline Tick Boundary and Evidence Card Unticked Criteria](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T125-gatekeeper-dispatch-baseline-tick-boundary-and-evidence-card.md)
+    - [x] `T126`: [Pre-Dispatch `HITL` Gate in Gatekeeper, Intervention Port, and Terminal/Discord Prompts](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T126-pre-dispatch-hitl-gate-and-intervention-prompts.md)
+    - [x] `T127`: [Default `implement-ticket-runner` Execution Skill Plumbing and Canonical Prompt Builder](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T127-default-implement-ticket-runner-skill-and-prompt-builder.md)
     - [ ] `T128`: [Dual-Track Skills Catalog (`Viello/agent-skills`) and Local `.agents/skills/` Vendoring](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md)
     - [ ] `T129`: [Queue Migrations, End-to-End Spec 17 Verification Suite, and Spec-Closing Living Docs Alignment](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md)
 

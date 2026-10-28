@@ -13,7 +13,7 @@ worker:
   # Agent backend provider: "opencode" (default) or "antigravity"
   provider: "opencode"
   # Skill path guiding the worker during ticket execution
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 model:
   # Default reasoning variant passed as --variant (omitted when empty)
