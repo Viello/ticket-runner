@@ -715,6 +715,31 @@ async def test_check_queue_handles_ticket_format_error() -> None:
 
 
 @pytest.mark.anyio
+async def test_check_queue_handles_to_tickets_dialect_error() -> None:
+    """Verify check_queue provides remediation pointing to /implement and /to-ticket-runner on dialect error."""
+    from runner.domain.exceptions import TicketFormatError
+    from tests.fakes.fake_ticket_repository import FakeTicketRepository
+
+    fake_repo = FakeTicketRepository(
+        error=TicketFormatError(
+            "Ticket file 'docs/tickets/01-spec/T001.md' uses the interactive 'to-tickets' (Human+AI) format, "
+            "which is not supported for autonomous execution by Ticket Runner. "
+            "Execute this ticket interactively with '/implement' or re-author it for "
+            "autonomous execution using '/to-ticket-runner'."
+        )
+    )
+    doctor = Doctor(ticket_store=fake_repo)
+    result = await doctor.check_queue()
+
+    assert result.passed is False
+    assert result.name == CHECK_QUEUE
+    assert "to-tickets" in result.message
+    assert result.remediation is not None
+    assert "/implement" in result.remediation
+    assert "/to-ticket-runner" in result.remediation
+
+
+@pytest.mark.anyio
 async def test_check_agents_md_passes_when_present(tmp_path: Path) -> None:
     """Verify check_agents_md passes when AGENTS.md exists and is readable."""
     agents_file = tmp_path / "AGENTS.md"

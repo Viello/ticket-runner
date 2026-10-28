@@ -231,7 +231,6 @@ def test_parse_security_required_case_and_whitespace_tolerant(
         "Security: false",
         "Security: none",
         "Security:",
-        "Security: required extra",
         "Security: not-required",
     ],
 )
@@ -347,6 +346,228 @@ def test_ticket_entity_has_no_smoke_scenarios_attribute() -> None:
     from runner.domain.ticket import Ticket
 
     assert "smoke_scenarios" not in Ticket.__dataclass_fields__
+
+
+SPECIMEN_A_SAMPLE = """# T124 — Canonical to-ticket-runner Document Model
+**Mode:** HITL
+**Status:** in_progress
+**Status note:** WIP testing
+**Completed:** 2026-10-28T12:00:00Z
+**Spec:** docs/specs/17-human-first-ticket-document-format.md
+**Blocked by:** T123
+**Security:** required (trust boundaries: untrusted markdown)
+**Reasoning:** high
+
+## What to build
+
+The end-to-end behavior from user perspective.
+
+A second paragraph describing more details.
+
+## Jump-start
+
+- **Files/areas to touch:**
+  - `runner/domain/ticket.py`
+- **Seams:** Document I/O boundary
+- **Existing-code anchors:** Ticket dataclass
+- Follow the code where it leads.
+
+## Acceptance criteria
+
+- [x] First criterion completed
+- [ ] Second criterion pending
+
+## Smoke scenarios
+
+- [ ] Scenario: check parsing
+  - Steps: run parser
+
+## Gotchas
+
+- Remember to handle inline rationale in security.
+"""
+
+
+def test_parse_specimen_a_canonical_ticket(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-human-first-ticket-document-format"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-model.md"
+    path.write_text(SPECIMEN_A_SAMPLE, encoding="utf-8")
+
+    ticket = TicketMarkdownParser().parse(path)
+
+    assert ticket.id == "T124"
+    assert ticket.title == "Canonical to-ticket-runner Document Model"
+    assert ticket.mode == "HITL"
+    assert ticket.status is TicketStatus.IN_PROGRESS
+    assert ticket.status_note == "WIP testing"
+    assert ticket.spec_path == "docs/specs/17-human-first-ticket-document-format.md"
+    assert ticket.security_required is True
+    assert ticket.reasoning == "high"
+    assert ticket.requirements == (
+        "The end-to-end behavior from user perspective.",
+        "A second paragraph describing more details.",
+    )
+    assert ticket.jump_start == (
+        "**Files/areas to touch:**",
+        "`runner/domain/ticket.py`",
+        "**Seams:** Document I/O boundary",
+        "**Existing-code anchors:** Ticket dataclass",
+        "Follow the code where it leads.",
+    )
+    assert ticket.acceptance_criteria == (
+        "First criterion completed",
+        "Second criterion pending",
+    )
+    assert ticket.checked_criteria == frozenset({"First criterion completed"})
+    assert ticket.gotchas == ("Remember to handle inline rationale in security.",)
+    assert not hasattr(ticket, "smoke_scenarios")
+
+
+def test_parse_specimen_a_default_mode_and_directory_spec_fallback(tmp_path: Path) -> None:
+    content = """# T125 — Gatekeeper Dispatch Baseline
+**Status:** pending
+
+## What to build
+
+Test dispatch baseline.
+
+## Acceptance criteria
+
+- [ ] Criterion 1
+"""
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-human-first-ticket-document-format"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T125-gatekeeper.md"
+    path.write_text(content, encoding="utf-8")
+
+    ticket = TicketMarkdownParser().parse(path)
+    assert ticket.mode == "AFK"
+    assert ticket.spec_path == "docs/specs/17-human-first-ticket-document-format.md"
+    assert ticket.requirements == ("Test dispatch baseline.",)
+    assert ticket.acceptance_criteria == ("Criterion 1",)
+    assert ticket.checked_criteria == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("header_line", "expected"),
+    [
+        ("**Security:** required (trust boundaries: subprocess shell quoting)", True),
+        ("**Security:** Required (subprocess)", True),
+        ("**Security:** true (trust)", True),
+        ("**Security:** YES", True),
+        ("**Security:** optional", False),
+        ("**Security:** none", False),
+        ("**Security:** false", False),
+    ],
+)
+def test_parse_security_first_token_rationale_tolerant(
+    tmp_path: Path, header_line: str, expected: bool
+) -> None:
+    content = f"""# T126 — Security Check
+**Status:** pending
+{header_line}
+
+## What to build
+Security verification.
+"""
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-human-first"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T126-sec.md"
+    path.write_text(content, encoding="utf-8")
+
+    ticket = TicketMarkdownParser().parse(path)
+    assert ticket.security_required is expected
+
+
+@pytest.mark.parametrize(
+    "status_val",
+    ["ready-for-agent", "ready-for-human", "done", "done (reviewed; security passed)"],
+)
+def test_parse_rejects_specimen_b_interactive_status_with_dialect_guidance(
+    tmp_path: Path, status_val: str
+) -> None:
+    content = f"""# T124: Specimen B Ticket
+
+**Status:** {status_val}
+**Parent:** docs/specs/17-spec.md
+
+**What to build:** Inline prose.
+
+- [ ] Task 1
+"""
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-spec"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-b.md"
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(TicketFormatError) as exc_info:
+        TicketMarkdownParser().parse(path)
+
+    err = str(exc_info.value)
+    assert "to-tickets" in err
+    assert "/implement" in err
+    assert "/to-ticket-runner" in err
+
+
+def test_parse_rejects_specimen_b_labels_or_parent_with_dialect_guidance(tmp_path: Path) -> None:
+    content = """# T124: Specimen B With Labels
+
+**Status:** pending
+**Labels:** ready-for-agent, security
+**Parent:** docs/specs/17-spec.md
+
+## What to build
+Something.
+"""
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-spec"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-labels.md"
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(TicketFormatError) as exc_info:
+        TicketMarkdownParser().parse(path)
+
+    err = str(exc_info.value)
+    assert "to-tickets" in err
+    assert "/implement" in err
+    assert "/to-ticket-runner" in err
+
+
+def test_parse_rejects_specimen_b_inline_what_to_build_without_sections(tmp_path: Path) -> None:
+    content = """# T124: Specimen B Inline What To Build
+
+**Status:** pending
+
+**What to build:** Inline paragraph without ## sections.
+
+- [ ] Task 1
+"""
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-spec"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-inline.md"
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(TicketFormatError) as exc_info:
+        TicketMarkdownParser().parse(path)
+
+    err = str(exc_info.value)
+    assert "to-tickets" in err
+    assert "/implement" in err
+    assert "/to-ticket-runner" in err
+
+
+def test_parse_active_repo_specimen_b_ticket_raises_dialect_error() -> None:
+    target = Path("docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md")
+    if not target.is_file():
+        target = Path("docs/tickets/17-human-first-ticket-document-format/completed/T124-canonical-ticket-model-parser-and-serializer.md")
+    if target.is_file():
+        with pytest.raises(TicketFormatError) as exc_info:
+            TicketMarkdownParser().parse(target)
+        err = str(exc_info.value)
+        assert "to-tickets" in err
+        assert "/implement" in err
+        assert "/to-ticket-runner" in err
 
 
 

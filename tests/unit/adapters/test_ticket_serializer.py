@@ -298,3 +298,92 @@ def test_update_preserves_security_header_with_crlf(tmp_path: Path) -> None:
     result = _read(path)
     assert result == expected
     assert "Security: required\r\n" in result
+
+
+SPECIMEN_A_TICKET = """# T124 — Canonical to-ticket-runner Document Model
+**Mode:** AFK
+**Status:** pending
+**Spec:** docs/specs/17-human-first-ticket-document-format.md
+**Blocked by:** None
+**Security:** required
+**Reasoning:** medium
+
+## What to build
+
+Enable TicketMarkdownParser and Serializer.
+
+## Acceptance criteria
+
+- [x] First criterion completed
+- [ ] Second criterion pending
+
+## Gotchas
+
+- Preserve body bytes byte-for-byte.
+"""
+
+
+def test_update_bold_label_header_in_place(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-spec"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-model.md"
+    path.write_text(SPECIMEN_A_TICKET, encoding="utf-8")
+
+    TicketMarkdownSerializer().update_header(
+        path,
+        {
+            "Status": "completed",
+            "Status note": "reviewed; Security PASSED",
+            "Completed": "2026-10-28T12:00:00Z",
+        },
+    )
+
+    result = path.read_text(encoding="utf-8")
+    expected_header = (
+        "**Mode:** AFK\n"
+        "**Status:** completed\n"
+        "**Status note:** reviewed; Security PASSED\n"
+        "**Completed:** 2026-10-28T12:00:00Z\n"
+        "**Spec:** docs/specs/17-human-first-ticket-document-format.md\n"
+        "**Blocked by:** None\n"
+        "**Security:** required\n"
+        "**Reasoning:** medium\n"
+    )
+    assert expected_header in result
+    # Check body remains byte-for-byte untouched
+    body_part = (
+        "\n## What to build\n\n"
+        "Enable TicketMarkdownParser and Serializer.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [x] First criterion completed\n"
+        "- [ ] Second criterion pending\n\n"
+        "## Gotchas\n\n"
+        "- Preserve body bytes byte-for-byte.\n"
+    )
+    assert result.endswith(body_part)
+
+
+def test_update_bold_label_header_crlf_and_trailing_newline_preserved(tmp_path: Path) -> None:
+    crlf_content = SPECIMEN_A_TICKET.replace("\n", "\r\n").rstrip("\r\n")
+    ticket_dir = tmp_path / "docs" / "tickets" / "17-spec"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T124-model-crlf.md"
+    with path.open("wb") as handle:
+        handle.write(crlf_content.encode("utf-8"))
+
+    TicketMarkdownSerializer().update_header(
+        path,
+        {"Status": "completed", "Completed": "2026-10-28T12:00:00Z"},
+    )
+
+    with path.open("rb") as handle:
+        raw_result = handle.read().decode("utf-8")
+
+    assert "\r\n" in raw_result
+    assert "\n" not in raw_result.replace("\r\n", "")
+    assert not raw_result.endswith("\n")
+    assert not raw_result.endswith("\r")
+    assert "**Status:** completed\r\n" in raw_result
+    assert "**Completed:** 2026-10-28T12:00:00Z\r\n" in raw_result
+    assert "- [x] First criterion completed\r\n" in raw_result
+

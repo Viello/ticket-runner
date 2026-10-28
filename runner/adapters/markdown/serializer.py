@@ -5,15 +5,35 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 import re
+from typing import Any
 
 from runner.adapters.markdown.atomic_write import atomic_write_text
 from runner.domain.exceptions import TicketFormatError
 from runner.domain.ticket import TicketStatus, parse_ticket_status
 
-METADATA_KEY_ORDER = ("Status", "Completed", "Spec")
+METADATA_KEY_ORDER = (
+    "Mode",
+    "Status",
+    "Status note",
+    "Completed",
+    "Spec",
+    "Blocked by",
+    "Security",
+    "Reasoning",
+)
 METADATA_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]*$")
-METADATA_LINE_PATTERN = re.compile(r"^(?P<key>[A-Za-z][A-Za-z0-9 _-]*):(?P<value>.*)$")
+METADATA_LINE_PATTERN = re.compile(
+    r"^(?P<indent>\s*)(?:(?P<bold_inside>\*\*(?P<key_inside>[A-Za-z][A-Za-z0-9 _-]*?):\*\*)|(?P<bold_outside>\*\*(?P<key_outside>[A-Za-z][A-Za-z0-9 _-]*?)\*\*:)|(?P<flat_key>[A-Za-z][A-Za-z0-9 _-]*?):)(?P<value>.*)$"
+)
 HEADING_PATTERN = re.compile(r"^\s*#")
+
+
+def _format_metadata_entry(key: str, value: str, style: str) -> str:
+    if style == "bold_outside":
+        return f"**{key}**: {value}"
+    if style == "flat":
+        return f"{key}: {value}"
+    return f"**{key}:** {value}"
 
 
 class TicketMarkdownSerializer:
@@ -72,30 +92,44 @@ class TicketMarkdownSerializer:
 
         newline = self._detect_newline(lines)
         normalized = self._normalize_metadata(path, metadata)
+        default_style = self._detect_header_style(lines, region_start, region_end)
 
         for key in sorted(normalized, key=self._key_rank):
             value = normalized[key]
             existing = self._find_metadata_line(lines, region_start, region_end, key)
             if value is None:
                 if existing is not None:
-                    index, _ = existing
+                    index, _, _ = existing
                     del lines[index]
                     region_end -= 1
                 continue
             if existing is not None:
-                index, original_key = existing
+                index, original_key, style = existing
                 _, ending = self._split_ending(lines[index])
-                lines[index] = f"{original_key}: {value}{ending}"
+                lines[index] = f"{_format_metadata_entry(original_key, value, style)}{ending}"
                 continue
             insert_at = self._insertion_index(lines, region_start, region_end, key)
             if insert_at > 0:
                 body, ending = self._split_ending(lines[insert_at - 1])
                 if not ending:
                     lines[insert_at - 1] = body + newline
-            lines.insert(insert_at, f"{key}: {value}{newline}")
+            formatted_entry = _format_metadata_entry(key, value, default_style)
+            lines.insert(insert_at, f"{formatted_entry}{newline}")
             region_end += 1
 
         return "".join(lines)
+
+    def _detect_header_style(self, lines: list[str], region_start: int, region_end: int) -> str:
+        for index in range(region_start, region_end):
+            match = METADATA_LINE_PATTERN.match(lines[index])
+            if match:
+                if match.group("key_inside"):
+                    return "bold_inside"
+                if match.group("key_outside"):
+                    return "bold_outside"
+                if match.group("flat_key"):
+                    return "flat"
+        return "bold_inside"
 
     def _metadata_region_start(self, lines: list[str], path: Path) -> int:
         for index, line in enumerate(lines):
@@ -103,15 +137,23 @@ class TicketMarkdownSerializer:
                 return index + 1
         raise TicketFormatError(f"Ticket file '{path}' has no header line")
 
+    def _canonicalize_key(self, key: str) -> str:
+        clean = key.strip()
+        for canonical in METADATA_KEY_ORDER:
+            if clean.lower() == canonical.lower() or clean.replace("_", " ").lower() == canonical.lower():
+                return canonical
+        return clean
+
     def _normalize_metadata(
         self,
         path: Path,
         metadata: Mapping[str, Any],
     ) -> dict[str, str | None]:
         normalized: dict[str, str | None] = {}
-        for key, value in metadata.items():
-            if not isinstance(key, str) or not METADATA_KEY_PATTERN.match(key):
-                raise TicketFormatError(f"Invalid ticket metadata key {key!r} for '{path}'")
+        for raw_key, value in metadata.items():
+            if not isinstance(raw_key, str) or not METADATA_KEY_PATTERN.match(raw_key):
+                raise TicketFormatError(f"Invalid ticket metadata key {raw_key!r} for '{path}'")
+            key = self._canonicalize_key(raw_key)
             if value is None:
                 normalized[key] = None
                 continue
@@ -123,13 +165,13 @@ class TicketMarkdownSerializer:
                 text = value.strip()
             else:
                 raise TicketFormatError(
-                    f"Ticket metadata value for '{key}' must be a string, number, or TicketStatus, got: {value!r}"
+                    f"Ticket metadata value for '{raw_key}' must be a string, number, or TicketStatus, got: {value!r}"
                 )
             if not text:
-                raise TicketFormatError(f"Ticket metadata value for '{key}' must not be empty")
+                raise TicketFormatError(f"Ticket metadata value for '{raw_key}' must not be empty")
             if "\r" in text or "\n" in text:
                 raise TicketFormatError(
-                    f"Ticket metadata value for '{key}' must not contain newline characters"
+                    f"Ticket metadata value for '{raw_key}' must not contain newline characters"
                 )
             if key.lower() == "status":
                 text = parse_ticket_status(text, source=f"ticket file '{path}'").value
@@ -138,11 +180,23 @@ class TicketMarkdownSerializer:
 
     def _find_metadata_line(
         self, lines: list[str], region_start: int, region_end: int, key: str
-    ) -> tuple[int, str] | None:
+    ) -> tuple[int, str, str] | None:
+        key_target = key.strip().lower().replace("_", " ")
         for index in range(region_start, region_end):
             match = METADATA_LINE_PATTERN.match(lines[index])
-            if match and match.group("key").strip().lower() == key.lower():
-                return index, match.group("key")
+            if match:
+                k = (
+                    match.group("key_inside")
+                    or match.group("key_outside")
+                    or match.group("flat_key")
+                )
+                if k and (k.strip().lower() == key_target or k.strip().lower().replace("_", " ") == key_target):
+                    style = (
+                        "bold_inside"
+                        if match.group("key_inside")
+                        else ("bold_outside" if match.group("key_outside") else "flat")
+                    )
+                    return index, k.strip(), style
         return None
 
     def _insertion_index(
@@ -157,8 +211,9 @@ class TicketMarkdownSerializer:
         return position
 
     def _key_rank(self, key: str) -> int:
+        clean = key.strip()
         for index, canonical in enumerate(METADATA_KEY_ORDER):
-            if key.lower() == canonical.lower():
+            if clean.lower() == canonical.lower() or clean.replace("_", " ").lower() == canonical.lower():
                 return index
         return len(METADATA_KEY_ORDER)
 
@@ -166,7 +221,14 @@ class TicketMarkdownSerializer:
         match = METADATA_LINE_PATTERN.match(line)
         if match is None:
             return -1
-        return self._key_rank(match.group("key").strip())
+        k = (
+            match.group("key_inside")
+            or match.group("key_outside")
+            or match.group("flat_key")
+        )
+        if not k:
+            return -1
+        return self._key_rank(k.strip())
 
     @staticmethod
     def _detect_newline(lines: list[str]) -> str:

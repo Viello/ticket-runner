@@ -7,7 +7,6 @@ import pytest
 from runner.adapters.markdown.parser import TicketMarkdownParser
 from runner.adapters.markdown.ticket_store import DirectoryTicketStore
 from runner.domain.exceptions import TicketFormatError
-from runner.domain.ticket import TicketStatus
 from runner.ports.ticket_repository import TicketRepository
 
 
@@ -527,3 +526,82 @@ def test_finalize_completed_idempotent_when_ticket_id_already_moved_to_completed
     content = dest.read_text(encoding="utf-8")
     assert "Status: completed" in content
     assert "Completed: 2026-10-27T12:00:00Z" in content
+
+
+SPECIMEN_A_STORE_SAMPLE = """# T124 — Canonical to-ticket-runner Document Model
+**Mode:** AFK
+**Status:** pending
+**Spec:** docs/specs/17-human-first-ticket-document-format.md
+**Blocked by:** None
+**Security:** required
+**Reasoning:** medium
+
+## What to build
+
+Implement parser and serializer.
+
+## Acceptance criteria
+
+- [x] First criterion completed
+- [ ] Second criterion pending
+
+## Gotchas
+
+- Preserve body bytes byte-for-byte.
+"""
+
+
+def test_finalize_completed_specimen_a_with_status_note_preserves_body(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "17-human-first-ticket-document-format"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T124-model.md"
+    ticket_file.write_text(SPECIMEN_A_STORE_SAMPLE, encoding="utf-8")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed(
+        ticket_file,
+        completed_at="2026-10-28T12:00:00Z",
+        status_note="reviewed; Security PASSED",
+    )
+
+    assert dest == spec_dir / "completed" / "T124-model.md"
+    assert dest.is_file()
+    content = dest.read_text(encoding="utf-8")
+
+    expected_header = (
+        "**Mode:** AFK\n"
+        "**Status:** completed\n"
+        "**Status note:** reviewed; Security PASSED\n"
+        "**Completed:** 2026-10-28T12:00:00Z\n"
+        "**Spec:** docs/specs/17-human-first-ticket-document-format.md\n"
+        "**Blocked by:** None\n"
+        "**Security:** required\n"
+        "**Reasoning:** medium\n"
+    )
+    assert expected_header in content
+
+    # Acceptance criteria checkboxes and body untouched
+    assert "- [x] First criterion completed\n- [ ] Second criterion pending\n" in content
+    assert "- Preserve body bytes byte-for-byte.\n" in content
+
+
+def test_finalize_skipped_specimen_a_with_status_note(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "17-human-first-ticket-document-format"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T124-model.md"
+    ticket_file.write_text(SPECIMEN_A_STORE_SAMPLE, encoding="utf-8")
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_skipped(
+        ticket_file,
+        status_note="Skipped by operator at HITL pre-dispatch gate",
+    )
+
+    assert dest == spec_dir / "completed" / "T124-model.md"
+    assert dest.is_file()
+    content = dest.read_text(encoding="utf-8")
+
+    assert "**Status:** skipped\n" in content
+    assert "**Status note:** Skipped by operator at HITL pre-dispatch gate\n" in content
+    assert "- [x] First criterion completed\n" in content
+

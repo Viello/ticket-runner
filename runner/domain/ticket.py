@@ -11,7 +11,7 @@ from runner.domain.exceptions import TicketFormatError
 
 TICKET_ID_PATTERN = re.compile(r"^T\d{3,}$")
 
-_SECTION_FIELDS = ("requirements", "acceptance_criteria", "gotchas")
+_SECTION_FIELDS = ("requirements", "acceptance_criteria", "gotchas", "jump_start")
 
 
 class TicketStatus(Enum):
@@ -19,7 +19,10 @@ class TicketStatus(Enum):
 
     PENDING = "pending"
     RUNNING = "running"
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
     SKIPPED = "skipped"
 
 
@@ -55,6 +58,10 @@ class Ticket:
     security_required: bool = False
     reasoning: str = ""
     slug: str = ""
+    mode: str = "AFK"
+    status_note: str | None = None
+    jump_start: tuple[str, ...] = ()
+    checked_criteria: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not TICKET_ID_PATTERN.match(self.id):
@@ -72,6 +79,20 @@ class Ticket:
 
         if not isinstance(self.status, TicketStatus):
             object.__setattr__(self, "status", parse_ticket_status(self.status))
+
+        if not isinstance(self.mode, str):
+            raise TicketFormatError(f"Ticket mode must be a str, got: {self.mode!r}")
+        normalized_mode = self.mode.strip().upper()
+        if normalized_mode not in ("AFK", "HITL"):
+            raise TicketFormatError(
+                f"Ticket mode must be 'AFK' or 'HITL', got: {self.mode!r}"
+            )
+        object.__setattr__(self, "mode", normalized_mode)
+
+        if self.status_note is not None and not isinstance(self.status_note, str):
+            raise TicketFormatError(
+                f"Ticket status_note must be a str or None, got: {self.status_note!r}"
+            )
 
         for field in _SECTION_FIELDS:
             value = getattr(self, field)
@@ -92,6 +113,23 @@ class Ticket:
                     raise TicketFormatError(
                         f"Ticket {field} entries must be strings, got: {entry!r}"
                     )
+
+        if isinstance(self.checked_criteria, (str, bytes)):
+            raise TicketFormatError(
+                f"Ticket checked_criteria must be an iterable of strings, got: {self.checked_criteria!r}"
+            )
+        if not isinstance(self.checked_criteria, frozenset):
+            try:
+                object.__setattr__(self, "checked_criteria", frozenset(self.checked_criteria))
+            except TypeError:
+                raise TicketFormatError(
+                    f"Ticket checked_criteria must be an iterable of strings, got: {self.checked_criteria!r}"
+                ) from None
+        for entry in self.checked_criteria:
+            if not isinstance(entry, str):
+                raise TicketFormatError(
+                    f"Ticket checked_criteria entries must be strings, got: {entry!r}"
+                )
 
         if not isinstance(self.path, Path):
             try:

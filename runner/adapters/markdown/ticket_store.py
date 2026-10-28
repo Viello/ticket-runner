@@ -360,17 +360,24 @@ class DirectoryTicketStore(TicketRepository):
         )
 
     def _format_skipped_metadata(
-        self, details: str | Mapping[str, Any] | None
+        self,
+        details: str | Mapping[str, Any] | None,
+        status_note: str | None = None,
     ) -> dict[str, Any]:
         """Convert failure details into header metadata dictionary with Status: skipped."""
         metadata: dict[str, Any] = {"Status": TicketStatus.SKIPPED}
+        if status_note is not None:
+            metadata["Status note"] = status_note
+
         if details is None:
             return metadata
 
         if isinstance(details, Mapping):
             for key, value in details.items():
                 k = str(key).strip()
-                if k.islower():
+                if k.lower() in ("status note", "status_note"):
+                    k = "Status note"
+                elif k.islower():
                     k = k.replace("_", " ").title()
                 if isinstance(value, str):
                     flattened = " ".join(line.strip() for line in value.splitlines() if line.strip())
@@ -428,6 +435,7 @@ class DirectoryTicketStore(TicketRepository):
         self,
         ticket: Ticket | Path | str,
         completed_at: datetime | str | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Mark a ticket as completed, stamp timestamp, and relocate to completed/.
 
@@ -435,6 +443,7 @@ class DirectoryTicketStore(TicketRepository):
             ticket: Ticket entity, file Path, or identifier string.
             completed_at: Optional completion timestamp (datetime or ISO-8601 string).
                 Defaults to current UTC time.
+            status_note: Optional human commentary or review summary.
 
         Returns:
             Destination Path of the relocated ticket file.
@@ -445,10 +454,13 @@ class DirectoryTicketStore(TicketRepository):
         """
         source_path = self._resolve_ticket_path(ticket, allow_premature_completed=True)
         timestamp_str = self._format_completed_at(completed_at)
-        metadata = {
+        metadata: dict[str, Any] = {
             "Status": TicketStatus.COMPLETED,
             "Completed": timestamp_str,
         }
+        if status_note is not None:
+            metadata["Status note"] = status_note
+
         if source_path.parent.name == ARCHIVED_DIRECTORY_NAME:
             completed_dir = source_path.parent
             if not completed_dir.exists():
@@ -465,12 +477,14 @@ class DirectoryTicketStore(TicketRepository):
         self,
         ticket: Ticket | Path | str,
         details: str | Mapping[str, Any] | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Mark a ticket as skipped, stamp failure details, and relocate to completed/.
 
         Args:
             ticket: Ticket entity, file Path, or identifier string.
             details: Optional failure reason or dictionary of failure metadata.
+            status_note: Optional human commentary or skip reason.
 
         Returns:
             Destination Path of the relocated ticket file.
@@ -480,5 +494,5 @@ class DirectoryTicketStore(TicketRepository):
                 collides.
         """
         source_path = self._resolve_ticket_path(ticket)
-        metadata = self._format_skipped_metadata(details)
+        metadata = self._format_skipped_metadata(details, status_note=status_note)
         return self._relocate_ticket(source_path, metadata)
