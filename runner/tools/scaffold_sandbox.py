@@ -367,6 +367,7 @@ def parse_sandbox_agents_md(text: str) -> tuple[str, str, str]:
 
 
 # Fallback when no upstream AGENTS.md is discoverable. Mirrors the default-mode
+# Fallback when no upstream AGENTS.md is discoverable. Mirrors the default-mode
 # bullet trim (per T005c resolution).
 FALLBACK_CURATED_SUBSET: str = (
     "## Invariants\n"
@@ -380,6 +381,31 @@ FALLBACK_CURATED_SUBSET: str = (
     "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
 )
 
+DEFAULT_UPSTREAM_AGENTS_MD: str = """# AGENTS.md
+
+Target Project operating rules for Ticket Runner autonomous queue execution.
+
+## Invariants
+- All automated work happens on agent/ticket-runner; the Runner stages and commits, and .git/hooks/pre-push blocks pushes. Never git push.
+- Commit format: Title must be <type>(<scope>): <Title> where <scope> names the architectural layer or subsystem, never a ticket number. Follow with a blank line and hyphen-bulleted imperative changes.
+- Worker executes tickets via configured worker.execution_skill, performing pre-signal reviews, but never commits directly.
+- Worker<->Runner messages are durable JSON files (.agent/signals/{ticket_id}_ready.json, .agent/questions/{ticket_id}.json) - never parse model stdout for state.
+- Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker.
+- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes .agent/checkpoints/{ticket_id}/handoff.md.
+- Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (Status: completed).
+- .agent/ is untracked runtime state; git-ignore it when implementing.
+- Human verification happens after green checks via a /live-qa session the human runs; the Worker drafts no scenarios and self-reports no manual verification.
+
+## Environment
+- Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
+
+## Agent skills
+- `.agents/skills/` vendors the user's global skill catalog; handoff, claude-handoff, to-tickets have project-specific edits.
+- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
+"""
+
 
 def build_agents_md_content(
     preamble: str,
@@ -389,19 +415,21 @@ def build_agents_md_content(
 ) -> str:
     """Build AGENTS.md content from a preamble plus the curated upstream subset.
 
-    Resolves the upstream AGENTS.md (falling back to the default-mode curated
-    subset when none is discoverable), extracts the invariant-bearing sections,
+    Resolves the upstream AGENTS.md (falling back to the canonical Target Project
+    subset when none is specified), extracts the invariant-bearing sections,
     and stamps the result with today's sync date. Shared by the sandbox
     scaffolder and the interactive ``init`` scaffolder.
     """
     upstream_file = _resolve_upstream_agents_md(upstream_agents_md)
     if upstream_file and upstream_file.is_file():
-        curated_subset = extract_curated_subset(
-            upstream_file.read_text(encoding="utf-8"),
-            skills_mode=skills_mode,
-        )
+        source_text = upstream_file.read_text(encoding="utf-8")
     else:
-        curated_subset = FALLBACK_CURATED_SUBSET
+        source_text = DEFAULT_UPSTREAM_AGENTS_MD
+
+    curated_subset = extract_curated_subset(
+        source_text,
+        skills_mode=skills_mode,
+    )
     today = datetime.date.today().isoformat()
     return format_sandbox_agents_md(preamble, today, curated_subset)
 
@@ -426,15 +454,6 @@ def _resolve_upstream_agents_md(override: Path | None = None) -> Path | None:
     """Locate upstream AGENTS.md file with fallback logic."""
     if override is not None and override.is_file():
         return override
-
-    candidates = [
-        Path(__file__).resolve().parents[2] / "AGENTS.md",
-        Path(r"D:\Projects\AGENTS.md"),
-        Path.cwd() / "AGENTS.md",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
     return None
 
 
