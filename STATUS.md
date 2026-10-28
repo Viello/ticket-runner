@@ -1,22 +1,22 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-28T10:55:00
+last_updated: 2026-10-28T11:12:00
 author: Gab
 branch: agent/ticket-runner
 active_ticket: docs/specs/17-human-first-ticket-document-format.md
 status: ready
 stopped_at:
   file: "docs/specs/17-human-first-ticket-document-format.md"
-  symbol: "Spec 17 drafted and settled; live run against agent-skills passed"
+  symbol: "Spec 17 committed; new catalog skills vendored and verified"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Live run of `py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills start --local-only` succeeded as planned (`T101` and `T102` Gatekeeper-verified and committed); Spec 17 (`17-human-first-ticket-document-format`) settled and ready for decomposition.
-- **Last Touchpoint**: [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) on branch `agent/ticket-runner` (working tree clean except untracked Spec 17 and observations).
-- **Blockers**: None. Live run completed with 0 errors and all tickets finalized.
-- **Next Step**: Commit [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) and decompose into tracer-bullet tickets under `docs/tickets/17-human-first-ticket-document-format/`.
+- **Focus**: Upstream catalog skills (`brainstorming`, `diagnosing-superpowers`, `finishing-a-development-branch`) merged and vendored into `.agents/skills/`; full test suite green (1,948 passed).
+- **Last Touchpoint**: `.agents/skills/` vendoring commit `230744a` on branch `agent/ticket-runner` (working tree clean).
+- **Blockers**: None. Live run and vendoring complete with 0 errors.
+- **Next Step**: Decompose [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into tracer-bullet tickets under `docs/tickets/17-human-first-ticket-document-format/`.
 
 ## 🎯 Active Tickets & Progress
 - [x] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **COMPLETED**
@@ -47,6 +47,11 @@ stopped_at:
 - **Last Stopped At**: [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) at line 1; live test in `D:\Repos\agent-skills` fully passed.
 
 ## 📦 Recent Completed Work & Key Decisions
+- **New Canonical Skills Vendored (`230744a`)**:
+  - Merged upstream `origin/main` into local clone [D:\Repos\agent-skills](file:///D:/Repos/agent-skills) (`500be3a`), cleanly harmonizing the 3 new skills and catalog anatomy documentation.
+  - Vendored [`brainstorming`](file:///D:/Projects/.agents/skills/brainstorming), [`diagnosing-superpowers`](file:///D:/Projects/.agents/skills/diagnosing-superpowers), and [`finishing-a-development-branch`](file:///D:/Projects/.agents/skills/finishing-a-development-branch) into [D:\Projects\.agents\skills/](file:///D:/Projects/.agents/skills).
+  - Preserved protected custom skills (`handoff`, `claude-handoff`, `to-tickets`) untouched.
+  - Verified test suite: 1,948 passed, 0 failures.
 - **Live Run on Target Project Completed Successfully (2026-10-27/28)**:
   - Command: `py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\agent-skills start --local-only`
   - `T101`: Gatekeeper verified, approved, committed as `d3ca102` (`feat(queue): Add Codex Interface Metadata to Catalog Skills Currently Missing It`)
@@ -66,6 +71,5 @@ stopped_at:
 - **Dispatch Baseline Enforcement (Spec 17)**: When implementing Spec 17, the dispatch baseline taken by the Gatekeeper before Worker execution is the security boundary preventing prompt injection or unauthorized ticket rewriting. Refusal consumes an attempt (ADR 0017).
 
 ## ⏭️ Next 1–3 Actionable Steps
-1. `Commit Spec 17`: Commit [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) to `agent/ticket-runner`.
-2. `Decompose Spec 17 into Tickets`: Run `/to-tickets` against [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into `docs/tickets/17-human-first-ticket-document-format/`.
-3. `Implement Spec 17 Queue`: Execute the tracer-bullet tickets test-first via `/implement`.
+1. `Decompose Spec 17 into Tickets`: Run `/to-tickets` against [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into `docs/tickets/17-human-first-ticket-document-format/`.
+2. `Implement Spec 17 Queue`: Execute the tracer-bullet tickets test-first via `/implement`.
