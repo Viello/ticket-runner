@@ -245,7 +245,7 @@ def test_prompt_conditional_security_review_toggle() -> None:
     )
 
     assert ".agents/skills/security-review/SKILL.md" in prompt_sec
-    assert ".agents/skills/security-review/SKILL.md" in prompt_no_sec
+    assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
     assert "Explicit Security Mandate" in prompt_sec
     assert "Security: required" in prompt_sec
     assert "Explicit Security Mandate" not in prompt_no_sec
@@ -534,7 +534,7 @@ def test_prompt_states_spec_17_checkbox_tick_permission_boundary() -> None:
 
 
 def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> None:
-    ticket = _make_ticket(ticket_id="T127")
+    ticket = _make_ticket(ticket_id="T127", security_required=True)
     prompt = build_prompt(
         ticket=ticket,
         spec_excerpt=SAMPLE_SPEC_EXCERPT,

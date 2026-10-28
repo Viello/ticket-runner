@@ -1,22 +1,22 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-28T15:48:00
+last_updated: 2026-10-28T16:15:00
 author: Gab
 branch: agent/ticket-runner
-active_ticket: docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md
+active_ticket: docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md
 status: ready
 stopped_at:
-  file: "docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md"
-  symbol: "T127 completed and verified; ready to implement T128"
+  file: "docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md"
+  symbol: "T128 completed and verified; ready to implement T129"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
 - **Focus**: Executing [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) tracer-bullet tickets (`T124`–`T129`).
-- **Last Touchpoint**: Implemented `T127` (`feat(application): Plumb Default implement-ticket-runner Skill and Canonical Prompt Builder`), verified across targeted and full suites (142 and 1,766 passed), code-reviewed.
+- **Last Touchpoint**: Implemented `T128` (`feat(skills): Dual-Track Skills Catalog and Local Vendoring`), verified 50 canonical skills across `Viello/agent-skills` and `.agents/skills/`, 8/8 dual-track unit tests and 71/71 targeted tests passed.
 - **Blockers**: None.
-- **Next Step**: Implement [T128-dual-track-skills-catalog-and-vendoring.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md) test-first via `/implement`.
+- **Next Step**: Implement [T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md) test-first via `/implement`.
 
 ## 🎯 Active Tickets & Progress
 - [x] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **COMPLETED**
@@ -37,7 +37,7 @@ stopped_at:
     - [x] `T125`: [Gatekeeper Dispatch-Baseline Tick Boundary and Evidence Card Unticked Criteria](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T125-gatekeeper-dispatch-baseline-tick-boundary-and-evidence-card.md)
     - [x] `T126`: [Pre-Dispatch `HITL` Gate in Gatekeeper, Intervention Port, and Terminal/Discord Prompts](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T126-pre-dispatch-hitl-gate-and-intervention-prompts.md)
     - [x] `T127`: [Default `implement-ticket-runner` Execution Skill Plumbing and Canonical Prompt Builder](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T127-default-implement-ticket-runner-skill-and-prompt-builder.md)
-    - [ ] `T128`: [Dual-Track Skills Catalog (`Viello/agent-skills`) and Local `.agents/skills/` Vendoring](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md)
+    - [x] `T128`: [Dual-Track Skills Catalog (`Viello/agent-skills`) and Local `.agents/skills/` Vendoring](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/completed/T128-dual-track-skills-catalog-and-vendoring.md)
     - [ ] `T129`: [Queue Migrations, End-to-End Spec 17 Verification Suite, and Spec-Closing Living Docs Alignment](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md)
 
 ## 🚧 Exact Work-In-Progress

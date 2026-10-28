@@ -69,25 +69,42 @@ Use as the working spec for diagnosis. On the squash path this draft is in-sessi
 
 <ticket-runner-template>
 # T<NNN> — Regression: <Scenario Title>
-Status: pending
-Spec: docs/specs/<spec-slug>.md
-Blocked by: None
+**Mode:** AFK
+**Status:** pending
+**Spec:** docs/specs/<spec-slug>.md
+**Blocked by:** None
 
-### Requirements
-- Fix regression identified during live-qa session `<slug>`:
-  - Scenario: <Scenario Title>
-  - Observed: <observed_output>
+## What to build
+
+Fix regression identified during live-qa session `<slug>`:
+- Scenario: <Scenario Title>
+- Observed: <observed_output>
+- Expected: <expected_output>
+
+## Jump-start
+
+- **Files/areas to touch:**
+  - <files_to_touch>
+- **Seams:** <seams_or_modules>
+- **Existing-code anchors:** None
+- **Verification commands:** <verification_command>
+
+## Acceptance criteria
+
+- [ ] Live-qa scenario "<Scenario Title>" passes verification.
+- [ ] Automated regression test added covering the failure mode.
+
+## Smoke scenarios
+
+- [ ] Scenario: <Scenario Title>
+  - Setup: <setup_steps>
+  - Why: Verify regression fix
+  - Steps:
+    1. <test_steps>
   - Expected: <expected_output>
-- Jump-start:
-  - Files to touch: <files_to_touch>
-  - Seams to work at: <seams_or_modules>
-  - Verification: <verification_command>
 
-### Acceptance Criteria
-- Live-qa scenario "<Scenario Title>" passes verification.
-- Automated regression test added covering the failure mode.
+## Gotchas
 
-### Gotchas
 - <Triage insights or quirks noted during failure capture>
 </ticket-runner-template>
 

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Implement Ticket Runner"
+  short_description: "Autonomous worker execution for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false
