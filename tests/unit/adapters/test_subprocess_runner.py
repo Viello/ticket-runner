@@ -721,3 +721,116 @@ def test_subprocess_runner_preserves_multiline_arg_via_batch_wrapper(tmp_path: P
 
 
 
+
+
+# --- Windows Shell Quoting & Execution Tests (T120) ---
+
+
+def test_is_windows_cmd_shell_detection() -> None:
+    """Verify is_windows_cmd_shell accurately distinguishes cmd.exe /c from other binaries."""
+    from runner.adapters.cli.subprocess_runner import is_windows_cmd_shell
+
+    if sys.platform != "win32":
+        pytest.skip("Windows-only shell detection test")
+
+    assert is_windows_cmd_shell(r"C:\Windows\System32\cmd.exe", ["/d", "/s", "/c", "dir"]) is True
+    assert is_windows_cmd_shell(r"C:\Windows\System32\cmd.exe", ["/C", "dir"]) is True
+    assert is_windows_cmd_shell("cmd.exe", ["/c", "dir"]) is True
+    assert is_windows_cmd_shell("cmd", ["/c", "dir"]) is True
+    assert is_windows_cmd_shell(r"C:\Windows\System32\cmd.exe", ["/k", "dir"]) is False
+    assert is_windows_cmd_shell(r"C:\Program Files\Git\bin\git.exe", ["status"]) is False
+    assert is_windows_cmd_shell(r"C:\node.exe", ["opencode", "run", "--format", "json"]) is False
+
+
+def test_build_windows_cmd_shell_string_preserves_switches_and_quotes() -> None:
+    """Verify build_windows_cmd_shell_string preserves /d /s switches and wraps command in outer quotes."""
+    from runner.adapters.cli.subprocess_runner import build_windows_cmd_shell_string
+
+    exe = r"C:\Windows\System32\cmd.exe"
+
+    # Already has /d /s /c
+    s1 = build_windows_cmd_shell_string(exe, ["/d", "/s", "/c", 'python -c "print(\'hi\')"'])
+    assert s1 == '"C:\\Windows\\System32\\cmd.exe" /d /s /c "python -c "print(\'hi\')""'
+
+    # Missing /d /s - automatically inserted
+    s2 = build_windows_cmd_shell_string(exe, ["/c", 'python -c "print(\'hi\')"'])
+    assert s2 == '"C:\\Windows\\System32\\cmd.exe" /d /s /c "python -c "print(\'hi\')""'
+
+    # Multi-token command after /c
+    s3 = build_windows_cmd_shell_string(exe, ["/c", "echo", "hello", "world"])
+    assert s3 == r'"C:\Windows\System32\cmd.exe" /d /s /c "echo hello world"'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shell quoting test")
+def test_subprocess_runner_executes_windows_shell_with_embedded_quotes() -> None:
+    """Verify SubprocessRunner.run and spawn execute complex quoted commands via cmd.exe /d /s /c."""
+    from runner.application.gatekeeper import build_shell_argv
+
+    runner = SubprocessRunner()
+    complex_cmd = (
+        'python -c "import glob,yaml; '
+        'fs=glob.glob(\'*/agents/openai.yaml\'); '
+        'print(\'validated %d openai.yaml files\' % len(fs))"'
+    )
+
+    argv = build_shell_argv(complex_cmd, "win32")
+
+    async def _test() -> None:
+        # Test run()
+        result = await runner.run(argv)
+        assert result.exit_code == 0
+        assert result.success is True
+        assert "validated 0 openai.yaml files" in result.stdout
+
+        # Test spawn()
+        handle = await runner.spawn(argv)
+        lines = []
+        async for line in handle.stdout_lines():
+            lines.append(line)
+        code = await handle.wait()
+        assert code == 0
+        assert any("validated 0 openai.yaml files" in line for line in lines)
+
+    asyncio.run(_test())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shell quoting test")
+def test_subprocess_runner_windows_shell_quoting_matrix() -> None:
+    """Verify commands with various quote, space, semicolon, and chaining styles run identically."""
+    from runner.application.gatekeeper import build_shell_argv
+
+    runner = SubprocessRunner()
+    cases = [
+        ('"python" -c "print(\'hello\')"', "hello"),
+        ('python -c "print(1)" && python -c "print(2)"', "1\n2"),
+        ('python -c "x = 10; y = 20; print(f\'sum={x+y}\')"', "sum=30"),
+    ]
+
+    async def _test() -> None:
+        for cmd_str, expected in cases:
+            argv = build_shell_argv(cmd_str, "win32")
+            result = await runner.run(argv)
+            assert result.exit_code == 0, f"Failed on {cmd_str}: {result.stderr}"
+            assert expected in result.stdout.replace("\r\n", "\n").strip()
+
+    asyncio.run(_test())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object test")
+def test_subprocess_runner_windows_shell_terminates_job_tree() -> None:
+    """Verify that terminating a spawned Windows shell process reaps descendant processes."""
+    from runner.application.gatekeeper import build_shell_argv
+
+    runner = SubprocessRunner()
+    sleep_cmd = 'python -c "import time; time.sleep(30)"'
+    argv = build_shell_argv(sleep_cmd, "win32")
+
+    async def _test() -> None:
+        handle = await runner.spawn(argv)
+        assert handle.pid > 0
+        await asyncio.sleep(0.3)
+        await handle.terminate()
+        code = await handle.wait()
+        assert code is not None
+
+    asyncio.run(_test())

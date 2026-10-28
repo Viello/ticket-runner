@@ -32,6 +32,7 @@ from runner.domain.runtime_paths import (
 from runner.domain.telemetry import BudgetAction
 from runner.domain.ticket import Ticket
 from runner.ports.signal_repository import SignalRepository
+from runner.ports.terminal_display import TerminalDisplay, paused_display
 
 CLOCK_SLACK_SECONDS: float = 2.0
 """Clock slack in seconds for checkpoint freshness validation (ADR 0014).
@@ -111,7 +112,10 @@ class EscalationNotice:
         return super().__eq__(other)
 
 
-def default_recovery_confirmation(escalation: EscalationNotice | Any) -> bool:
+def default_recovery_confirmation(
+    escalation: EscalationNotice | Any,
+    display: TerminalDisplay | None = None,
+) -> bool:
     """Default interactive terminal prompt mirroring CleanSlateArchiver's confirmation.
 
     Safely declines (returns False) on closed stdin, EOF, OSError, or non-interactive runs.
@@ -123,8 +127,9 @@ def default_recovery_confirmation(escalation: EscalationNotice | Any) -> bool:
         f"Synthesize emergency checkpoint and resume with a fresh session? [Y/n]: "
     )
     try:
-        response = input(prompt).strip().lower()
-        return response in ("y", "yes", "")
+        with paused_display(display):
+            response = input(prompt).strip().lower()
+            return response in ("y", "yes", "")
     except (EOFError, KeyboardInterrupt, OSError):
         return False
 
@@ -485,6 +490,19 @@ class HandoffCoordinator:
 
         return SingleCycleStatus.READY
 
+    def _is_valid_ready_signal_present(
+        self, ticket_id: str, result_ready: bool = False
+    ) -> bool:
+        """Check whether a ready signal exists per ADR 0017 and Spec 16."""
+        if result_ready or self._runtime_paths.ready_signal_path(ticket_id).is_file():
+            return True
+        if self._signal_repository is not None:
+            try:
+                return self._signal_repository.read_ready(ticket_id) is not None
+            except Exception:
+                return False
+        return False
+
     async def _handle_escalation(
         self,
         ticket: Ticket,
@@ -692,6 +710,10 @@ class HandoffCoordinator:
                 except Exception:
                     pass
 
+            # Precedence: check if ready signal is already on disk before requesting kill
+            if self._is_valid_ready_signal_present(ticket.id):
+                return
+
             if action == BudgetAction.CEILING:
                 active_supervisor.request_kill(RunTerminationReason.KILLED_CEILING)
             elif action == BudgetAction.HANDOFF:
@@ -729,6 +751,25 @@ class HandoffCoordinator:
                     if current_session_id and is_valid_session_id(current_session_id)
                     else None
                 )
+
+                # 1.5. Precedence: a valid ready signal on disk takes precedence over late
+                # KILLED_CEILING / KILLED_HANDOFF budget breaches
+                is_ready_signal = self._is_valid_ready_signal_present(
+                    ticket.id, result_ready=result.ready_signal_present
+                )
+                if is_ready_signal:
+                    return WorkerRunResult(
+                        status=SingleCycleStatus.READY,
+                        session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
+                        resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
+                        session_ids=tuple(observed_session_ids),
+                        handoffs=consecutive_handoffs,
+                        occupancy=current_occupancy,
+                        ready_signal_present=True,
+                        handoff_requested_at=last_handoff_requested_at,
+                        checkpoint_path=last_checkpoint_path,
+                        run_results=tuple(session_runs),
+                    )
 
                 # 2. Check for CEILING breach on the session
                 if (
@@ -893,32 +934,7 @@ class HandoffCoordinator:
                     current_session_id = None
                     continue
 
-                # 5. Check if ready signal is present
-                is_ready_signal = (
-                    result.ready_signal_present
-                    or self._runtime_paths.ready_signal_path(ticket.id).is_file()
-                )
-                if not is_ready_signal and self._signal_repository is not None:
-                    try:
-                        is_ready_signal = self._signal_repository.read_ready(ticket.id) is not None
-                    except Exception:
-                        pass
-
-                if is_ready_signal:
-                    return WorkerRunResult(
-                        status=SingleCycleStatus.READY,
-                        session_id=observed_session_ids[0] if observed_session_ids else source_session_id,
-                        resumed_session_id=observed_session_ids[-1] if len(observed_session_ids) > 1 else None,
-                        session_ids=tuple(observed_session_ids),
-                        handoffs=consecutive_handoffs,
-                        occupancy=current_occupancy,
-                        ready_signal_present=True,
-                        handoff_requested_at=last_handoff_requested_at,
-                        checkpoint_path=last_checkpoint_path,
-                        run_results=tuple(session_runs),
-                    )
-
-                # 5.5. Check if pending or malformed question signal exists
+                # 5. Check if pending or malformed question signal exists
                 is_question_signal = False
                 if self._signal_repository is not None:
                     try:

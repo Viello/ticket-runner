@@ -9,6 +9,9 @@ docs/tickets/.queue.lock
 # Atomic write temporaries (never staged by the Gatekeeper's `git add .`)
 *.tmp
 
+# Spec 15 — in-repo live-test harness (isolated git repo, never tracked here)
+live-test-target/
+
 
 # Configuration & environment secrets
 config.yaml

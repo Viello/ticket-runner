@@ -214,25 +214,65 @@ class DirectoryTicketStore(TicketRepository):
 
         return False
 
-    def _resolve_ticket_path(self, ticket: Ticket | Path | str) -> Path:
-        """Resolve a ticket argument to an existing ticket file Path."""
+    def _resolve_ticket_path(
+        self,
+        ticket: Ticket | Path | str,
+        *,
+        allow_premature_completed: bool = False,
+    ) -> Path:
+        """Resolve a ticket argument to an existing ticket file Path.
+
+        Args:
+            ticket: Ticket entity, file Path, or identifier string.
+            allow_premature_completed: If True and the expected pending ticket file
+                is missing because a Worker prematurely relocated it into completed/,
+                resolves to the file inside completed/. Explicitly passing a path whose
+                parent is completed/ still raises TicketFormatError.
+        """
+        was_explicitly_completed = False
+
         if isinstance(ticket, Ticket):
             source_path = Path(ticket.path)
+            was_explicitly_completed = source_path.parent.name == ARCHIVED_DIRECTORY_NAME
         elif isinstance(ticket, Path):
             source_path = ticket
+            was_explicitly_completed = source_path.parent.name == ARCHIVED_DIRECTORY_NAME
         elif isinstance(ticket, str):
             candidate = Path(ticket)
+            was_explicitly_completed = candidate.parent.name == ARCHIVED_DIRECTORY_NAME
             if candidate.is_absolute() and candidate.is_file():
                 source_path = candidate
+            elif (
+                allow_premature_completed
+                and candidate.is_absolute()
+                and (candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name).is_file()
+            ):
+                source_path = candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name
             elif (self._root_dir / candidate).is_file():
                 source_path = self._root_dir / candidate
+            elif (
+                allow_premature_completed
+                and (self._root_dir / candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name).is_file()
+            ):
+                source_path = self._root_dir / candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name
             elif (
                 self._root_dir.parent.name == "docs"
                 and (self._root_dir.parent.parent / candidate).is_file()
             ):
                 source_path = self._root_dir.parent.parent / candidate
+            elif (
+                allow_premature_completed
+                and self._root_dir.parent.name == "docs"
+                and (self._root_dir.parent.parent / candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name).is_file()
+            ):
+                source_path = self._root_dir.parent.parent / candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name
             elif candidate.is_file():
                 source_path = candidate
+            elif (
+                allow_premature_completed
+                and (candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name).is_file()
+            ):
+                source_path = candidate.parent / ARCHIVED_DIRECTORY_NAME / candidate.name
             else:
                 matched: list[Path] = []
                 ticket_str = ticket.strip()
@@ -249,11 +289,35 @@ class DirectoryTicketStore(TicketRepository):
                         f"Ambiguous ticket identifier '{ticket}': matches multiple files: {[str(m) for m in matched]}"
                     )
                 else:
+                    if allow_premature_completed and self.exists():
+                        completed_matched: list[Path] = []
+                        for spec_dir in self._get_spec_directories():
+                            comp_dir = spec_dir / ARCHIVED_DIRECTORY_NAME
+                            if comp_dir.is_dir():
+                                for f in comp_dir.iterdir():
+                                    if self._is_valid_ticket_file(f):
+                                        if f.stem.startswith(ticket_str) or f.name.startswith(ticket_str):
+                                            completed_matched.append(f)
+                        if len(completed_matched) == 1:
+                            return completed_matched[0]
+                        elif len(completed_matched) > 1:
+                            raise TicketFormatError(
+                                f"Ambiguous ticket identifier '{ticket}': matches multiple files: {[str(m) for m in completed_matched]}"
+                            )
                     source_path = candidate
         else:
             raise TicketFormatError(f"Unsupported ticket argument type: {type(ticket).__name__}")
 
+        if was_explicitly_completed:
+            raise TicketFormatError(
+                f"Ticket file '{source_path}' is already in '{ARCHIVED_DIRECTORY_NAME}' directory"
+            )
+
         if not source_path.is_file():
+            if allow_premature_completed:
+                premature_path = source_path.parent / ARCHIVED_DIRECTORY_NAME / source_path.name
+                if premature_path.is_file():
+                    return premature_path
             raise TicketFormatError(f"Ticket file not found: '{source_path}'")
 
         if source_path.parent.name == ARCHIVED_DIRECTORY_NAME:
@@ -379,12 +443,22 @@ class DirectoryTicketStore(TicketRepository):
             TicketFormatError: If ticket not found, already archived, destination
                 collides, or timestamp formatting fails.
         """
-        source_path = self._resolve_ticket_path(ticket)
+        source_path = self._resolve_ticket_path(ticket, allow_premature_completed=True)
         timestamp_str = self._format_completed_at(completed_at)
         metadata = {
             "Status": TicketStatus.COMPLETED,
             "Completed": timestamp_str,
         }
+        if source_path.parent.name == ARCHIVED_DIRECTORY_NAME:
+            completed_dir = source_path.parent
+            if not completed_dir.exists():
+                completed_dir.mkdir(parents=True, exist_ok=True)
+            gitkeep_path = completed_dir / ".gitkeep"
+            if not gitkeep_path.exists():
+                gitkeep_path.write_text("", encoding="utf-8")
+            self._serializer.update_header(source_path, metadata)
+            return source_path
+
         return self._relocate_ticket(source_path, metadata)
 
     def finalize_skipped(

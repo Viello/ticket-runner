@@ -1940,3 +1940,109 @@ def test_question_pending_with_injected_fake_signal_repository(tmp_path: Path) -
     assert len(fake_signal_repo.write_answer_calls) == 0
 
 
+
+
+
+def test_default_recovery_confirmation_pauses_and_resumes_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDisplay:
+        def __init__(self, is_active: bool = True) -> None:
+            self.is_active = is_active
+            self.actions: list[str] = []
+
+        def stop(self) -> None:
+            self.actions.append("stop")
+            self.is_active = False
+
+        def start(self) -> None:
+            self.actions.append("start")
+            self.is_active = True
+
+    display = FakeDisplay(is_active=True)
+    monkeypatch.setattr("builtins.input", lambda p: "y")
+    res = default_recovery_confirmation("T022", display=display)
+    assert res is True
+    assert display.actions == ["stop", "start"]
+
+    # When input raises, display is still restored
+    display_err = FakeDisplay(is_active=True)
+    def raise_err(p: str = "") -> str:
+        raise EOFError()
+    monkeypatch.setattr("builtins.input", raise_err)
+    res_err = default_recovery_confirmation("T022", display=display_err)
+    assert res_err is False
+    assert display_err.actions == ["stop", "start"]
+
+
+# --- T121: Ready Signal Precedence Over Budget Termination Tests ---
+
+
+def test_run_cycle_ready_signal_precedence_over_killed_ceiling(tmp_path: Path) -> None:
+    """A valid ready signal on disk takes precedence over KILLED_CEILING in run_cycle."""
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ticket = _make_ticket("T121")
+    ready_file = runtime_paths.ready_signal_path("T121")
+    ready_file.write_text(json.dumps({"status": "ready_for_verification", "ticket_id": "T121"}), encoding="utf-8")
+
+    from runner.application.worker_supervisor import SessionRunResult
+    from unittest.mock import AsyncMock
+
+    mock_supervisor = AsyncMock()
+    mock_supervisor.runtime_paths = runtime_paths
+    mock_supervisor.cwd = tmp_path
+    mock_supervisor.on_budget_action = None
+    mock_supervisor.run.return_value = SessionRunResult(
+        reason=RunTerminationReason.KILLED_CEILING,
+        session_id="ses_ceiling_with_ready",
+        exit_code=0,
+        occupancy=155000,
+        ready_signal_present=True,
+    )
+
+    coordinator = HandoffCoordinator(
+        supervisor=mock_supervisor,
+        runtime_paths=runtime_paths,
+        budget_config=TokenBudgetConfig(ceiling=150000),
+    )
+
+    cycle_result = asyncio.run(coordinator.run_cycle(ticket))
+
+    assert cycle_result.status == SingleCycleStatus.READY
+    assert cycle_result.ready_signal_present is True
+    assert cycle_result.occupancy == 155000
+
+
+def test_run_cycle_ready_signal_precedence_over_killed_handoff(tmp_path: Path) -> None:
+    """A valid ready signal on disk takes precedence over KILLED_HANDOFF in run_cycle."""
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    ticket = _make_ticket("T121")
+    ready_file = runtime_paths.ready_signal_path("T121")
+    ready_file.write_text(json.dumps({"status": "ready_for_verification", "ticket_id": "T121"}), encoding="utf-8")
+
+    from runner.application.worker_supervisor import SessionRunResult
+    from unittest.mock import AsyncMock
+
+    mock_supervisor = AsyncMock()
+    mock_supervisor.runtime_paths = runtime_paths
+    mock_supervisor.cwd = tmp_path
+    mock_supervisor.on_budget_action = None
+    mock_supervisor.run.return_value = SessionRunResult(
+        reason=RunTerminationReason.KILLED_HANDOFF,
+        session_id="ses_handoff_with_ready",
+        exit_code=0,
+        occupancy=138000,
+        ready_signal_present=True,
+    )
+
+    coordinator = HandoffCoordinator(
+        supervisor=mock_supervisor,
+        runtime_paths=runtime_paths,
+        budget_config=TokenBudgetConfig(handoff=135000),
+    )
+
+    cycle_result = asyncio.run(coordinator.run_cycle(ticket))
+
+    assert cycle_result.status == SingleCycleStatus.READY
+    assert cycle_result.ready_signal_present is True
+    assert cycle_result.occupancy == 138000

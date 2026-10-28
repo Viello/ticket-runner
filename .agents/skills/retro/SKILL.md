@@ -24,6 +24,20 @@ The user has asked for a **retrospective**. You are suggesting improvements to t
 
 4. Present these candidates to the user, in order of severity.
 
+5. **Session Wrap-up & Status Synchronization**:
+   - Check if root `STATUS.md` exists in the current project workspace.
+   - **If `STATUS.md` exists**:
+     Automatically update it (or invoke `/status save`) with:
+     a. **Active Tickets & Progress**: Current ticket / subtask status.
+     b. **Exact Work-In-Progress**: Current branch, uncommitted files, and exact file/function where execution stopped.
+     c. **Recent Completed Work & Decisions**: Summary of work finished during this session.
+     d. **Blockers & Gotchas**: Environmental friction, test suite traps, or blockers uncovered.
+     e. **Next 1–3 Actionable Steps**: Concrete next steps for the next session.
+   - **If `STATUS.md` does NOT exist**:
+     Prompt the user:
+     > "No `STATUS.md` found in this project. Would you like me to bootstrap one via `/status` to track your WIP and next steps for your return? [y/n]"
+     If the user agrees, run the `status` skill bootstrap sequence.
+
 ## Reference
 
 ### Implementation vs Review

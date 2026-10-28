@@ -696,3 +696,31 @@ def test_format_diagnostic_hang_rendering() -> None:
     assert "hung (silence window of 60s exceeded)" in diagnostic
     assert "some test output" in diagnostic
 
+
+
+
+# --- Windows Shell Quoting Gatekeeper Integration Tests (T120) ---
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shell quoting Gatekeeper test")
+def test_gatekeeper_windows_shell_quoting_with_real_subprocess_runner() -> None:
+    """GatekeeperCommandExecutor verifies double-quoted YAML command via real SubprocessRunner on Windows."""
+    from runner.domain.config import VerificationConfig
+
+    runner = SubprocessRunner()
+    executor = GatekeeperCommandExecutor(command_runner=runner)
+
+    test_cmd = (
+        'python -c "import glob,yaml; '
+        'fs=glob.glob(\'*/agents/openai.yaml\'); '
+        '[yaml.safe_load(open(f,encoding=\'utf-8\')) for f in fs]; '
+        'print(\'validated %d openai.yaml files\' % len(fs))"'
+    )
+
+    report = _verify(executor, VerificationConfig(test_cmd=test_cmd))
+    assert report.passed is True
+    assert report.diagnostics == ()
+    assert len(report.results) == 1
+    assert report.results[0].exit_code == 0
+    assert report.results[0].timed_out is False
+    assert "validated 0 openai.yaml files" in report.results[0].tail

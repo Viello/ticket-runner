@@ -70,7 +70,7 @@ class SubprocessProcessHandle:
                 if not chunk:
                     break
                 self._stderr_chunks.append(chunk.decode("utf-8", errors="replace"))
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             pass
 
     async def stdout_lines(self) -> AsyncIterator[str]:
@@ -103,7 +103,7 @@ class SubprocessProcessHandle:
             if self._stderr_drain_task is not None:
                 try:
                     await asyncio.wait_for(self._stderr_drain_task, timeout=2.0)
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     pass
             return code
         finally:
@@ -225,6 +225,37 @@ def unwrap_batch_file(executable: str) -> tuple[str, list[str]] | None:
     return None
 
 
+def is_windows_cmd_shell(executable: str, args: list[str]) -> bool:
+    """Return True if executable and args represent a Windows cmd.exe /c invocation."""
+    if sys.platform != "win32":
+        return False
+    if Path(executable).name.lower() not in ("cmd.exe", "cmd"):
+        return False
+    return any(a.lower() == "/c" for a in args)
+
+
+def build_windows_cmd_shell_string(executable: str, args: list[str]) -> str:
+    """Construct an unescaped cmd.exe /d /s /c "<command>" shell string for create_subprocess_shell.
+
+    Extracts switches preceding /c, locates the command tail following /c,
+    and formats the string so cmd.exe /s /c strips the outer quotes without
+    subprocess.list2cmdline corrupting embedded quotes.
+    """
+    c_idx = next(i for i, a in enumerate(args) if a.lower() == "/c")
+    cmd_tail = args[c_idx + 1:]
+    command_str = " ".join(cmd_tail) if len(cmd_tail) != 1 else cmd_tail[0]
+
+    switches = [a for a in args[:c_idx]]
+    switches_lower = [s.lower() for s in switches]
+    if "/d" not in switches_lower:
+        switches.insert(0, "/d")
+    if "/s" not in switches_lower:
+        switches.append("/s")
+
+    switches_str = " ".join(switches)
+    return f'"{executable}" {switches_str} /c "{command_str}"'
+
+
 class SubprocessRunner:
     """Concrete CommandRunner adapter wrapping asyncio subprocess operations."""
 
@@ -293,16 +324,28 @@ class SubprocessRunner:
         raw_cmd = cmd[0]
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                executable,
-                *args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=DEFAULT_STREAM_LIMIT,
-                cwd=cwd_str,
-                env=proc_env,
-            )
+            if is_windows_cmd_shell(executable, args):
+                shell_cmd_str = build_windows_cmd_shell_string(executable, args)
+                proc = await asyncio.create_subprocess_shell(
+                    shell_cmd_str,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=DEFAULT_STREAM_LIMIT,
+                    cwd=cwd_str,
+                    env=proc_env,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    executable,
+                    *args,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=DEFAULT_STREAM_LIMIT,
+                    cwd=cwd_str,
+                    env=proc_env,
+                )
             stdout_bytes, stderr_bytes = await proc.communicate()
         except FileNotFoundError as exc:
             raise CommandNotFoundError(raw_cmd, str(exc)) from exc
@@ -342,16 +385,28 @@ class SubprocessRunner:
             job = WindowsJobObject.create()
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                executable,
-                *args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=DEFAULT_STREAM_LIMIT,
-                cwd=cwd_str,
-                env=proc_env,
-            )
+            if is_windows_cmd_shell(executable, args):
+                shell_cmd_str = build_windows_cmd_shell_string(executable, args)
+                proc = await asyncio.create_subprocess_shell(
+                    shell_cmd_str,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=DEFAULT_STREAM_LIMIT,
+                    cwd=cwd_str,
+                    env=proc_env,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    executable,
+                    *args,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=DEFAULT_STREAM_LIMIT,
+                    cwd=cwd_str,
+                    env=proc_env,
+                )
             if job is not None and proc.pid:
                 job.assign_process(proc.pid)
         except Exception as exc:

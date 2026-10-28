@@ -268,3 +268,35 @@ def test_is_interactive_variants() -> None:
     adapter5 = TerminalApprovalAdapter(stdin=mock_notty)
     assert adapter5.is_interactive() is False
 
+
+
+
+@pytest.mark.anyio
+async def test_terminal_approval_adapter_pauses_and_resumes_display(sample_card: EvidenceCard) -> None:
+    class FakeDisplay:
+        def __init__(self, is_active: bool = True) -> None:
+            self.is_active = is_active
+            self.actions: list[str] = []
+
+        def stop(self) -> None:
+            self.actions.append("stop")
+            self.is_active = False
+
+        def start(self) -> None:
+            self.actions.append("start")
+            self.is_active = True
+
+    display = FakeDisplay(is_active=True)
+    out = io.StringIO()
+    console = Console(file=out, width=80, force_terminal=False)
+    adapter = TerminalApprovalAdapter(
+        console=console,
+        read_key=lambda: "y",
+        is_interactive=True,
+        display=display,
+    )
+    assert adapter.display is display
+
+    decision = await adapter.request_approval(sample_card)
+    assert decision == ApprovalDecision.APPROVE
+    assert display.actions == ["stop", "start"]

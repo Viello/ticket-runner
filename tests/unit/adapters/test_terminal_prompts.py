@@ -176,3 +176,69 @@ def test_terminal_intervention_gateway_prompt_escalation_yes() -> None:
     gateway_non_interactive = TerminalInterventionGateway(input_fn=raise_eof)
     with pytest.raises(NonInteractiveError):
         gateway_non_interactive.prompt_escalation(ticket, "report content")
+
+
+
+def test_terminal_intervention_gateway_pauses_and_resumes_active_display() -> None:
+    from pathlib import Path
+    from runner.adapters.ui.terminal_prompts import TerminalInterventionGateway
+    from runner.domain.ticket import Ticket, TicketStatus
+
+    ticket = Ticket(
+        id="T066",
+        title="Test Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/10.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path("docs/tickets/10/T066.md"),
+    )
+
+    class FakeDisplay:
+        def __init__(self, is_active: bool = True) -> None:
+            self.is_active = is_active
+            self.actions: list[str] = []
+
+        def stop(self) -> None:
+            self.actions.append("stop")
+            self.is_active = False
+
+        def start(self) -> None:
+            self.actions.append("start")
+            self.is_active = True
+
+    # 1. Normal prompt with active display
+    display = FakeDisplay(is_active=True)
+    gateway = TerminalInterventionGateway(
+        input_fn=lambda p: "y",
+        display=display,
+    )
+    assert gateway.display is display
+    res = gateway.prompt_escalation(ticket, "diagnostic report")
+    assert res is True
+    assert display.actions == ["stop", "start"]
+
+    # 2. Inactive display: no stop/start calls
+    inactive_display = FakeDisplay(is_active=False)
+    gateway2 = TerminalInterventionGateway(
+        input_fn=lambda p: "n",
+        display=inactive_display,
+    )
+    res2 = gateway2.prompt_escalation(ticket, "diagnostic report")
+    assert res2 is False
+    assert inactive_display.actions == []
+
+    # 3. Exception in input_fn: display is still restarted in finally
+    display_err = FakeDisplay(is_active=True)
+
+    def raise_eof_fn(_: str) -> str:
+        raise EOFError()
+
+    gateway3 = TerminalInterventionGateway(
+        input_fn=raise_eof_fn,
+        display=display_err,
+    )
+    with pytest.raises(Exception):
+        gateway3.prompt_escalation(ticket, "diagnostic report")
+    assert display_err.actions == ["stop", "start"]

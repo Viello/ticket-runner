@@ -1551,6 +1551,164 @@ async def test_doctor_which_fn_injection_parameter() -> None:
     assert result.name == CHECK_WORKER_BINARY
 
 
+# ==============================================================================
+# Binary env-var overrides: AGENT_ANTIGRAVITY_BIN / AGENT_OPENCODE_BIN
+# ==============================================================================
+
+def _path_resolver_must_not_be_called(cmd: str) -> str | None:
+    raise AssertionError(f"path_resolver must not be consulted when the env-var override is set (got {cmd!r})")
+
+
+@pytest.mark.anyio
+async def test_antigravity_env_override_valid_file_passes(tmp_path: Path) -> None:
+    """AGENT_ANTIGRAVITY_BIN pointing at an existing file bypasses PATH lookup and passes."""
+    agy = tmp_path / "agy.exe"
+    agy.write_bytes(b"")
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(provider="antigravity")),
+        env={"AGENT_ANTIGRAVITY_BIN": str(agy)},
+        path_resolver=_path_resolver_must_not_be_called,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "AGENT_ANTIGRAVITY_BIN" in result.message
+    assert str(agy) in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_antigravity_env_override_invalid_path_fails_naming_var(tmp_path: Path) -> None:
+    """AGENT_ANTIGRAVITY_BIN pointing at a missing path fails loud, naming the env-var."""
+    missing = tmp_path / "nope" / "agy.exe"
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(provider="antigravity")),
+        env={"AGENT_ANTIGRAVITY_BIN": str(missing)},
+        path_resolver=lambda cmd: r"C:\bin\agy.exe",
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert result.name == CHECK_WORKER_BINARY
+    assert (
+        f"AGENT_ANTIGRAVITY_BIN is set to '{missing}' but that path does not exist or is not executable."
+        in result.message
+    )
+    assert result.remediation is not None
+    assert "AGENT_ANTIGRAVITY_BIN" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_antigravity_env_unset_binary_on_path_passes() -> None:
+    """Without AGENT_ANTIGRAVITY_BIN, agy resolved via PATH still passes."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(provider="antigravity")),
+        env={},
+        path_resolver=lambda cmd: r"C:\bin\agy.exe" if cmd == "agy" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert "Antigravity CLI binary 'agy' verified on PATH" in result.message
+
+
+@pytest.mark.anyio
+async def test_antigravity_env_unset_binary_missing_fails_with_path_remediation() -> None:
+    """Without AGENT_ANTIGRAVITY_BIN and no agy on PATH, the original remediation is kept."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(provider="antigravity")),
+        env={},
+        path_resolver=lambda cmd: None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert "Antigravity CLI binary 'agy' was not found in PATH" in result.message
+    assert result.remediation is not None
+    assert "Install Antigravity CLI" in result.remediation
+    assert "AGENT_ANTIGRAVITY_BIN" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_opencode_env_override_valid_file_passes(tmp_path: Path) -> None:
+    """AGENT_OPENCODE_BIN pointing at an existing file bypasses PATH and runs version via that path."""
+    opencode = tmp_path / "opencode.exe"
+    opencode.write_bytes(b"")
+    runner = FakeCommandRunner()
+    runner.register([str(opencode), "--version"], exit_code=0, stdout="opencode 0.9.0\n")
+    doctor = Doctor(
+        command_runner=runner,
+        config_loader=FakeConfigLoader(config=_make_config(provider="opencode")),
+        env={"AGENT_OPENCODE_BIN": str(opencode)},
+        path_resolver=_path_resolver_must_not_be_called,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "0.9.0" in result.message
+    assert runner.commands == [[str(opencode), "--version"]]
+
+
+@pytest.mark.anyio
+async def test_opencode_env_override_invalid_path_fails_naming_var(tmp_path: Path) -> None:
+    """AGENT_OPENCODE_BIN pointing at a missing path fails loud, naming the env-var."""
+    missing = tmp_path / "nope" / "opencode.exe"
+    runner = FakeCommandRunner()
+    doctor = Doctor(
+        command_runner=runner,
+        config_loader=FakeConfigLoader(config=_make_config(provider="opencode")),
+        env={"AGENT_OPENCODE_BIN": str(missing)},
+        path_resolver=lambda cmd: r"C:\tools\opencode.cmd",
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert (
+        f"AGENT_OPENCODE_BIN is set to '{missing}' but that path does not exist or is not executable."
+        in result.message
+    )
+    assert result.remediation is not None
+    assert "AGENT_OPENCODE_BIN" in result.remediation
+    assert runner.commands == []
+
+
+@pytest.mark.anyio
+async def test_opencode_env_unset_binary_on_path_passes() -> None:
+    """Without AGENT_OPENCODE_BIN, opencode resolved via PATH still passes."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 0.4.1\n")
+    doctor = Doctor(
+        command_runner=runner,
+        config_loader=FakeConfigLoader(config=_make_config(provider="opencode")),
+        env={},
+        path_resolver=lambda cmd: r"C:\tools\opencode.cmd" if cmd == "opencode" else None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert "0.4.1" in result.message
+    assert runner.commands == [["opencode", "--version"]]
+
+
+@pytest.mark.anyio
+async def test_opencode_env_unset_binary_missing_fails_with_path_remediation() -> None:
+    """Without AGENT_OPENCODE_BIN and no opencode on PATH, the original remediation is kept."""
+    doctor = Doctor(
+        config_loader=FakeConfigLoader(config=_make_config(provider="opencode")),
+        env={},
+        path_resolver=lambda cmd: None,
+    )
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is False
+    assert "OpenCode CLI binary 'opencode' was not found in PATH" in result.message
+    assert result.remediation is not None
+    assert "Install OpenCode CLI" in result.remediation
+    assert "AGENT_OPENCODE_BIN" in result.remediation
+
+
 @pytest.mark.anyio
 async def test_check_target_git_repo_directory_missing(tmp_path: Path) -> None:
     """Doctor check_target_git_repo fails when target directory does not exist."""
@@ -1644,6 +1802,86 @@ async def test_doctor_run_with_antigravity_halts_on_missing_binary(tmp_path: Pat
     assert report.checks[0].name == CHECK_WORKER_BINARY
     assert "agy" in report.checks[0].message
     assert "Install Antigravity CLI" in (report.checks[0].remediation or "")
+
+
+# ==============================================================================
+# T022: Fix Doctor Worker-Provider Resolution Under Single-Tier Config Load
+# ==============================================================================
+
+@pytest.mark.anyio
+async def test_check_worker_binary_resolves_antigravity_from_overlay_without_discord_token_env(
+    tmp_path: Path,
+) -> None:
+    """Doctor resolves worker.provider from two-tier overlay even when discord.token_env is omitted."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    overlay_file = tmp_path / "ticket-runner.yaml"
+    overlay_yaml = (
+        "project:\n"
+        '  name: "test-project"\n'
+        '  base_branch: "main"\n'
+        "worker:\n"
+        '  provider: "antigravity"\n'
+        "verification:\n"
+        '  test_cmd: "pytest"\n'
+        "discord:\n"
+        "  enabled: false\n"
+    )
+    overlay_file.write_text(overlay_yaml, encoding="utf-8")
+
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 2.0.0\n")
+
+    doctor = Doctor(
+        command_runner=runner,
+        cwd=tmp_path,
+        config_loader=YamlConfigLoader(),
+        path_resolver=lambda cmd: r"C:\bin\agy.exe" if cmd == "agy" else (r"C:\bin\opencode.exe" if cmd == "opencode" else None),
+    )
+
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "agy" in result.message
+    assert "opencode" not in result.message.lower()
+    # Confirm opencode version check was never invoked
+    assert runner.commands == []
+
+
+@pytest.mark.anyio
+async def test_check_worker_binary_skips_when_config_is_genuinely_unloadable(
+    tmp_path: Path,
+) -> None:
+    """Doctor binary check does not masquerade as opencode when project config is genuinely broken."""
+    from runner.adapters.config.yaml_config_loader import YamlConfigLoader
+
+    broken_file = tmp_path / "ticket-runner.yaml"
+    broken_file.write_text("worker: [malformed yaml", encoding="utf-8")
+
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 2.0.0\n")
+
+    doctor = Doctor(
+        command_runner=runner,
+        cwd=tmp_path,
+        config_loader=YamlConfigLoader(),
+        path_resolver=lambda cmd: r"C:\bin\opencode.exe" if cmd == "opencode" else None,
+    )
+
+    result = await doctor.check_worker_binary()
+
+    assert result.passed is True
+    assert result.name == CHECK_WORKER_BINARY
+    assert "skipped" in result.message.lower()
+    assert runner.commands == []
+
+    # The failure must surface via check_config
+    config_result = await doctor.check_config()
+    assert config_result.passed is False
+    assert config_result.name == CHECK_CONFIG
+    assert "failed" in config_result.message.lower()
+
 
 
 

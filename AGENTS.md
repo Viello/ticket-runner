@@ -3,7 +3,7 @@
 Ticket Runner: an external multi-agent Python orchestrator that drives AI coding agents (OpenCode, Antigravity CLI) through a sequential directory queue under Target Project's `docs/tickets/` with independent verification, context handoffs, and Discord/terminal interaction.
 
 ## Implementation status
-Specs 01–13 (Doctor, Queue, Worker, Signal Protocol, Gatekeeper, Telemetry, Handoff, Dual Presence, Discord Bot, Config & Packaging, Living Documentation & Roadmap, Decoupled Root & Multi-Agent, Scaffolding & Skills Distribution, Verification Subsystem & Human Gate) are implemented and tested.
+Specs 01–16 are implemented and tested; live-test sequence under Target Project (`agent-skills`) is ready to resume.
 
 ## Read before designing
 - `ARCHITECTURE.md` — target Clean Architecture directory tree.
@@ -15,7 +15,7 @@ Specs 01–13 (Doctor, Queue, Worker, Signal Protocol, Gatekeeper, Telemetry, Ha
   `NNNN-*.md` in the same one-paragraph format (`.agents/skills/domain-modeling/ADR-FORMAT.md`).
 
 ## Invariants
-- OpenCode is invoked as a subprocess, never a daemon: `opencode run --format json --session <id> --auto "<prompt>"`; resume with the same session id (ADR 0001).
+- Agent backends (OpenCode, Antigravity CLI) are invoked as subprocesses, never daemons, each with its own structured streaming envelope (OpenCode: `opencode run --format json --session <id> --auto "<prompt>"`; Antigravity: `agy -p "<prompt>" --output-format stream-json [--conversation <uuid>]`). Resumption uses the session id each backend emits (`ses_…` for OpenCode, `conversation_id` UUID for Antigravity).
 - External path resolution: Treat the Target Project directory as execution `CWD`. Resolve all paths inside `.agent/`, `docs/tickets/`, `docs/specs/`, and `.agents/skills/` relative to the Target Project root; the Runner's source repository and installation remain separate and independent.
 - Worker executes tickets via configured `worker.execution_skill` (`.agents/skills/implement/SKILL.md`), performing pre-signal reviews (`/code-review`, and `/security-review` when flagged), but never commits directly.
 - Before emitting `{ticket_id}_ready.json`, Worker must confirm the test suite is not stuck: if the suite hangs or cascades, classify the failure and isolate the first failing test following `/diagnosing-bugs` § Stuck-Test-Suite Protocol before signalling readiness.
@@ -69,3 +69,7 @@ The project moves across four rungs. The human–agent pair drives all four inte
 - `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline (`worker.execution_skill`).
 - `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
 
+## Session Orienting & Status
+- At the start of every session or when resuming, read root `STATUS.md` if present.
+- Present the 4-bullet "Welcome Back" briefing and confirm the active ticket and immediate next step before modifying code.
+- Before concluding a session or handing off, invoke `/retro`, `/handoff`, or `/status save` to refresh `STATUS.md`.

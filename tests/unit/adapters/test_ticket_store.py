@@ -458,3 +458,72 @@ def test_is_completed_detects_completed_and_pending_tickets(tmp_path: Path) -> N
     assert store.is_completed("T003")
 
     assert not store.is_completed("T999")
+
+
+def test_finalize_completed_idempotent_when_ticket_entity_already_moved_to_completed(tmp_path: Path) -> None:
+    import shutil
+
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    parser = TicketMarkdownParser()
+    ticket = parser.parse(ticket_file)
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    moved_file = completed_dir / "T001-first.md"
+    shutil.move(str(ticket_file), str(moved_file))
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed(ticket, completed_at="2026-10-27T12:00:00Z")
+
+    assert dest == moved_file
+    assert dest.is_file()
+    assert (completed_dir / ".gitkeep").is_file()
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    assert "Completed: 2026-10-27T12:00:00Z" in content
+
+
+def test_finalize_completed_idempotent_when_pending_path_already_moved_to_completed(tmp_path: Path) -> None:
+    import shutil
+
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    moved_file = completed_dir / "T001-first.md"
+    shutil.move(str(ticket_file), str(moved_file))
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed(ticket_file, completed_at="2026-10-27T12:00:00Z")
+
+    assert dest == moved_file
+    assert dest.is_file()
+    assert (completed_dir / ".gitkeep").is_file()
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    assert "Completed: 2026-10-27T12:00:00Z" in content
+
+
+def test_finalize_completed_idempotent_when_ticket_id_already_moved_to_completed(tmp_path: Path) -> None:
+    import shutil
+
+    spec_dir = tmp_path / "01-sample"
+    ticket_file = _write_ticket(spec_dir, "T001-first.md", "T001")
+
+    completed_dir = spec_dir / "completed"
+    completed_dir.mkdir(parents=True)
+    moved_file = completed_dir / "T001-first.md"
+    shutil.move(str(ticket_file), str(moved_file))
+
+    store = DirectoryTicketStore(root_dir=tmp_path)
+    dest = store.finalize_completed("T001", completed_at="2026-10-27T12:00:00Z")
+
+    assert dest == moved_file
+    assert dest.is_file()
+    assert (completed_dir / ".gitkeep").is_file()
+    content = dest.read_text(encoding="utf-8")
+    assert "Status: completed" in content
+    assert "Completed: 2026-10-27T12:00:00Z" in content

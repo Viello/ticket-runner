@@ -333,3 +333,172 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When retiring legacy verification mechanisms (smoke scenarios) across multiple implementation tickets, residual references can linger in secondary documentation (`ARCHITECTURE.md` directory trees, Spec "migration overlap" notes, and `CONTEXT.md` glossary definitions). Deleting obsolete glossary entries outright violates the repository rule that historical entries must be marked superseded rather than deleted, while leaving them active misleads future agents into generating dead artifacts.
 - **Solution:** In `CONTEXT.md`, retain `Smoke Scenarios (Superseded)` while introducing `Live QA Session` with explicit `_Avoid_` synonyms (`Smoke test session`, `manual testing`, `human verification run`, `smoke run`). In `ARCHITECTURE.md`, synchronize CLI entry points to include `bot` and `notify`, and update the runtime state tree from `smoke_log_<spec-slug>.md` to `live-qa_log_<spec-slug>.md`. In Spec 14 (`docs/specs/14-live-qa-replacement.md`), retire the "migration overlap" note now that both code, signals, adapters, and prompt invariants fully operate under the unified live-qa verification discipline.
 
+---
+
+## Antigravity CLI Empirical Surface Rewrite & Session ID Allowlist Relaxation
+
+- **Problem:** Prior to T018, the Antigravity worker adapter (`runner/adapters/antigravity/antigravity_worker.py`) was coded against an imagined CLI surface (`agy run --auto <prompt> [--session <id>] [-m <model>] [--variant <reasoning>]`). When invoked on a real `agy` binary (v1.2.16+), every run failed with exit code 2 (`Error: unexpected argument "run"`). Furthermore, `agy`'s NDJSON output stream uses a closed 3-event vocabulary (`init`, `step_update`, `result`), token telemetry is nested under `step_update.usage` and `result.usage` with wire keys (`input_tokens`, `output_tokens`, `thinking_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`), tool arguments are structured under `step_update.tool_info.parameters`, and conversation IDs are emitted as UUIDs (`conversation_id`). The runner previously enforced an OpenCode-specific regex `SESSION_ID_PATTERN = re.compile(r"^ses_[A-Za-z0-9]+$")` in `runner/domain/runtime_paths.py`, causing valid Antigravity conversation UUIDs to be rejected by `safe_session_paths`, which silently skipped log creation.
+
+---
+
+## Antigravity Live Smoke Integration & Empirical JSONL Envelope Assertions
+
+- **Problem:** Until T003, Antigravity integration had no live integration test counterpart to `tests/unit/adapters/test_live_opencode_smoke.py`. Unit tests mock the event stream, leaving the real `agy` subprocess execution untested against upstream CLI format breaks or argv changes. Furthermore, the empirical output stream format emitted by `agy -p ... --output-format stream-json` differs fundamentally from OpenCode's flat envelope: it uses a closed set of 3 event types (`init`, `step_update`, `result`), and session identifiers appear as `conversation_id` rather than `sessionID`.
+- **Solution:** Add `tests/unit/adapters/test_live_antigravity_smoke.py` gated strictly on `TICKET_RUNNER_LIVE=1` using `pytestmark = pytest.mark.skipif(...)`. The smoke test resolves the binary respecting `AGENT_ANTIGRAVITY_BIN` before falling back to `shutil.which("agy")`, spawns the process via `SubprocessRunner.spawn` using the canonical headless flags (`-p`, `--output-format stream-json`, `--print-timeout 0`), isolates file system mutations to pytest's `tmp_path`, and asserts that stream events parse as JSON, include `conversation_id`, and exhibit the closed event vocabulary (`init`, `step_update`, or `result`).
+
+
+
+---
+
+## Worker Binary Env-Var Override Resolution in Doctor
+
+- **Problem:** `Doctor._check_worker_binary` resolved `agy` / `opencode` by literal name only, so users with non-PATH installs (mise, asdf, pipx, custom dirs, CI) could not pass pre-flight. A naive override that silently falls back to PATH when the override path is wrong hides misconfiguration, and tests that construct `Doctor` without `env=` inherit `os.environ` and break on hosts where the override is exported.
+- **Solution:** Resolution priority is (1) `AGENT_ANTIGRAVITY_BIN` / `AGENT_OPENCODE_BIN` env-var, then (2) `path_resolver(binary)` (`shutil.which`). When the env-var is set it must point at an existing executable file (`os.path.isfile` + `os.access(X_OK)`); otherwise the check fails with `"<VAR> is set to '<path>' but that path does not exist or is not executable."` and PATH is NOT consulted. The OpenCode branch runs `<override> --version` via `check_opencode(binary=...)`. Tests covering override behaviour pass `env={}` / `env={...}` explicitly for determinism. Worker adapters still spawn the literal `agy` / `opencode` names; the override currently affects Doctor pre-flight only.
+
+
+---
+
+
+
+## Pre-Push Hook Installer CLI Naming & Classmethod Re-use
+
+- **Problem:** External scaffolding tools and shell users need to install the pre-push guardrail into `.git/hooks/pre-push` without fragile inline Python snippets. Naming the CLI argument `--target-dir` caused ambiguity between the target project root and its `.git/` subdirectory, and conflicted with the underlying `PrePushHookInstaller.install(git_dir=...)` parameter naming.
+- **Solution:** Name the CLI argument `--git-dir <path>` consistently with the adapter classmethod, explicitly pointing to the `.git/` directory. Expose `main()` and execute via `python -m runner.adapters.git.pre_push_hook install --git-dir <path>`, delegating idempotency, template fallback (`DEFAULT_STANDALONE_HOOK`), and permission management directly to `PrePushHookInstaller.install()` without duplicating hook text or logic.
+
+---
+
+## Scaffold Sandbox Force Reset Semantics & Runtime State Preservation
+
+- **Problem:** When resetting or re-scaffolding an onboarding sandbox (such as `D:\Sandbox\ticket-runner-live-target\`) using `--force`, a naive wipe would delete `.git/` (destroying commit history, branch configuration, and installed hooks) and `.agent/` (destroying runtime state such as active session logs, checkpoints, evidence, and durable signals). Furthermore, unconditioned execution on non-empty directories risks accidental data loss in interactive sessions.
+- **Solution:** In `runner.tools.scaffold_sandbox`, `--force` selectively wipes only source-tree files (`AGENTS.md`, `ticket-runner.yaml`, `.agents/`, `docs/`, `src/`, `tests/`, `.gitignore`) while strictly preserving `.git/` and `.agent/`. In interactive mode without `--non-interactive`, prompt the operator for explicit confirmation before wiping. Auto-configure git identity (`ticket-runner-scaffold <noreply@local>`) locally only if `git config user.name` returns empty, preserving global operator identity.
+
+---
+
+## External Sandbox Scaffold Verification & One-Shot Initial Commit Exception
+
+- **Problem:** Target project onboarding sandboxes require an initial git commit on `agent/ticket-runner` to establish a clean git tree before any worker or gatekeeper runs. Because `AGENTS.md` enforces "Gatekeeper alone commits", naive adherence would create a chicken-and-egg deadlock where no initial commit exists for the gatekeeper to branch or diff from. Furthermore, verification commands (`doctor`, `test_cmd`) executed via `--project-dir` must resolve tools against the target project environment rather than the runner repository.
+- **Solution:** Permit `runner.tools.scaffold_sandbox` to author the initial baseline commit (`chore(sandbox): initialize ticket-runner onboarding sandbox`) as a documented one-shot bootstrap exception to ADR 0002. Re-invoking `scaffold_sandbox` without `--force` operates idempotently (0 files generated, preserving existing commit and branches), while `--project-dir <target>` runs pre-flight doctor checks and queue discovery seamlessly against external targets.
+
+---
+
+## Scaffold Output Sanitization, Spec Path Placeholders & Upstream ADR Drift
+
+- **Problem:** When vending project files (`AGENTS.md`, welcome ticket) to an external sandbox target, host-specific `(ADR NNNN)` citations dangle or collide with target repository ADRs, while ticket frontmatter referencing nonexistent `docs/specs/<name>.md` paths causes confusion. However, deleting `Spec:` entirely violates `runner/domain/ticket.py:68` (`spec_path must be a non-empty string`) and triggers fallback parsing in markdown adapters. Furthermore, if `scripts/sync_agents_md.py` does not sanitize upstream invariant text before drift comparison, a sanitized sandbox copy will falsely report permanent drift against upstream. In addition, changing root invariant text without updating assertions in `PromptBuilder` tests causes invariant inlining regressions.
+- **Solution:** Route all scaffold write sites through `runner.tools.sanitize.apply_sanitization` keyed by `file_kind`. For `agents_md`, strip `\s*\(ADR\s*\d{4}\)` while leaving terminating punctuation intact. For `welcome_ticket`, replace `docs/specs/[\w.-]+\.md` with a non-empty placeholder string (`N/A (sandbox demo)`) to satisfy domain validation. In `sync_agents_md.py`, sanitize `upstream_curated` prior to in-sync comparison as well as formatted output before writing. Keep root `AGENTS.md` ADR references intact while abstracting multibackend invariant wording, and align prompt builder inlining tests to match updated invariant text.
+---
+
+## All-Mode Public Skill Catalog Enumeration, Path Translation & Network Fallback
+
+- **Problem:** In `all` skill mode, the public skill catalog repository (`https://github.com/Viello/agent-skills`) structures skills at the repository root (`<skill>/SKILL.md`), whereas the sandbox expects `.agents/skills/<skill>/SKILL.md`. Additionally, downloading the public catalog over the network introduces a potential runtime point of failure during sandbox scaffolding when offline or behind a proxy, and a naive implementation without a local directory override makes hermetic testing impossible.
+- **Solution:** Fetch the published tarball (`archive/refs/heads/main.tar.gz`) in memory via standard library `urllib.request` and inspect archive members matching `<archive-root>/<skill>/SKILL.md` (exactly 3 path components), translating the root layout into sandbox `.agents/skills/<skill>/SKILL.md` while streaming directly through `apply_sanitization`. Plumb `--source-skills-dir` through both `scaffold()` and the CLI to bypass network requests for hermetic testing and offline operation. On network or extraction failures, warn and gracefully fall back to shipping the four curated default skills (`implement`, `code-review`, `diagnosing-bugs`, `handoff`), logging the count and fallback status without crashing.
+
+---
+
+## Doctor Provider Resolution Under Single-Tier Config Load & Discord `token_env` Requirement
+
+- **Problem:** `Doctor._check_worker_binary` resolves `worker.provider` by calling `YamlConfigLoader.load(<project>/ticket-runner.yaml)` (single-tier) because it runs before `check_config` performs its two-tier merge. The T005/T007 scaffold overlay emits a `discord:` block containing only `enabled: false` and omits `token_env`, which `load_from_dict` requires (`Missing required field 'token_env' in section 'discord'`). The loader raises, `_get_worker_provider` swallows the exception, and the provider silently defaults to `"opencode"`. Result: live-test sites configured `worker.provider: "antigravity"` (external sandbox and in-repo harness alike) print `OpenCode CLI available (...)` instead of verifying `agy`, and never exercise `AGENT_ANTIGRAVITY_BIN`.
+- **Solution:** In `Doctor._load_configuration`, load and cache the configuration via two-tier resolution (`self._config_loader.load_two_tier`) with fallback to single-tier `self._config_loader.load`, shared across `_get_worker_provider`, `check_config`, and `check_discord`. In `_get_worker_provider`, only fall back to the default `"opencode"` provider when no project configuration file exists on disk (preserving missing-config pre-flight test expectations). When an existing config file is genuinely broken or unloadable, return `None` so `_check_worker_binary` skips cleanly without masquerading as `opencode`, allowing `check_config` to surface the root validation error. In `runner/tools/scaffold_sandbox.py`, emit `discord.token_env: "DISCORD_BOT_TOKEN"` by default in `TICKET_RUNNER_YAML_TEMPLATE` to fix sandbox overlays at the source.
+
+---
+
+## Empty-Starter "Pure Empty" Requires a Bootstrap Commit to Track `.gitkeep`
+
+- **Problem:** T009's locked *Pure Empty* design lists `.gitkeep` as "the sole tracked file", but never states that a commit must be authored. Without one, `git init -b main` + `git checkout -b agent/ticket-runner` leaves `.gitkeep` untracked and the tree dirty, so the file is not actually "tracked" and the scaffold commit that T010's acceptance criteria look for does not exist.
+- **Solution:** After `git init -b main`, `git checkout -b agent/ticket-runner`, and installing the pre-push guardrail via `python -m runner.adapters.git.pre_push_hook install --git-dir <starter>/.git`, author one bootstrap commit on `agent/ticket-runner` (`chore(starter): initialize empty ticket-runner fresh-slate target`) staging only `.gitkeep`. `main` stays unborn (no commit), exactly as `runner.tools.scaffold_sandbox` leaves it — only `agent/ticket-runner` appears in `git branch`. This mirrors the one-shot bootstrap commit used by the external sandbox (T006) and in-repo harness (T008) scaffolds — see the "External Sandbox Scaffold Verification & One-Shot Initial Commit Exception" entry above — because T009 also left the commit unstated.
+
+---
+
+## `python -m` RuntimeWarning When the Package `__init__` Imports the CLI Module
+
+- **Problem:** Running `python -m runner.adapters.git.pre_push_hook install --git-dir <path>` prints `RuntimeWarning: 'runner.adapters.git.pre_push_hook' found in sys.modules after import of package 'runner.adapters.git', but prior to execution of 'runner.adapters.git.pre_push_hook'`. `runner/adapters/git/__init__.py` eagerly imports `PrePushHookInstaller` from the same module being executed by `runpy`, so the module is already in `sys.modules` before `-m` executes it. The hook still installs correctly; the warning is noise, but it recurs for any `-m`-invoked CLI whose package `__init__` imports that module.
+- **Solution:** Treat the warning as benign for hook installation (the scaffold tool shells out to this CLI and only inspects the exit code). If silencing is desired, drop the eager `from runner.adapters.git.pre_push_hook import PrePushHookInstaller` re-export from `runner/adapters/git/__init__.py` or guard it (`if __name__ != "__main__":`), importing the class lazily at call sites.
+
+---
+
+## `ticket-runner init` Uses `ProjectScaffolder`, Not `scaffold_sandbox` — Outputs Diverge
+
+- **Problem:** `run_init` (`ticket_runner.py`) calls the lightweight `ProjectScaffolder` (`runner/adapters/cli/scaffolder.py`), **not** the comprehensive `runner.tools.scaffold_sandbox`. The two scaffolds produce different trees: `ProjectScaffolder` omitted `AGENTS.md`, the welcome ticket, `src/sample_app/`, `tests/test_smoke.py`, and the `.agent/logs/` + `.agent/evidence/` runtime dirs, and its fresh `.gitignore` carried only `.agent/`. T009's *Pure Empty* design ("run `ticket-runner init` and watch every artifact scaffold") assumed `init` produced the full sandbox tree, so Live-QA Scenario B failed against that expectation.
+- **Solution:** Upgrade `ProjectScaffolder.scaffold` in place to emit the runnable artifacts, the two runtime dirs, and the fuller `.gitignore` (reusing `scaffold_sandbox`'s shared content constants and a new `build_agents_md_content` helper). **Do not** delegate `init` to `scaffold_sandbox.scaffold` directly: `ProjectScaffolder`'s exact-equality `ticket-runner.yaml` test pins heuristic fields (`name`/`provider`), while `scaffold_sandbox` hardcodes the sandbox name/provider and authors a git commit — neither of which `init` should do (T009: "Scaffold output is never committed"). Note the two tools' intentional divergences: `init` keeps full-catalog skills + heuristic provider and never commits; `scaffold_sandbox` ships 4 curated skills, pins `antigravity`, and commits.
+
+---
+
+## Agent-Skills Driver Minimal-Stub Discipline & `--project-dir` CLI-Only
+
+- **Problem:** The agent-skills driver at `D:\Repos\agent-runner-driver\` is the live-test seat from which the user invokes `ticket-runner` against the skills clone. If the driver carried its own `ticket-runner.yaml`, `.agent/`, or `docs/tickets/`, a `ticket-runner start` invoked from the driver's CWD without `--project-dir` would silently pick those up — drifting the worker provider, scanning empty signal directories, and quietly running against the wrong Target Project. The T015 scaffold (per Spec 15 ticket T015) originally listed `ticket-runner.yaml` / `.agent/` / `docs/tickets/` creation, mirroring the T006/T008 bootstrap shape and ignoring the `runtime_paths` rule that `.agent/` belongs to the Target Project, not the invocation seat.
+- **Solution:** Per T013's locked resolution, the driver carries no file the runner parses. Its only contents are `git/`, the pre-push hook, `.gitignore` (defensive), the initial scaffold commit, and `scripts/start.ps1` (which hard-codes `--project-dir D:\Repos\agent-skills` so the wrapper always scopes the runner to the skills clone). `YamlConfigLoader` schema remains unchanged — there is no YAML `project_dir:` key; the path is the CLI flag exclusively. T015 was amended to drop the three dead creation lines and to add the `scripts/start.ps1` requirement. Bootstrap is `pwsh D:\Repos\agent-runner-driver\scripts/start.ps1`; if `pwsh` is unavailable on a given Windows host, surface a fallback `scripts/start.bat` (cmd.exe shim) or pure-Python `scripts/start.py` to avoid silent wrapper failures.
+
+---
+
+## Agent-Skills Upstream HEAD Advance, Missing Root `.gitignore` & Pre-Push Hook Wiring
+
+- **Problem:** The upstream repository `Viello/agent-skills` on `main` advanced to commit `727a94f` after publishing the 45-skill catalog (advancing past chart-time SHA `e4eb54c`). Upstream `Viello/agent-skills` does not contain a root `.gitignore`. Without adding `.agent/` and `docs/tickets/.queue.lock` into `.gitignore` on the target `agent/ticket-runner` branch, running ticket executions against `D:\Repos\agent-skills` would leave runner runtime state and queue locks untracked or risk polluting git status. Furthermore, Windows systems using `py -3` (or without standard `python` on PATH alias) require executing the pre-push hook installer CLI with `py -3 -m runner.adapters.git.pre_push_hook install --git-dir <path>`.
+
+---
+
+## Agent-Skills Driver Scaffolding, Python Launcher Execution & Queue Pre-Flight State
+
+- **Problem:** On Windows environments where default `python` is an unaliased Microsoft Store execution alias or points to an inactive environment, bootstrap scripts invoking bare `python` fail silently or prompt store installations. Additionally, invoking Doctor against an upstream clone (`D:\Repos\agent-skills`) from the newly scaffolded driver (`D:\Repos\agent-runner-driver`) verifies git cleanly on `agent/ticket-runner`, but reports a missing tickets directory because `docs/tickets/` has not yet been seeded in the upstream repository.
+- **Solution:** In `scripts/start.ps1`, detect `py` launcher availability via `Get-Command py` and prefer `py -3` with graceful fallback to `python`, adding an accompanying `scripts/start.bat` for cmd.exe execution. Confirm `Doctor` recognizes the driver's `--project-dir D:\Repos\agent-skills` target as a valid git repository on `agent/ticket-runner`, while noting that queue pre-flight failures are expected until T016/T017 decisions seed the demo queue in `agent-skills`.
+
+---
+
+## Antigravity `--print-timeout` Truncated Every Worker Turn into an Empty SUCCESS Result
+
+- **Problem:** The Antigravity adapter hard-coded `DEFAULT_PRINT_TIMEOUT = "5s"` (`runner/adapters/antigravity/antigravity_worker.py`) and appended `--print-timeout 5s` to **every** `agy` invocation. `agy --help` documents the flag as *"Optional time limit for print mode; 0 waits until the turn completes (default 0s)"*, so the Runner replaced agy's safe default with a 5-second ceiling. When a turn outran the ceiling, agy printed `[agy] print timeout after 5s with turn in progress; returning partial output` and still exited 0 with a well-formed envelope whose `result` was `status: SUCCESS`, `response: ""`, and all-zero `usage`. Every real Worker turn runs for minutes, so **no** Antigravity Worker turn could complete - yet nothing raised: the failure was silent and SUCCESS-shaped, and the only tell was zero token usage (`tokens.current: 0`, `Token budget: 0 / 150,000`). The Runner then escalated via the default `bug_escalation_at: 1` and blocked on an interactive prompt, which read to the operator as "running but nothing happening".
+- **Solution:** Set `DEFAULT_PRINT_TIMEOUT = "0"` to restore agy's "wait until the turn completes" semantics. Any positive value is an agy-side ceiling that cannot be safe here; the Runner already supervises the subprocess, so a wall-clock ceiling belongs there, not inside agy. Add a regression test at the adapter seam that runs the real `build_antigravity_run_command(...)` argv and asserts a non-empty `response` with non-zero `usage.total_tokens` - it goes red on `5s` and green on `0`. Because a zero-usage SUCCESS result is otherwise indistinguishable from a productive empty turn, the adapter now marks such a `result` (SUCCESS, empty response, and zero-or-absent usage) with a `WorkerEvent.anomaly` diagnostic that the supervisor records and notifies immediately, so the next occurrence surfaces in seconds rather than as a late escalation. This supersedes the `--print-timeout 5s` canonical-flag value recorded in the earlier T003 gotcha.
+
+---
+
+## Rich Live Display Swallows / Hides Interactive Terminal Prompts (`input()`)
+
+- **Problem:** When `RichTerminalDisplay` is active (`rich.live.Live` running in the terminal), invoking Python's standard `input(prompt)` or `sys.stdin.readline()` from intervention or escalation gateways (e.g. `TerminalInterventionGateway.prompt_escalation` calling `Run /diagnosing-bugs? [Y/n]`) results in invisible prompts. The Live display layout buffers and continuously redraws over standard output, suppressing or displacing the prompt text so the user sees a frozen dashboard with no visible prompt. The user only discovers the prompt text after blindly typing and pressing Enter. Furthermore, if subsequent prompts or failure handlers are reached while Live remains unpaused, the process hangs waiting for keystrokes that the user cannot see.
+- **Solution:** Before prompting the human for interactive terminal input, `TerminalInterventionGateway._read_line`, `HandoffCoordinator.default_recovery_confirmation`, and `TerminalApprovalAdapter.request_approval` suspend/stop the active `RichTerminalDisplay` context (`display.stop()`), execute the prompt and read input cleanly against standard terminal streams, and then resume the display (`display.start()`) in a `finally` block. Container dependency injection wires `resolved_terminal_display` to the intervention gateway, approval adapter, and handoff coordinator.
+
+---
+
+## Antigravity CLI Conflict Between `--model` and `--effort` Flags
+
+- **Problem:** When launching the Antigravity Worker with an explicit model ID that embeds its reasoning effort tier (e.g. `gemini-3.8-flash-high`, `gemini-4-argon-medium`, `claude-sonnet-5-5-high`) on a ticket whose frontmatter defines `Reasoning: medium`, `AntigravityWorker.build_run_command` appends both `--model <model>` and `--effort <variant>` to `agy.exe`. `agy` rejects this with a fatal CLI argument conflict (`error: invalid model selection (--model "gemini-3.8-flash-high" --effort "medium"): --model gemini-3.8-flash-high conflicts with --effort=medium`) and exits immediately with code 1. This triggers `HandoffCoordinator`'s emergency recovery prompt `default_recovery_confirmation` (`Synthesize emergency checkpoint and resume with a fresh session? [Y/n]`), which in turn calls unpaused `input()` under `RichTerminalDisplay`, silently hanging the Runner on startup with zero visible output.
+- **Solution:** In `runner/adapters/antigravity/antigravity_worker.py:build_antigravity_run_command`, inspect `model_id`. When both `model_id` and `variant` (effort) are present, strip any embedded effort suffix (`-high`, `-medium`, `-low`, `-xhigh`, `-max`) from `model_id` so that `agy.exe` receives the base model family (e.g. `--model gemini-3.8-flash`) along with the requested reasoning effort flag (e.g. `--effort medium`) without argument conflict. If no effort variant is requested, the configured model identifier is preserved as-is.
+
+
+---
+
+## Windows Gatekeeper Shell Command Quoting (`list2cmdline` Quote Corruption)
+
+- **Problem:** Spawning Windows verification commands (`verification.test_cmd` / `verification.build_cmd`) via `asyncio.create_subprocess_exec("cmd.exe", "/d", "/s", "/c", command)` routes arguments through Python's `subprocess.list2cmdline` serializer. `list2cmdline` wraps arguments in outer quotes and converts every embedded double quote (`"`) into `\"`. Because `cmd.exe` does not unescape `\"`, child binaries (like `python -c "import glob,yaml; ..."`) receive literal `\"` characters and split tokens on internal whitespace, crashing with `SyntaxError: unterminated string literal` on every verification run. Furthermore, waiting on `SubprocessProcessHandle.wait()` after process termination can raise an unhandled `asyncio.CancelledError` if `_stderr_drain_task` was cancelled, because in Python 3.8+ `CancelledError` inherits from `BaseException` rather than `Exception`.
+- **Solution:** In `SubprocessRunner` (`runner/adapters/cli/subprocess_runner.py`), detect Windows `cmd.exe /c` shell commands using `is_windows_cmd_shell(executable, args)` and format an unescaped shell string via `build_windows_cmd_shell_string(executable, args)` (`"{executable}" {switches} /c "{command_str}"`). Spawn it using `asyncio.create_subprocess_shell`, preserving `WindowsJobObject` process-tree assignment, `DEFAULT_STREAM_LIMIT`, and concurrent stderr draining. In `SubprocessProcessHandle`, catch `(Exception, asyncio.CancelledError)` in `_drain_stderr` and `wait()` so process termination cleanly reaps the task without raising `CancelledError`.
+
+
+---
+
+## Antigravity Token Occupancy, Heartbeat Stall Decoupling & Ready Signal Precedence
+
+- **Problem:**
+  1. In `agy`, `step_update.usage.total_tokens` equals `input_tokens + output_tokens`, omitting cached prompt tokens (~35k tokens in typical runs) and reasoning tokens. Populating `TokenUsage.total` from `total_tokens` caused `TokenUsage.occupancy` to under-report context occupancy by ~35k tokens. Conversely, `result.usage` at turn conclusion is the cumulative sum of all per-step usages across the entire turn (e.g. ~175k tokens across 30 steps), which falsely breached the 150k ceiling.
+  2. Telemetry and heartbeat stall tracking in `WorkerSupervisor` were tied strictly to OpenCode `step_finish` events with non-None `token_usage`, starving `last_step_time` during long tool call sequences in Antigravity and failing to update `.agent/state.json` or publish status events.
+  3. When a Worker emitted a valid `.agent/signals/<ticket_id>_ready.json` before a turn finished, a late budget action (crossing 135k or 150k on the closing step or cumulative result) triggered `KILLED_HANDOFF` or `KILLED_CEILING` and escalated via `run_cycle`, discarding the completed ticket into an emergency handoff or ceiling failure.
+- **Solution:**
+  1. In `AntigravityWorker._extract_token_usage`, force `total = None` for `step_update` usage events (`is_step_update=True`), enabling `TokenUsage.occupancy` to calculate true context-window occupancy (`input + output + reasoning + cache_read + cache_write`) per ADR 0015. In `WorkerSupervisor.run`, track `step_usage_observed` and suppress feeding cumulative `result.usage` to `BudgetMonitor.observe()` when per-step usage was already seen.
+  2. In `WorkerSupervisor.run`, advance `last_step_time` on active tool events (`step_type == "tool"` or `event.type in ("tool_call", "tool_use")`), advance `step_counter` and `last_step_time` on completed steps (`step_finish` or `step_update` with `state in ("DONE", "ERROR")`), and forward active tool invocations to `_ui_event_sink`.
+  3. Give valid ready signals on disk precedence over late `KILLED_HANDOFF` and `KILLED_CEILING`: in `WorkerSupervisor.run`, suppress calling `_on_budget_action` when a ready signal is present, and in `HandoffCoordinator.run_cycle`, evaluate ready signal presence before checking CEILING or HANDOFF escalation, immediately returning `SingleCycleStatus.READY`.
+
+
+---
+
+## Autonomous Ticket Queue Boundary & Idempotent Ticket Finalization
+
+- **Problem:** When an AI coding agent executes tickets under the `implement` skill, unconditional instructions in Step 4 (`Ticket Transition & Gotchas`: updating ticket frontmatter to `Status: completed` and relocating the file to `completed/`) and Step 6 cause autonomous workers to prematurely move the active ticket markdown file before emitting the ready signal. When Gatekeeper verification passes and the human approves the Evidence Card, `DirectoryTicketStore.finalize_completed` looked only for the pending ticket file at `ticket.path`, raising `TicketFormatError: Ticket file not found` and aborting the atomic commit. Furthermore, if `finalize_completed` unconditionally allowed files in `completed/`, callers passing an already-archived path would bypass archive collision guards.
+- **Solution:**
+  1. In `.agents/skills/implement/SKILL.md`, scope Step 4 to `*(interactive mode only — skip in Ticket Runner autonomous execution; pass new gotchas via the ready signal JSON and let Gatekeeper relocate the ticket)*` and define the full ready Signal schema in Step 6, clarifying that ticket relocation, status updates, and `docs/tickets/gotchas.md` logging are performed exclusively by the Gatekeeper.
+  2. In `PromptBuilder.build`, expand Guardrail 1 to `No Git Staging, Commits, or Queue File Mutations`, explicitly forbidding editing `docs/tickets/gotchas.md` directly and modifying, moving, or deleting any Ticket file under `docs/tickets/`.
+  3. In `DirectoryTicketStore._resolve_ticket_path`, add `allow_premature_completed: bool = False`. When resolving a ticket that was expected at a pending location but is missing because the Worker prematurely moved it to `<spec_dir>/completed/<ticket_filename>`, return the completed path while still raising `TicketFormatError` if the caller explicitly passed a path already inside `completed/` or if the file is missing from both locations. In `finalize_completed`, resolve with `allow_premature_completed=True`, ensure `.gitkeep` exists, update header metadata in place, and return cleanly.
+
+
+---
+
+## Target Project Live-Run Sanitization & Queue Reset Conventions
+
+- **Problem:** When an autonomous Queue run is interrupted or halted after an unhandled defect (such as child command quote corruption or premature Ticket file relocation), the Target Project working tree is left in a dirty, inconsistent state: untracked files authored by the Worker, stale `.agent/` state files (`state.json`, `status.json`, diagnostic logs), `.queue.lock` left locked, and pending Tickets moved to `completed/` without Gatekeeper commits. Restarting the Runner in this state causes `CrashRecovery` to either resume against corrupt state, crash on lock timeouts, or skip pending Tickets whose files are missing from the pending Queue directory.
+- **Solution:** Before resuming a live Queue run following Runner remediation, sanitize the Target Project back to its clean baseline commit: restore pending Ticket files and gotchas via `git checkout`/`git restore`, purge untracked Worker artifacts and premature `completed/` folders, delete stale lock (`docs/tickets/.queue.lock`) and `.agent/` runtime state files, and verify `git status --porcelain` is clean while preserving human-authored pre-flight predictions (`observations/`). In the Runner, verify that provisioned Worker Skills (like `.agents/skills/implement/SKILL.md`) in the Target Project match the updated Runner definitions without leaking unintended skill catalog files.
+

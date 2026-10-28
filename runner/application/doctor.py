@@ -60,6 +60,8 @@ REQUIRED_DISCORD_PERMISSIONS = (
     "Embed Links",
 )
 
+ANTIGRAVITY_BIN_ENV_VAR = "AGENT_ANTIGRAVITY_BIN"
+OPENCODE_BIN_ENV_VAR = "AGENT_OPENCODE_BIN"
 
 
 @dataclass(frozen=True)
@@ -204,32 +206,124 @@ class Doctor:
         """Configured target project root directory, if any."""
         return self._cwd
 
-    def _get_worker_provider(self) -> str:
+    def _has_project_config_file(self) -> bool:
+        """Return True if a candidate project configuration file exists on disk."""
+        if getattr(self, "_config_path_explicit", False):
+            return self._config_path.is_file()
+        if self._cwd is not None:
+            return (self._cwd / "ticket-runner.yaml").is_file() or (self._cwd / "config.yaml").is_file()
+        return Path("ticket-runner.yaml").is_file() or Path("config.yaml").is_file()
+
+    def _load_configuration(self) -> RunnerConfig:
+        """Load and cache configuration via two-tier resolution or fallback to single-tier."""
+        if self._loaded_config is not None:
+            return self._loaded_config
+        if self._config_loader is None:
+            raise ConfigError("No configuration loader available.")
+
+        if hasattr(self._config_loader, "load_two_tier"):
+            target_project_dir = self._cwd if self._cwd is not None else (
+                self._config_path.parent if self._config_path.is_absolute() else Path.cwd().resolve()
+            )
+            overlay_path = self._config_path if getattr(self, "_config_path_explicit", False) else None
+            try:
+                loaded = self._config_loader.load_two_tier(
+                    project_dir=target_project_dir,
+                    project_config_path=overlay_path,
+                )
+                self._loaded_config = loaded
+                self._config_load_source = f"loaded via two-tier resolution for '{target_project_dir}'."
+                return loaded
+            except Exception as two_tier_exc:
+                if self._config_path.is_file():
+                    try:
+                        loaded = self._config_loader.load(self._config_path)
+                        self._loaded_config = loaded
+                        self._config_load_source = f"loaded from '{self._config_path}'."
+                        return loaded
+                    except Exception:
+                        pass
+                raise two_tier_exc
+        else:
+            loaded = self._config_loader.load(self._config_path)
+            self._loaded_config = loaded
+            self._config_load_source = f"loaded from '{self._config_path}'."
+            return loaded
+
+    def _get_worker_provider(self) -> str | None:
         """Resolve the configured worker provider name ('opencode' or 'antigravity')."""
         if self._loaded_config is not None:
             return getattr(self._loaded_config.worker, "provider", "opencode")
         if self._config_loader is not None:
             try:
-                loaded = self._config_loader.load(self._config_path)
+                loaded = self._load_configuration()
                 if loaded is not None:
-                    self._loaded_config = loaded
                     return getattr(loaded.worker, "provider", "opencode")
-            except Exception:
-                pass
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if ("not found" in exc_str or "no such file" in exc_str) and not self._has_project_config_file():
+                    return "opencode"
+                return None
         return "opencode"
 
+    def _binary_override_failure(self, name: str, env_var: str) -> CheckResult | None:
+        """Return a failed check if ``env_var`` is set to a missing or non-executable path."""
+        override = self._env.get(env_var)
+        if not override:
+            return None
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return None
+        return CheckResult(
+            name=name,
+            passed=False,
+            message=f"{env_var} is set to '{override}' but that path does not exist or is not executable.",
+            remediation=f"Point {env_var} at an existing executable, or unset {env_var} to resolve the binary from PATH.",
+        )
+
     async def _check_worker_binary(self, name: str = CHECK_WORKER_BINARY) -> CheckResult:
-        """Verify the CLI binary corresponding to the configured worker provider is available on PATH."""
+        """Verify the CLI binary for the configured worker provider is available.
+
+        Resolution priority (binary env-var override convention):
+          1. Environment variable override — ``AGENT_ANTIGRAVITY_BIN`` for the
+             ``antigravity`` provider, ``AGENT_OPENCODE_BIN`` for ``opencode``.
+             When set, the path must name an existing executable file;
+             otherwise the check fails naming the variable and PATH is NOT
+             consulted.
+          2. ``path_resolver(binary)`` (``shutil.which`` by default) for the
+             literal binary name (``agy`` / ``opencode``).
+        """
         provider = self._get_worker_provider()
+        if provider is None:
+            return CheckResult(
+                name=name,
+                passed=True,
+                message="Worker binary check skipped (configuration not loaded).",
+                remediation=None,
+            )
         if provider == "antigravity":
             binary = "agy"
+            env_var = ANTIGRAVITY_BIN_ENV_VAR
+            failure = self._binary_override_failure(name, env_var)
+            if failure is not None:
+                return failure
+            override = self._env.get(env_var)
+            if override:
+                return CheckResult(
+                    name=name,
+                    passed=True,
+                    message=f"Antigravity CLI binary verified at '{override}' (via {env_var}).",
+                    remediation=None,
+                )
             resolved = self._path_resolver(binary)
             if not resolved:
                 return CheckResult(
                     name=name,
                     passed=False,
                     message=f"Antigravity CLI binary '{binary}' was not found in PATH.",
-                    remediation=f"Install Antigravity CLI and ensure '{binary}' is accessible in your PATH.",
+                    remediation=(
+                        f"Install Antigravity CLI and ensure '{binary}' is accessible in your PATH, "
+                        f"or set {env_var} to the full path of the binary."
+                    ),
                 )
             return CheckResult(
                 name=name,
@@ -239,15 +333,22 @@ class Doctor:
             )
         else:
             binary = "opencode"
-            resolved = self._path_resolver(binary)
-            if not resolved:
+            env_var = OPENCODE_BIN_ENV_VAR
+            failure = self._binary_override_failure(name, env_var)
+            if failure is not None:
+                return failure
+            override = self._env.get(env_var)
+            if not override and not self._path_resolver(binary):
                 return CheckResult(
                     name=name,
                     passed=False,
                     message=f"OpenCode CLI binary '{binary}' was not found in PATH.",
-                    remediation=f"Install OpenCode CLI and ensure '{binary}' is accessible in your PATH.",
+                    remediation=(
+                        f"Install OpenCode CLI and ensure '{binary}' is accessible in your PATH, "
+                        f"or set {env_var} to the full path of the binary."
+                    ),
                 )
-            opencode_res = await self.check_opencode()
+            opencode_res = await self.check_opencode(binary=override or binary)
             if not opencode_res.passed:
                 return CheckResult(
                     name=name,
@@ -323,10 +424,15 @@ class Doctor:
         """Verify target project directory exists, is a directory, and is a valid git repository."""
         return await self._check_target_git_repo(name=name)
 
-    async def check_opencode(self) -> CheckResult:
-        """Verify OpenCode CLI binary is available and executable."""
+    async def check_opencode(self, binary: str = "opencode") -> CheckResult:
+        """Verify OpenCode CLI binary is available and executable.
+
+        Args:
+            binary: Executable to invoke with ``--version`` — the literal name
+                (PATH lookup) or an absolute path from ``AGENT_OPENCODE_BIN``.
+        """
         try:
-            result = await self._command_runner.run(["opencode", "--version"], cwd=self._cwd)
+            result = await self._command_runner.run([binary, "--version"], cwd=self._cwd)
         except CommandNotFoundError:
             return CheckResult(
                 name=CHECK_OPENCODE,
@@ -446,43 +552,18 @@ class Doctor:
     async def check_config(self) -> CheckResult:
         """Load and validate configuration using ConfigLoader."""
         try:
-            if hasattr(self._config_loader, "load_two_tier"):
-                target_project_dir = self._cwd if self._cwd is not None else (
-                    self._config_path.parent if self._config_path.is_absolute() else Path.cwd().resolve()
-                )
-                overlay_path = self._config_path if getattr(self, "_config_path_explicit", False) else None
-                try:
-                    self._loaded_config = self._config_loader.load_two_tier(
-                        project_dir=target_project_dir,
-                        project_config_path=overlay_path,
-                    )
-                    return CheckResult(
-                        name=CHECK_CONFIG,
-                        passed=True,
-                        message=f"Configuration valid: loaded via two-tier resolution for '{target_project_dir}'.",
-                        remediation=None,
-                    )
-                except Exception as two_tier_exc:
-                    if self._config_path.is_file():
-                        try:
-                            self._loaded_config = self._config_loader.load(self._config_path)
-                            return CheckResult(
-                                name=CHECK_CONFIG,
-                                passed=True,
-                                message=f"Configuration valid: loaded from '{self._config_path}'.",
-                                remediation=None,
-                            )
-                        except Exception:
-                            pass
-                    raise two_tier_exc
-            else:
-                self._loaded_config = self._config_loader.load(self._config_path)
-                return CheckResult(
-                    name=CHECK_CONFIG,
-                    passed=True,
-                    message=f"Configuration valid: loaded from '{self._config_path}'.",
-                    remediation=None,
-                )
+            self._load_configuration()
+            source = getattr(
+                self,
+                "_config_load_source",
+                f"loaded from '{self._config_path}'.",
+            )
+            return CheckResult(
+                name=CHECK_CONFIG,
+                passed=True,
+                message=f"Configuration valid: {source}",
+                remediation=None,
+            )
         except (ConfigError, OSError, Exception) as exc:
             self._loaded_config = None
             remediation = f"Verify that '{self._config_path}' exists and satisfies the RunnerConfig schema."
@@ -763,10 +844,9 @@ class Doctor:
             channel_id = self._loaded_config.discord.channel_id
         elif self._config_loader is not None:
             try:
-                loaded = self._config_loader.load(self._config_path)
+                loaded = self._load_configuration()
                 if loaded is not None and hasattr(loaded, "discord"):
                     channel_id = loaded.discord.channel_id
-                    self._loaded_config = loaded
             except Exception:
                 pass
 

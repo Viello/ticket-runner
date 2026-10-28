@@ -186,7 +186,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default=None,
-        help="OpenCode model identifier to use for session runs.",
+        help="Model identifier to use for session runs (OpenCode or Antigravity).",
     )
 
     # bot command

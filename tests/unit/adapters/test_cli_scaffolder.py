@@ -257,3 +257,38 @@ def test_security_rejects_existing_symlink_config_file(tmp_path: Path) -> None:
     scaffolder = ProjectScaffolder(skills_client=FakeSkillsClient())
     with pytest.raises(ValueError, match="Security: Target path '.*' is an unsafe symlink"):
         scaffolder.scaffold(project_dir=project_dir, interactive=False, sync_skills=False)
+
+
+def test_scaffold_emits_runnable_artifacts_and_runtime_dirs(tmp_path: Path) -> None:
+    """init scaffolds the runnable artifact set, logs/evidence dirs, and queue-lock gitignore (T010a)."""
+    scaffolder = ProjectScaffolder(sniffer=FakeSniffer(), skills_client=FakeSkillsClient())
+
+    scaffolder.scaffold(project_dir=tmp_path, interactive=False, sync_skills=False)
+
+    assert (tmp_path / "AGENTS.md").is_file()
+    welcome_ticket = tmp_path / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
+    assert welcome_ticket.is_file()
+    assert "Status: pending" in welcome_ticket.read_text(encoding="utf-8")
+    sample_app = tmp_path / "src" / "sample_app" / "__init__.py"
+    assert sample_app.is_file()
+    assert "def greet(name: str) -> str:" in sample_app.read_text(encoding="utf-8")
+    assert (tmp_path / "tests" / "test_smoke.py").is_file()
+    assert (tmp_path / ".agent" / "logs").is_dir()
+    assert (tmp_path / ".agent" / "evidence").is_dir()
+    assert "docs/tickets/.queue.lock" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_scaffold_runnable_artifacts_are_idempotent(tmp_path: Path) -> None:
+    """Pre-existing runnable artifacts are preserved on re-scaffold (T010a)."""
+    scaffolder = ProjectScaffolder(sniffer=FakeSniffer(), skills_client=FakeSkillsClient())
+    scaffolder.scaffold(project_dir=tmp_path, interactive=False, sync_skills=False)
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Custom AGENTS\n", encoding="utf-8")
+    welcome = tmp_path / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
+    welcome.write_text("# Custom Welcome\n", encoding="utf-8")
+
+    scaffolder.scaffold(project_dir=tmp_path, interactive=False, sync_skills=False)
+
+    assert agents.read_text(encoding="utf-8") == "# Custom AGENTS\n"
+    assert welcome.read_text(encoding="utf-8") == "# Custom Welcome\n"

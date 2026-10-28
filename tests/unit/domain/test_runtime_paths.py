@@ -181,10 +181,13 @@ def test_is_valid_session_id() -> None:
     assert is_valid_session_id("ses_01ABC") is True
     assert is_valid_session_id("ses_f55aa0e33ffeUDl1DvFKlpFsPO") is True
     assert is_valid_session_id("ses_1234567890") is True
+    assert is_valid_session_id("d3336873-0561-4a98-b9a9-13da3c00b3af") is True
+    assert is_valid_session_id("ED81C8C1-50BA-4F3F-87EB-412D0E9D47C3") is True
 
     assert is_valid_session_id("ses_") is False
     assert is_valid_session_id("invalid") is False
     assert is_valid_session_id("ses_abc/../../evil") is False
+    assert is_valid_session_id("d3336873-0561-4a98-b9a9-13da3c00b3af/../../evil") is False
     assert is_valid_session_id("ses_abc.log") is False
     assert is_valid_session_id("ses_abc def") is False
     assert is_valid_session_id("") is False
@@ -198,6 +201,16 @@ def test_safe_session_paths() -> None:
     # Valid session ID produces matching jsonl and stderr paths
     result = paths.safe_session_paths("T019", "ses_valid123")
     assert result is not None
+    jsonl, stderr = result
+    assert jsonl.name == "T019_session_ses_valid123.jsonl"
+    assert stderr.name == "T019_session_ses_valid123.stderr.log"
+
+    # UUID session ID also produces safe paths
+    uuid_result = paths.safe_session_paths("T019", "d3336873-0561-4a98-b9a9-13da3c00b3af")
+    assert uuid_result is not None
+    u_jsonl, u_stderr = uuid_result
+    assert u_jsonl.name == "T019_session_d3336873-0561-4a98-b9a9-13da3c00b3af.jsonl"
+    assert u_stderr.name == "T019_session_d3336873-0561-4a98-b9a9-13da3c00b3af.stderr.log"
     jsonl_path, stderr_path = result
     assert jsonl_path == Path(".agent/logs/T019_session_ses_valid123.jsonl")
     assert stderr_path == Path(".agent/logs/T019_session_ses_valid123.stderr.log")
