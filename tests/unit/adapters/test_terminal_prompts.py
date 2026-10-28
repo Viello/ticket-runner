@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
+from pathlib import Path
+from runner.domain.ticket import Ticket, TicketStatus
+from runner.ports.intervention import InterventionAction
+from runner.adapters.ui.terminal_prompts import TerminalHostPrompt, TerminalInterventionGateway
 
 CANDIDATES = ("wt.exe", "pwsh.exe", "powershell.exe", "cmd.exe")
 
@@ -242,3 +245,80 @@ def test_terminal_intervention_gateway_pauses_and_resumes_active_display() -> No
     with pytest.raises(Exception):
         gateway3.prompt_escalation(ticket, "diagnostic report")
     assert display_err.actions == ["stop", "start"]
+
+
+
+
+
+def _make_hitl_ticket(
+    ticket_id: str = "T126",
+    title: str = "HITL Pre-Dispatch Gate",
+    mode: str = "HITL",
+    status: TicketStatus = TicketStatus.PENDING,
+) -> Ticket:
+    return Ticket(
+        id=ticket_id,
+        title=title,
+        status=status,
+        spec_path="docs/specs/17.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path(f"docs/tickets/17/{ticket_id}.md"),
+        mode=mode,
+    )
+
+
+def test_terminal_intervention_gateway_request_hitl_proceed_with_guidance() -> None:
+    ticket = _make_hitl_ticket()
+    outputs: list[str] = []
+    gateway = TerminalInterventionGateway(
+        input_fn=lambda prompt: "p Focus on tests first",
+        output_fn=outputs.append,
+    )
+    decision = gateway.request_hitl_intervention(ticket)
+    assert decision.action == InterventionAction.PROCEED
+    assert decision.hint == "Focus on tests first"
+
+
+def test_terminal_intervention_gateway_request_hitl_proceed_no_guidance() -> None:
+    ticket = _make_hitl_ticket()
+    gateway = TerminalInterventionGateway(input_fn=lambda prompt: "proceed")
+    decision = gateway.request_hitl_intervention(ticket)
+    assert decision.action == InterventionAction.PROCEED
+    assert decision.hint is None
+
+
+def test_terminal_intervention_gateway_request_hitl_skip() -> None:
+    ticket = _make_hitl_ticket()
+    gateway = TerminalInterventionGateway(input_fn=lambda prompt: "skip")
+    decision = gateway.request_hitl_intervention(ticket)
+    assert decision.action == InterventionAction.SKIP
+
+
+def test_terminal_intervention_gateway_request_hitl_abort() -> None:
+    ticket = _make_hitl_ticket()
+    for word in ("a", "abort", "cancel"):
+        gateway = TerminalInterventionGateway(input_fn=lambda prompt, w=word: w)
+        decision = gateway.request_hitl_intervention(ticket)
+        assert decision.action == InterventionAction.ABORT
+
+
+def test_terminal_intervention_gateway_request_hitl_non_interactive_aborts() -> None:
+    ticket = _make_hitl_ticket()
+
+    def raise_eof(_: str) -> str:
+        raise EOFError()
+
+    gateway = TerminalInterventionGateway(input_fn=raise_eof)
+    decision = gateway.request_hitl_intervention(ticket)
+    assert decision.action == InterventionAction.ABORT
+
+
+def test_terminal_intervention_gateway_request_hitl_invalid_input_repompts() -> None:
+    ticket = _make_hitl_ticket()
+    inputs = iter(["invalid", "wat", "p Use clean architecture"])
+    gateway = TerminalInterventionGateway(input_fn=lambda prompt: next(inputs))
+    decision = gateway.request_hitl_intervention(ticket)
+    assert decision.action == InterventionAction.PROCEED
+    assert decision.hint == "Use clean architecture"

@@ -158,3 +158,9 @@ class Ticket:
             if not self.slug and self.title:
                 object.__setattr__(self, "slug", self.title.strip().lower().replace(" ", "-"))
 
+
+    @property
+    def is_hitl(self) -> bool:
+        """Return True if ticket requires human guidance before worker dispatch."""
+        mode_val = self.mode if isinstance(self.mode, str) else str(self.mode)
+        return mode_val.upper() == "HITL" or self.status == TicketStatus.BLOCKED

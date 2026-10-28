@@ -1720,3 +1720,34 @@ def test_run_lifecycle_standby_does_not_render_celebration_banner(
     # Banner must NOT be rendered while standing by
     assert not any("Queue complete! All tickets committed." in p for p in printed)
     assert not any("╔══════════════════════════════════════════════════╗" in p for p in printed)
+
+
+def test_queue_orchestrator_hitl_skip_finalizes_with_status_note(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="HITL Gate Ticket")
+    object.__setattr__(t1, "mode", "HITL")
+    ticket_repo = FakeTicketRepository([t1])
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        return TicketOutcome.skipped(
+            details={"status_note": "Skipped by operator at HITL pre-dispatch gate"},
+            status_note="Skipped by operator at HITL pre-dispatch gate",
+        )
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    outcome = asyncio.run(orchestrator.run_next())
+    assert outcome is not None
+    assert outcome.is_skipped is True
+    assert outcome.status_note == "Skipped by operator at HITL pre-dispatch gate"
+    assert t1.status == TicketStatus.SKIPPED
+    assert t1.status_note == "Skipped by operator at HITL pre-dispatch gate"

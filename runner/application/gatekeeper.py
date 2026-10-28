@@ -645,6 +645,7 @@ class VerificationLoopResult:
     resources_accessed: frozenset[str] = frozenset()
     failure_diagnostic: FailureDiagnostic | None = None
     approval_decision: ApprovalDecision | None = None
+    status_note: str | None = None
 
     @property
     def is_passed(self) -> bool:
@@ -699,6 +700,7 @@ class VerificationLoopResult:
         attempts: int,
         session_id: str | None = None,
         resources_accessed: frozenset[str] = frozenset(),
+        status_note: str | None = None,
     ) -> VerificationLoopResult:
         return cls(
             status=VerificationLoopStatus.SKIPPED,
@@ -706,6 +708,7 @@ class VerificationLoopResult:
             attempts=attempts,
             session_id=session_id,
             resources_accessed=resources_accessed,
+            status_note=status_note,
         )
 
     @classmethod
@@ -915,6 +918,7 @@ class VerificationLoop:
         self._approval_mode = approval_mode
         self._tui_coordinator = tui_coordinator
         self._handoff_logged = False
+        self._pre_dispatch_checked = False
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
         elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
@@ -1090,6 +1094,77 @@ class VerificationLoop:
         """
         if prompt is not None:
             self._pending_prompt = prompt
+
+        if not self._pre_dispatch_checked:
+            self._pre_dispatch_checked = True
+            if self._ticket.is_hitl:
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_waiting_for_user()
+
+                self._publish_status(
+                    event_name="WAITING_FOR_USER",
+                    run_state=RunState.WAITING_FOR_USER,
+                    attempt=0,
+                    last_step_summary="Waiting for user at HITL pre-dispatch gate",
+                )
+
+                await self._trigger_phase("Waiting for User")
+
+                if (
+                    self._presence_coordinator is not None
+                    and self._discord_logger is not None
+                    and self._thread_id
+                ):
+                    try:
+                        schedule_res = self._presence_coordinator.schedule_escalation(
+                            self._ticket.id, self._thread_id, self._discord_logger
+                        )
+                        if inspect.iscoroutine(schedule_res):
+                            await schedule_res
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning(
+                            "Failed to schedule escalation at HITL pre-dispatch gate: %s", exc
+                        )
+
+                hitl_decision = self._intervention_gateway.request_hitl_intervention(self._ticket)
+                if inspect.iscoroutine(hitl_decision):
+                    hitl_decision = await hitl_decision
+
+                if self._presence_coordinator is not None:
+                    try:
+                        self._presence_coordinator.cancel_escalation()
+                        self._presence_coordinator.set_mode("nearby")
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning("Failed to cancel escalation after HITL decision: %s", exc)
+
+                if hitl_decision.action == InterventionAction.ABORT:
+                    raise UserAbortError(
+                        f"Execution aborted by operator at HITL pre-dispatch gate for ticket '{self._ticket.id}'."
+                    )
+
+                if hitl_decision.action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics="Skipped by operator at HITL pre-dispatch gate",
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                        resources_accessed=frozenset(self._accumulated_resources),
+                        status_note="Skipped by operator at HITL pre-dispatch gate",
+                    )
+
+                if hitl_decision.action == InterventionAction.PROCEED:
+                    guidance = hitl_decision.hint or getattr(hitl_decision, "guidance", None)
+                    if guidance and guidance.strip():
+                        guidance_prefix = f"Human guidance:\n{guidance.strip()}\n\n"
+                        if self._pending_prompt:
+                            self._pending_prompt = f"{guidance_prefix}{self._pending_prompt}"
+                        else:
+                            self._pending_prompt = guidance.strip()
+                    if self._state_coordinator is not None:
+                        self._state_coordinator.transition_to_working(
+                            ticket_id=self._ticket.id,
+                            session_id=self._active_session_id,
+                            verification_attempts=self._attempts,
+                        )
 
         while True:
             current_prompt = self._pending_prompt

@@ -52,6 +52,7 @@ class TicketOutcome:
     details: str | Mapping[str, Any] | None = None
     commit_sha: str | None = None
     tokens_consumed: int = 0
+    status_note: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.status, str) and not isinstance(self.status, TicketOutcomeStatus):
@@ -120,12 +121,14 @@ class TicketOutcome:
         cls,
         details: str | Mapping[str, Any] | None = None,
         tokens_consumed: int = 0,
+        status_note: str | None = None,
     ) -> TicketOutcome:
         """Construct a skipped ticket outcome with failure details."""
         return cls(
             status=TicketOutcomeStatus.SKIPPED,
             details=details,
             tokens_consumed=tokens_consumed,
+            status_note=status_note,
         )
 
     @classmethod
@@ -644,7 +647,10 @@ class QueueOrchestrator:
             await self._git_operations.reset_working_tree()
 
             # 2. Relocate ticket to completed/ with failure details
-            self._ticket_store.finalize_skipped(ticket, details=outcome.details)
+            status_note = outcome.status_note
+            if status_note is None and isinstance(outcome.details, Mapping):
+                status_note = outcome.details.get("status_note") or outcome.details.get("Status note")
+            self._ticket_store.finalize_skipped(ticket, details=outcome.details, status_note=status_note)
             final_outcome = outcome
             self._last_outcome = final_outcome
 

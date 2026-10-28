@@ -13,6 +13,7 @@ class RunState(str, Enum):
     RUNNING = "running"
     VERIFYING = "verifying"
     ESCALATING = "escalating"
+    WAITING_FOR_USER = "waiting_for_user"
     IDLE = "idle"
     DONE = "done"
 

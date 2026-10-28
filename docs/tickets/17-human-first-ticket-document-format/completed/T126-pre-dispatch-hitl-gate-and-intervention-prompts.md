@@ -1,6 +1,7 @@
 # T126: Pre-Dispatch `HITL` Gate in Gatekeeper, Intervention Port, and Terminal/Discord Prompts
 
-**Status:** ready-for-agent
+**Status:** completed
+**Completed:** 2026-10-28T07:06:00Z
 **Labels:** ready-for-agent
 **Parent:** docs/specs/17-human-first-ticket-document-format.md
 
@@ -22,9 +23,11 @@
 
 **Blocked by:** T124 (Canonical `to-ticket-runner` Document Model, Parser, Dialect Guard, and In-Place Bold-Label Serializer)
 
-- [ ] When `GatekeeperTicketProcessor` / `VerificationLoop` picks up a ticket with `ticket.mode == "HITL"` (or `ticket.status == TicketStatus.BLOCKED`), the Gatekeeper does not invoke `cycle_runner` before consulting the operator.
-- [ ] Prior to prompting, the Runner transitions state to `WAITING_FOR_USER` (`StateCoordinator.transition_to_waiting_for_user` and `RunState.WAITING_FOR_USER` status event), updates the Discord Status Card when Discord is enabled, and schedules presence escalation if away.
-- [ ] `InterventionGateway`, `TerminalInterventionGateway`, and `FakeInterventionGateway` support the pre-dispatch `HITL` gate with three operator outcomes:
+- [x] When `GatekeeperTicketProcessor` / `VerificationLoop` picks up a ticket with `ticket.mode == "HITL"` (or `ticket.status == TicketStatus.BLOCKED`), the Gatekeeper does not invoke `cycle_runner` before consulting the operator.
+- [x] Prior to prompting, the Runner transitions state to `WAITING_FOR_USER` (`StateCoordinator.transition_to_waiting_for_user` and `RunState.WAITING_FOR_USER` status event), updates the Discord Status Card when Discord is enabled, and schedules presence escalation if away.
+- [x] `InterventionGateway`, `TerminalInterventionGateway`, and `FakeInterventionGateway` support the pre-dispatch `HITL` gate with three operator outcomes:
   1. **Proceed with human guidance**: Operator provides instructions/decision text, which is prepended to the Worker's initial prompt before Worker execution begins.
   2. **Skip ticket**: Marks the ticket `**Status:** skipped` with `**Status note:** Skipped by operator at HITL pre-dispatch gate` and advances to the next ticket without spawning a Worker.
   3. **Cancel / Abort run**: Raises `UserAbortError` and stops `ticket_runner.py` immediately.
+
+**Verified:** 2026-10-28 — All 3 criteria verified test-first across 92 targeted unit tests (including proceed with guidance, skip without worker, abort raising UserAbortError, blocked status triggering HITL, and presence escalation/cancellation).
