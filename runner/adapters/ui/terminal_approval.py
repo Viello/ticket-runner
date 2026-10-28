@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-import io
 import sys
 from typing import Any
 
@@ -117,6 +116,12 @@ class TerminalApprovalAdapter(ApprovalGateway):
                 elements.append(Text(f"  • {path}", overflow="fold"))
         else:
             elements.append(Text(f"  • .agent/evidence/{card.ticket_id}/", overflow="fold"))
+
+        # Unticked Criteria (if present)
+        if card.unticked_criteria:
+            elements.append(Text.from_markup("[bold yellow]Unticked Criteria:[/bold yellow]"))
+            for crit in card.unticked_criteria:
+                elements.append(Text(f"  • [ ] {crit}", overflow="fold"))
 
         # Action instructions
         elements.append(Text(""))

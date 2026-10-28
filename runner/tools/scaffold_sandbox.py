@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import io
-import os
 from pathlib import Path
 import platform
 import re
@@ -45,12 +44,14 @@ ENV_BULLETS_KEEP_PREFIXES: tuple[str, ...] = (
 
 AGENT_BULLETS_KEEP_PREFIXES_DEFAULT: tuple[str, ...] = (
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
 )
 
 AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
     "`.agents/skills/` vendors the user's global skill catalog",
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
+    "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
     "`.agents/skills/security-review/SKILL.md` defines",
 )
@@ -58,7 +59,7 @@ AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
 SkillsMode = Literal["default", "all"]
 
 CURATED_SKILLS: tuple[str, ...] = (
-    "implement",
+    "implement-ticket-runner",
     "code-review",
     "diagnosing-bugs",
     "handoff",
@@ -105,30 +106,43 @@ STAMP_PATTERN = re.compile(
 )
 
 WELCOME_TICKET_CONTENT: str = """# T001 — Hello World Welcome Ticket
-**Type:** wayfinder:task (AFK)
-Status: pending
-Spec: docs/specs/00-welcome.md
-Blocked by: none
-Reasoning: low
+**Mode:** AFK
+**Status:** pending
+**Spec:** docs/specs/00-welcome.md
+**Blocked by:** none
+**Security:** optional
+**Reasoning:** low
 
-### Question
-Verify that Ticket Runner executes this welcome ticket against sample_app.
+## What to build
 
-### Why this matters
-Proves end-to-end autonomous queue execution in the onboarding sandbox.
+Verify that Ticket Runner executes this welcome ticket against sample_app. Proves end-to-end autonomous queue execution in the onboarding sandbox.
 
-### Requirements
-- Verify `src/sample_app/__init__.py` has `greet(name: str) -> str`.
-- Verify `tests/test_smoke.py` passes under `pytest`.
+## Jump-start
 
-### Acceptance Criteria
-- Smoke test passes.
-- Welcome ticket can be processed by Ticket Runner worker and gatekeeper.
+- **Files/areas to touch:**
+  - `src/sample_app/__init__.py`
+  - `tests/test_smoke.py`
+- **Seams:** sample_app greeting function and pytest verification.
+- **Existing-code anchors:** `greet(name: str) -> str`.
+- **Verification commands:** `pytest`
+- Orientation starts here — follow the code where it leads.
 
-### Smoke Scenarios
-- Run `pytest` to assert `greet("world") == "hello, world!"`.
+## Acceptance criteria
 
-### Gotchas
+- [ ] Smoke test passes.
+- [ ] Welcome ticket can be processed by Ticket Runner worker and gatekeeper.
+
+## Smoke scenarios
+
+- [ ] Scenario: Smoke test passes
+  - Setup: Repository scaffolded with sample_app and test_smoke.py
+  - Why: Asserts greet("world") returns "hello, world!"
+  - Steps:
+    1. Run `pytest`
+  - Expected: All tests pass with exit code 0.
+
+## Gotchas
+
 - None.
 """
 
@@ -161,7 +175,7 @@ TICKET_RUNNER_YAML_TEMPLATE: str = """project:
 
 worker:
   provider: "antigravity"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 sandbox:
   # Flip + re-run sync_agents_md.py --write --skills <default|all> to apply.
@@ -367,6 +381,7 @@ def parse_sandbox_agents_md(text: str) -> tuple[str, str, str]:
 
 
 # Fallback when no upstream AGENTS.md is discoverable. Mirrors the default-mode
+# Fallback when no upstream AGENTS.md is discoverable. Mirrors the default-mode
 # bullet trim (per T005c resolution).
 FALLBACK_CURATED_SUBSET: str = (
     "## Invariants\n"
@@ -377,8 +392,33 @@ FALLBACK_CURATED_SUBSET: str = (
     "- Target platform is Windows/PowerShell.\n\n"
     "## Agent skills\n"
     "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
-    "- `.agents/skills/implement/SKILL.md` defines the default worker implementation discipline."
+    "- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline."
 )
+
+DEFAULT_UPSTREAM_AGENTS_MD: str = """# AGENTS.md
+
+Target Project operating rules for Ticket Runner autonomous queue execution.
+
+## Invariants
+- All automated work happens on agent/ticket-runner; the Runner stages and commits, and .git/hooks/pre-push blocks pushes. Never git push.
+- Commit format: Title must be <type>(<scope>): <Title> where <scope> names the architectural layer or subsystem, never a ticket number. Follow with a blank line and hyphen-bulleted imperative changes.
+- Worker executes tickets via configured worker.execution_skill, performing pre-signal reviews, but never commits directly.
+- Worker<->Runner messages are durable JSON files (.agent/signals/{ticket_id}_ready.json, .agent/questions/{ticket_id}.json) - never parse model stdout for state.
+- Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker.
+- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes .agent/checkpoints/{ticket_id}/handoff.md.
+- Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (Status: completed).
+- .agent/ is untracked runtime state; git-ignore it when implementing.
+- Human verification happens after green checks via a /live-qa session the human runs; the Worker drafts no scenarios and self-reports no manual verification.
+
+## Environment
+- Target platform is Windows/PowerShell; the pre-push hook executes under Git for Windows' bundled sh.
+
+## Agent skills
+- `.agents/skills/` vendors the user's global skill catalog; handoff, claude-handoff, to-tickets have project-specific edits.
+- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
+"""
 
 
 def build_agents_md_content(
@@ -389,19 +429,21 @@ def build_agents_md_content(
 ) -> str:
     """Build AGENTS.md content from a preamble plus the curated upstream subset.
 
-    Resolves the upstream AGENTS.md (falling back to the default-mode curated
-    subset when none is discoverable), extracts the invariant-bearing sections,
+    Resolves the upstream AGENTS.md (falling back to the canonical Target Project
+    subset when none is specified), extracts the invariant-bearing sections,
     and stamps the result with today's sync date. Shared by the sandbox
     scaffolder and the interactive ``init`` scaffolder.
     """
     upstream_file = _resolve_upstream_agents_md(upstream_agents_md)
     if upstream_file and upstream_file.is_file():
-        curated_subset = extract_curated_subset(
-            upstream_file.read_text(encoding="utf-8"),
-            skills_mode=skills_mode,
-        )
+        source_text = upstream_file.read_text(encoding="utf-8")
     else:
-        curated_subset = FALLBACK_CURATED_SUBSET
+        source_text = DEFAULT_UPSTREAM_AGENTS_MD
+
+    curated_subset = extract_curated_subset(
+        source_text,
+        skills_mode=skills_mode,
+    )
     today = datetime.date.today().isoformat()
     return format_sandbox_agents_md(preamble, today, curated_subset)
 
@@ -426,15 +468,6 @@ def _resolve_upstream_agents_md(override: Path | None = None) -> Path | None:
     """Locate upstream AGENTS.md file with fallback logic."""
     if override is not None and override.is_file():
         return override
-
-    candidates = [
-        Path(__file__).resolve().parents[2] / "AGENTS.md",
-        Path(r"D:\Projects\AGENTS.md"),
-        Path.cwd() / "AGENTS.md",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
     return None
 
 

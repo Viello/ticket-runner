@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -13,7 +12,6 @@ import pytest
 
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.tools.scaffold_sandbox import (
-    CURATED_SKILLS,
     DEFAULT_PREAMBLE,
     _read_yaml_sandbox_skills,
     _resolve_skills_mode,
@@ -131,14 +129,14 @@ def test_scaffold_happy_path(tmp_path: Path) -> None:
         assert (target / ".agent" / sub).is_dir()
 
     # 2. .agents/skills
-    for skill in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+    for skill in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
         skill_file = target / ".agents" / "skills" / skill / "SKILL.md"
         assert skill_file.is_file()
 
     # 3. docs/tickets/00-welcome/T001-hello-world.md
     welcome_ticket = target / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
     assert welcome_ticket.is_file()
-    assert "Status: pending" in welcome_ticket.read_text(encoding="utf-8")
+    assert "**Status:** pending" in welcome_ticket.read_text(encoding="utf-8")
 
     # 4. src/sample_app/__init__.py and tests/test_smoke.py
     src_file = target / "src" / "sample_app" / "__init__.py"
@@ -401,7 +399,7 @@ def test_scaffold_all_mode_network_fallback(
     # Ships 4 curated skills on fallback
     target_skills = list((target / ".agents" / "skills").iterdir())
     assert len(target_skills) == 4
-    for skill_name in ("implement", "code-review", "diagnosing-bugs", "handoff"):
+    for skill_name in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
         assert (target / ".agents" / "skills" / skill_name / "SKILL.md").is_file()
 
     assert "[scaffold] Warning: Failed to fetch skill catalog from Viello/agent-skills" in captured
@@ -518,5 +516,5 @@ def test_scaffold_sanitizes_adr_and_welcome_spec(tmp_path: Path) -> None:
         target / "docs" / "tickets" / "00-welcome" / "T001-hello-world.md"
     ).read_text(encoding="utf-8")
     assert "docs/specs/" not in ticket_text
-    assert "Spec: N/A (sandbox demo)" in ticket_text
+    assert "**Spec:** N/A (sandbox demo)" in ticket_text
 

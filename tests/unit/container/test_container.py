@@ -321,3 +321,10 @@ def test_build_container_wires_terminal_display_to_prompts_and_coordinator(tmp_p
     assert container.processor._intervention_gateway.display is display
     assert container.approval_gateway.display is display
     assert callable(container.coordinator.confirm_recovery)
+
+
+def test_default_config_execution_skill_resolves_to_implement_ticket_runner() -> None:
+    from runner.container import _default_config
+
+    cfg = _default_config()
+    assert cfg.worker.execution_skill == ".agents/skills/implement-ticket-runner/SKILL.md"

@@ -176,3 +176,23 @@ _Avoid_: Tech detector, stack analyzer, project inspector
 The CLI adapter and application interactor that guides the operator through initial target project setup, writes `ticket-runner.yaml`, creates required directories, and synchronizes skills.
 _Avoid_: Project bootstrapper, wizard, setup runner
 
+**Specimen A (Ticket Runner Format)**:
+The canonical 5-section ticket document format parsed natively by `TicketMarkdownParser`, featuring a bold-label header (`**Mode:** AFK | HITL`, `**Status:** pending`, `**Spec:**`, `**Blocked by:**`, `**Security:**`, `**Reasoning:**`), `## What to build`, `## Jump-start`, checkbox `## Acceptance criteria` (`- [ ]`), `## Smoke scenarios`, and `## Gotchas`. Used across Target Projects and authored via `/to-ticket-runner`.
+_Avoid_: Autonomous ticket, machine ticket, Spec A
+
+**Specimen B (Human+AI Format)**:
+The compact, human-first ticket document format used in interactive Human + AI pair programming sessions without Ticket Runner (e.g., `D:\Projects` itself). Features inline brief headers (`**Status:** ready-for-agent`, `**Labels:**`, `**Parent:**`, `**What to build:**`, `**Jump-start:**`, `**Blocked by:**`) and checkbox criteria (`- [ ]`). Authored via `/to-tickets` and executed interactively via `/implement`. Rejected with an actionable diagnostic if parsed by `ticket_runner.py`.
+_Avoid_: Compact ticket, manual ticket, Spec B
+
+**Pre-Dispatch HITL Gate**:
+The Gatekeeper boundary check executed before any Worker subprocess is dispatched. When a ticket carries `**Mode:** HITL` or `**Status:** blocked`, the Gatekeeper halts, transitions the state machine to `WAITING_FOR_USER`, and prompts the operator via Discord or Terminal to supply guidance and proceed, skip the ticket, or abort the run.
+_Avoid_: Pre-flight gate, HITL pause, user check
+
+**Dispatch Baseline**:
+The snapshot of an active ticket file captured on disk immediately prior to Worker dispatch. When the Worker signals ready, the Gatekeeper validates that only checkbox marks (`- [ ]` to `- [x]`) under `## Acceptance criteria` were altered; any other modification restores the baseline, rejects the signal, and consumes a Verification Attempt.
+_Avoid_: Ticket snapshot, file diff check, queue guard
+
+**Unticked Criteria**:
+Acceptance criteria left uncompleted (`- [ ]`) by the Worker when signalling ready. Extracted by the Gatekeeper from the verified ticket file and surfaced explicitly on the `EvidenceCard` for operator oversight before approval.
+_Avoid_: Incomplete items, unverified criteria, missed checkboxes
+

@@ -19,10 +19,8 @@ import pytest
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.application.doctor import (
     Doctor,
-    DoctorReport,
     CheckResult,
 )
-from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_skills_client import FakeSkillsClient
 import ticket_runner
@@ -64,7 +62,7 @@ def _seed_required_workspace_files(project_dir: Path) -> None:
     (ticket_dir / "T001-test.md").write_text(ticket_content, encoding="utf-8")
 
     skills_dir = project_dir / ".agents" / "skills"
-    for skill_name in ("implement", "code-review", "diagnosing-bugs"):
+    for skill_name in ("implement", "implement-ticket-runner", "code-review", "diagnosing-bugs"):
         sdir = skills_dir / skill_name
         sdir.mkdir(parents=True, exist_ok=True)
         (sdir / "SKILL.md").write_text(f"# {skill_name}\nInstructions\n", encoding="utf-8")

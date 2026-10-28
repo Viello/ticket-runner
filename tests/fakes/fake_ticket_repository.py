@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from runner.domain.ticket import Ticket, TicketStatus
 
@@ -109,6 +112,7 @@ class FakeTicketRepository:
         self,
         ticket: Ticket | Path | str,
         completed_at: datetime | str | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Simulate marking a ticket completed and relocating."""
         if self._error:
@@ -117,6 +121,8 @@ class FakeTicketRepository:
         dest_path = target.path.parent / "completed" / target.path.name
         idx = self._tickets.index(target)
         object.__setattr__(target, "status", TicketStatus.COMPLETED)
+        if status_note is not None:
+            object.__setattr__(target, "status_note", status_note)
         object.__setattr__(target, "path", dest_path)
         self._tickets[idx] = target
         return dest_path
@@ -125,6 +131,7 @@ class FakeTicketRepository:
         self,
         ticket: Ticket | Path | str,
         details: str | Mapping[str, Any] | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Simulate marking a ticket skipped and relocating."""
         if self._error:
@@ -133,6 +140,8 @@ class FakeTicketRepository:
         dest_path = target.path.parent / "completed" / target.path.name
         idx = self._tickets.index(target)
         object.__setattr__(target, "status", TicketStatus.SKIPPED)
+        if status_note is not None:
+            object.__setattr__(target, "status_note", status_note)
         object.__setattr__(target, "path", dest_path)
         self._tickets[idx] = target
         return dest_path

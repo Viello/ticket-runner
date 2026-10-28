@@ -1,0 +1,5 @@
+interface:
+  display_name: "To Ticket Runner"
+  short_description: "Author autonomous tickets for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false

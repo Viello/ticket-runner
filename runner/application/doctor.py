@@ -45,7 +45,7 @@ DEFAULT_BRANCH = "agent/ticket-runner"
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_TICKETS_DIR = Path("docs/tickets")
 DEFAULT_AGENTS_MD_PATH = Path("AGENTS.md")
-DEFAULT_EXECUTION_SKILL = ".agents/skills/implement/SKILL.md"
+DEFAULT_EXECUTION_SKILL = ".agents/skills/implement-ticket-runner/SKILL.md"
 REQUIRED_SKILL_PATHS = (
     ".agents/skills/code-review/SKILL.md",
     ".agents/skills/diagnosing-bugs/SKILL.md",
@@ -527,11 +527,17 @@ class Doctor:
         try:
             pending_tickets = self._ticket_store.list_all_pending()
         except TicketFormatError as exc:
+            remediation = f"Fix the malformed ticket file or remove it from '{self._tickets_dir}'."
+            if "to-tickets" in str(exc).lower():
+                remediation = (
+                    "Execute this ticket interactively via '/implement' or re-author the queue "
+                    "for autonomous execution using '/to-ticket-runner'."
+                )
             return CheckResult(
                 name=CHECK_QUEUE,
                 passed=False,
                 message=f"Queue validation failed: Malformed ticket: {exc}",
-                remediation=f"Fix the malformed ticket file or remove it from '{self._tickets_dir}'.",
+                remediation=remediation,
             )
 
         if not pending_tickets:

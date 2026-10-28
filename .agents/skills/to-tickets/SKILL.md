@@ -1,12 +1,14 @@
 ---
 name: to-tickets
-description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker).
+description: "Break a plan, spec, or conversation into compact Human+AI interactive tickets (Specimen B) with status flow, inline orientation jump-starts, and acceptance checkboxes."
 disable-model-invocation: true
 ---
 
 # To Tickets
 
-Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
+Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet vertical slices for Human + AI interactive pairing (such as in `Healthyasat` or developing `D:\Projects`), each declaring its blocking edges, inline jump-start, and acceptance checkboxes.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `/to-ticket-runner` instead, which authors canonical 5-section tickets.
 
 The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
 
@@ -20,7 +22,7 @@ Work from whatever is already in the conversation context. If the user passes a 
 
 If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
-Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
+Look for opportunities to prefactor the code to make the implementation easier: "Make the change easy, then make the easy change."
 
 ### 3. Draft vertical slices
 
@@ -32,7 +34,7 @@ Break the work into **tracer bullet** tickets.
 - A completed slice is demoable or verifiable on its own
 - Each slice **under-fills** its window: sized to finish inside one fresh context session with room to spare. A slice that spills into a second session costs more in resume than it saved in size.
 - Any prefactoring should be done first
-- Any slice touching security boundaries (credentials, subprocesses, path sanitization, network, untrusted inputs) must be flagged with `Security: required` in the ticket header below `Status: pending` and declare explicit security verification in acceptance criteria
+- Any slice touching security boundaries (credentials, subprocesses, path sanitization, network, untrusted inputs) must be flagged with `**Security:** required` in the ticket header and declare explicit security verification in acceptance criteria
 
 </vertical-slice-rules>
 
@@ -46,9 +48,10 @@ Human verification happens post-green via `/live-qa`.
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
-- **Title**: short descriptive name
+- **Title**: short descriptive name (`T<NNN>: <Title>`)
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
+- **Jump-start summary**: files to touch, seams, and verification command
 
 Ask the user:
 
@@ -60,62 +63,42 @@ Iterate until the user approves the breakdown.
 
 ### 5. Publish the tickets to the configured tracker
 
-- **Ticket Runner Directory Queue (`docs/tickets/<spec-slug>/`)** → when targeting the Ticket Runner:
+- **Local file queue (`docs/tickets/<spec-slug>/`)** → when using file-based tickets in a repository:
   - Dynamically inspect `docs/tickets/` across all spec subdirectories (both active and `completed/` folders) to find the highest existing `T<NNN>` identifier. If none exist, start at `T001`.
   - Ensure the spec directory `docs/tickets/<spec-slug>/` exists, along with its sibling archive directory `docs/tickets/<spec-slug>/completed/`.
   - Ensure `docs/tickets/gotchas.md` exists to store cross-ticket lessons learned.
-  - Write each ticket as an individual file: `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using the `<ticket-runner-template>` below, numbered in dependency order so file sorting reflects the execution sequence.
-- **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
+  - Write each ticket as an individual file: `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using the `<to-tickets-template>` below, numbered in dependency order.
 - **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise; the tickets are agent-grabbable by construction.
+- **Local scratch** → fallback: write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
 Do NOT close or modify any parent issue.
 
-<ticket-runner-template>
+<to-tickets-template>
 
-# T<NNN> — <Ticket title>
-Status: pending
-Spec: docs/specs/<spec-slug>.md
-Blocked by: <comma-separated blocker ticket IDs, or "None">
-Security: required # include only if touching credentials, subprocesses, path sanitization, network, or untrusted inputs; omit otherwise
-Reasoning: medium  # optional: low | medium | high | max (provider-specific; omit to use config default)
-
-### Requirements
-- <What to build: the end-to-end behaviour this ticket makes work, from the user's perspective>
-- <Jump-start: files to touch, seams to work at, anchor patterns, and verification commands>
-
-### Acceptance Criteria
-- <Criterion 1>
-- <Criterion 2>
-- <Explicit security verification criterion: required whenever Security: required is set (e.g. input sanitization, safe subprocess invocation, command escaping)>
-
-### Gotchas
-- <Ticket-specific quirks, edge cases, or pitfalls discovered during breakdown>
-
-</ticket-runner-template>
-
-<local-ticket-template>
-
-# <NN>: <Ticket title>
-
-**What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
-
-**Jump-start:** the orientation that removes exploration — name every file the implementer will open
-- Files/areas to touch (concrete paths)
-- Seams to work at
-- Existing-code anchors to model against (functions/types/patterns)
-- The command or demo that verifies the slice
-- The list is where orientation starts, not where exploration ends — if the code leads somewhere it didn't name, follow it
-
-**Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
+# T<NNN>: <Ticket title>
 
 **Status:** ready-for-agent
+**Labels:** ready-for-agent
+Reasoning: medium  # optional: low | medium | high | max (provider-specific; omit to use config default)
+**Security:** required (optional: include when slice touches trust boundaries / auth / RLS / subprocesses / secrets)
+**Parent:** docs/specs/<spec-slug>.md
+
+**What to build:** <the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.>
+
+**Jump-start:** (orientation starts here — follow the code where it leads)
+- **Files/areas to touch:** <concrete paths>
+- **Seams:** <seams to work at>
+- **Existing-code anchors:** <functions/types/patterns to model against>
+- **Verify:** <the command or demo that verifies the slice>
+
+**Blocked by:** <the numbers/titles of the tickets that gate this one, or "None (can start immediately)">
 
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
 
-</local-ticket-template>
+</to-tickets-template>
 
 <issue-template>
 
@@ -147,5 +130,3 @@ The orientation that removes exploration — name every file the implementer wil
 - A reference to each blocking ticket, or "None (can start immediately)".
 
 </issue-template>
-
-Concrete file paths live only in **Jump-start**: a ticket lasts one session — too short to go stale — and naming files there skips the implementer's most expensive step. Everywhere else in either form, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.

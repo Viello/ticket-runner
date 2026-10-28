@@ -1,7 +1,6 @@
 """Unit tests for pure prompt-composition builder."""
 
 from pathlib import Path
-import pytest
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
 from runner.application.prompt_builder import PromptBuilder, build_prompt
@@ -16,6 +15,7 @@ def _make_ticket(
     requirements: tuple[str, ...] = ("Add pure prompt-builder.", "Add spec parser."),
     acceptance_criteria: tuple[str, ...] = ("Prompt contains required fields.",),
     gotchas: tuple[str, ...] = ("Do not inline skill body.",),
+    jump_start: tuple[str, ...] = (),
 ) -> Ticket:
     return Ticket(
         id=ticket_id,
@@ -27,6 +27,7 @@ def _make_ticket(
         gotchas=gotchas,
         path=Path(f"docs/tickets/03-worker-orchestration-and-handoff/{ticket_id}-test.md"),
         security_required=security_required,
+        jump_start=jump_start,
     )
 
 
@@ -245,9 +246,11 @@ def test_prompt_conditional_security_review_toggle() -> None:
 
     assert ".agents/skills/security-review/SKILL.md" in prompt_sec
     assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
+    assert "Explicit Security Mandate" in prompt_sec
+    assert "Security: required" in prompt_sec
+    assert "Explicit Security Mandate" not in prompt_no_sec
     assert "`/security-review`" not in prompt_sec
     assert "`/security-review`" not in prompt_no_sec
-    assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
 
 
 def test_prompt_builder_invocation_variants() -> None:
@@ -464,6 +467,101 @@ def test_prompt_documents_live_qa_verification_contract() -> None:
     assert "manual_verification" not in prompt_lower
     assert "/live-qa" in prompt
     assert "The Worker drafts no scenarios and self-reports no manual verification." in prompt
+
+
+def test_prompt_renders_canonical_specimen_a_sections_with_jump_start() -> None:
+    ticket = _make_ticket(
+        ticket_id="T124",
+        title="Canonical to-ticket-runner Document Model",
+        requirements=("The end-to-end behavior from user perspective.",),
+        jump_start=(
+            "**Files/areas to touch:**",
+            "`runner/domain/ticket.py`",
+            "**Seams:** Document I/O boundary",
+            "**Existing-code anchors:** Ticket dataclass",
+        ),
+        acceptance_criteria=("First criterion completed",),
+        gotchas=("Remember to handle inline rationale in security.",),
+    )
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert "### What to build" in prompt
+    assert "- The end-to-end behavior from user perspective." in prompt
+    assert "### Jump-start" in prompt
+    assert "- **Files/areas to touch:**" in prompt
+    assert "- `runner/domain/ticket.py`" in prompt
+    assert "- **Seams:** Document I/O boundary" in prompt
+    assert "### Acceptance criteria" in prompt
+    assert "- First criterion completed" in prompt
+    assert "### Ticket Gotchas" in prompt
+    assert "- Remember to handle inline rationale in security." in prompt
+
+
+def test_prompt_omits_jump_start_when_empty() -> None:
+    ticket = _make_ticket(
+        ticket_id="T099",
+        jump_start=(),
+    )
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert "### What to build" in prompt
+    assert "### Acceptance criteria" in prompt
+    assert "### Ticket Gotchas" in prompt
+    assert "### Jump-start" not in prompt
+
+
+def test_prompt_states_spec_17_checkbox_tick_permission_boundary() -> None:
+    ticket = _make_ticket(ticket_id="T127")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert "flip satisfied criteria from `- [ ]` to `- [x]` under `## Acceptance criteria` in the active ticket file" in prompt
+    assert "before emitting `.agent/signals/T127_ready.json`" in prompt
+    assert "strictly forbidden from modifying any other line or section of the active ticket file" in prompt
+    assert "editing `docs/tickets/gotchas.md` directly" in prompt
+    assert "touching any other file under `docs/tickets/`" in prompt
+
+
+def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> None:
+    ticket = _make_ticket(ticket_id="T127", security_required=True)
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert ".agents/skills/code-review/SKILL.md" in prompt
+    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert "Standards" in prompt
+    assert "Spec" in prompt
+    assert "Security" in prompt
+    assert "Low and Medium findings never interrupt the human" in prompt
+    assert "Critical and High findings must be remediated in-pass" in prompt
+    assert "Only if remediation is blocked" in prompt
+    assert ".agent/questions/T127.json" in prompt
+
+
+def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() -> None:
+    ticket = _make_ticket(ticket_id="T127")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in prompt
+
 
 
 

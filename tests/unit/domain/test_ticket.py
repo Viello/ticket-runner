@@ -25,7 +25,15 @@ def _ticket(**overrides: object) -> Ticket:
 
 
 def test_ticket_status_values() -> None:
-    assert {status.value for status in TicketStatus} == {"pending", "running", "completed", "skipped"}
+    assert {status.value for status in TicketStatus} == {
+        "pending",
+        "running",
+        "in_progress",
+        "completed",
+        "failed",
+        "blocked",
+        "skipped",
+    }
 
 
 def test_ticket_carries_all_fields() -> None:
@@ -41,6 +49,56 @@ def test_ticket_carries_all_fields() -> None:
     assert ticket.path == Path("docs/tickets/02-queue-and-tickets/T006-ticket-entity.md")
     assert ticket.security_required is False
     assert ticket.reasoning == ""
+    assert ticket.mode == "AFK"
+    assert ticket.status_note is None
+    assert ticket.jump_start == ()
+    assert ticket.checked_criteria == frozenset()
+
+
+def test_ticket_accepts_mode_values() -> None:
+    assert _ticket(mode="AFK").mode == "AFK"
+    assert _ticket(mode="HITL").mode == "HITL"
+    assert _ticket(mode="afk").mode == "AFK"
+    assert _ticket(mode="hitl").mode == "HITL"
+
+
+@pytest.mark.parametrize("invalid_mode", ["bogus", "auto", 123, True, None, []])
+def test_ticket_rejects_invalid_mode(invalid_mode: object) -> None:
+    with pytest.raises(TicketFormatError, match="mode"):
+        _ticket(mode=invalid_mode)
+
+
+def test_ticket_accepts_status_note() -> None:
+    assert _ticket(status_note="reviewed; Security PASSED").status_note == "reviewed; Security PASSED"
+    assert _ticket(status_note=None).status_note is None
+
+
+@pytest.mark.parametrize("invalid_note", [123, True, [], {}])
+def test_ticket_rejects_invalid_status_note(invalid_note: object) -> None:
+    with pytest.raises(TicketFormatError, match="status_note"):
+        _ticket(status_note=invalid_note)
+
+
+def test_ticket_accepts_jump_start() -> None:
+    ticket = _ticket(jump_start=["path/to/file.py", "Seam: domain"])
+    assert ticket.jump_start == ("path/to/file.py", "Seam: domain")
+
+
+def test_ticket_rejects_single_string_for_jump_start() -> None:
+    with pytest.raises(TicketFormatError, match="jump_start"):
+        _ticket(jump_start="path/to/file.py")
+
+
+def test_ticket_accepts_checked_criteria() -> None:
+    ticket = _ticket(checked_criteria=["Invariants hold."])
+    assert ticket.checked_criteria == frozenset({"Invariants hold."})
+
+
+@pytest.mark.parametrize("invalid_criteria", ["Invariants hold.", 123, [123]])
+def test_ticket_rejects_invalid_checked_criteria(invalid_criteria: object) -> None:
+    with pytest.raises(TicketFormatError, match="checked_criteria"):
+        _ticket(checked_criteria=invalid_criteria)
+
 
 
 def test_ticket_accepts_explicit_reasoning() -> None:

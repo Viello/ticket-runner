@@ -30,13 +30,16 @@ class FakeInterventionGateway:
         answers: list[str] | None = None,
         decisions: list[InterventionDecision | str] | None = None,
         escalation_answers: list[bool | Exception] | None = None,
+        hitl_decisions: list[InterventionDecision | str] | None = None,
     ) -> None:
         self._answers = list(answers or [])
         self._decisions = [self._coerce(decision) for decision in (decisions or [])]
         self._escalation_answers = list(escalation_answers or [])
+        self._hitl_decisions = [self._coerce(decision) for decision in (hitl_decisions or [])]
         self.question_prompts: list[QuestionSignal] = []
         self.request_records: list[InterventionRecord] = []
         self.escalation_records: list[tuple[Ticket, str]] = []
+        self.hitl_records: list[Ticket] = []
 
     @staticmethod
     def _coerce(decision: InterventionDecision | str) -> InterventionDecision:
@@ -77,4 +80,16 @@ class FakeInterventionGateway:
         if isinstance(ans, Exception):
             raise ans
         return bool(ans)
-
+
+    def request_hitl_intervention(self, ticket: Ticket) -> InterventionDecision:
+        """Return the next queued HITL decision and record the ticket."""
+        self.hitl_records.append(ticket)
+        if self._hitl_decisions:
+            return self._hitl_decisions.pop(0)
+        if self._decisions:
+            return self._decisions.pop(0)
+        raise AssertionError(
+            "FakeInterventionGateway.request_hitl_intervention called with no "
+            "scripted decisions remaining"
+        )
+

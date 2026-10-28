@@ -322,7 +322,7 @@ class HandoffCoordinator:
         self._gotchas_store = gotchas_store or GotchasStore()
         self._spec_parser = spec_parser or SpecMarkdownParser()
         self._worker_config = worker_config or WorkerConfig(
-            execution_skill=".agents/skills/implement/SKILL.md"
+            execution_skill=".agents/skills/implement-ticket-runner/SKILL.md"
         )
         self._budget_config = budget_config or TokenBudgetConfig()
         self._clock = clock

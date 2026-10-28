@@ -97,6 +97,14 @@ def test_evidence_card_coercion_and_defaults() -> None:
     )
     assert card.harness_status is None
     assert card.evidence_paths == ("file1.log", "file2.png")
+    assert card.unticked_criteria == ()
+
+    card_with_unticked = EvidenceCard(
+        ticket_id="T107",
+        test_status="passed",
+        unticked_criteria=["Criterion A", "Criterion B"],  # type: ignore[arg-type]
+    )
+    assert card_with_unticked.unticked_criteria == ("Criterion A", "Criterion B")
 
 
 def test_evidence_card_validation() -> None:

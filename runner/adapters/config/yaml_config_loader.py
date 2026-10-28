@@ -54,7 +54,7 @@ DEFAULT_MACHINE_CONFIG: dict[str, Any] = {
         "branch": "agent/ticket-runner",
     },
     "worker": {
-        "execution_skill": ".agents/skills/implement/SKILL.md",
+        "execution_skill": ".agents/skills/implement-ticket-runner/SKILL.md",
         "provider": "opencode",
     },
     "verification": {

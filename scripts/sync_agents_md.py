@@ -11,6 +11,7 @@ import sys
 from runner.tools.sanitize import apply_sanitization
 from runner.tools.scaffold_sandbox import (
     DEFAULT_PREAMBLE,
+    DEFAULT_UPSTREAM_AGENTS_MD,
     SkillsMode,
     _resolve_skills_mode,
     extract_curated_subset,
@@ -20,8 +21,8 @@ from runner.tools.scaffold_sandbox import (
 )
 
 
-def _resolve_default_upstream() -> Path:
-    """Resolve default upstream AGENTS.md path."""
+def _resolve_default_upstream() -> Path | None:
+    """Resolve default upstream AGENTS.md path if discoverable."""
     candidates = [
         Path(__file__).resolve().parents[1] / "AGENTS.md",
         Path(r"D:\Projects\AGENTS.md"),
@@ -30,7 +31,7 @@ def _resolve_default_upstream() -> Path:
     for c in candidates:
         if c.is_file():
             return c
-    return candidates[0]
+    return None
 
 
 def sync_agents_md(
@@ -56,26 +57,38 @@ def sync_agents_md(
     Returns:
         0 if in sync (or successfully written), 1 if drift detected, 2 on missing-file I/O.
     """
-    upstream = (upstream_path or _resolve_default_upstream()).resolve()
+    upstream_file = upstream_path or _resolve_default_upstream()
     target_path = (target_dir / "AGENTS.md" if target_dir.is_dir() else target_dir).resolve()
-
-    if not upstream.is_file():
-        print(f"Error: Upstream AGENTS.md not found at '{upstream}'", file=sys.stderr)
-        return 2
 
     if not target_path.is_file():
         print(f"Error: Sandbox AGENTS.md not found at '{target_path}'", file=sys.stderr)
         return 2
 
-    config_dir = target_dir if target_dir.is_dir() else target_dir.parent
-    resolved_mode = _resolve_skills_mode(skills_mode, config_dir)
-
     try:
-        upstream_text = upstream.read_text(encoding="utf-8")
         sandbox_text = target_path.read_text(encoding="utf-8")
     except OSError as exc:
         print(f"Error reading file: {exc}", file=sys.stderr)
         return 2
+
+    config_dir = target_dir if target_dir.is_dir() else target_dir.parent
+    resolved_mode = _resolve_skills_mode(skills_mode, config_dir)
+
+    if upstream_file is not None:
+        upstream = upstream_file.resolve()
+        if not upstream.is_file():
+            print(f"Error: Upstream AGENTS.md not found at '{upstream}'", file=sys.stderr)
+            return 2
+        try:
+            upstream_text = upstream.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"Error reading file: {exc}", file=sys.stderr)
+            return 2
+        upstream_display = str(upstream)
+        upstream_name = upstream.name
+    else:
+        upstream_text = DEFAULT_UPSTREAM_AGENTS_MD
+        upstream_display = "builtin:DEFAULT_UPSTREAM_AGENTS_MD"
+        upstream_name = "DEFAULT_UPSTREAM_AGENTS_MD"
 
     upstream_curated = extract_curated_subset(upstream_text, skills_mode=resolved_mode)
     upstream_curated = apply_sanitization(upstream_curated, "agents_md")
@@ -88,7 +101,7 @@ def sync_agents_md(
         if apply:
             print(f"Already in sync with sandbox.skills={resolved_mode}.")
         else:
-            print(f"Sandbox AGENTS.md at '{target_path}' is in sync with upstream '{upstream}'.")
+            print(f"Sandbox AGENTS.md at '{target_path}' is in sync with upstream '{upstream_display}'.")
         return 0
 
     if write or apply:
@@ -112,12 +125,12 @@ def sync_agents_md(
             sandbox_curated.strip().splitlines(keepends=True),
             upstream_curated.strip().splitlines(keepends=True),
             fromfile=f"sandbox/{target_path.name}",
-            tofile=f"upstream/{upstream.name}",
+            tofile=f"upstream/{upstream_name}",
         )
     )
     sys.stdout.writelines(diff)
     print(
-        f"\nDrift detected between '{upstream}' and '{target_path}'. Run with --write to sync.",
+        f"\nDrift detected between '{upstream_display}' and '{target_path}'. Run with --write to sync.",
         file=sys.stderr,
     )
     return 1

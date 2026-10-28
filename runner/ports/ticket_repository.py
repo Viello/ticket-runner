@@ -58,6 +58,7 @@ class TicketRepository(Protocol):
         self,
         ticket: Ticket | Path | str,
         completed_at: datetime | str | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Mark a ticket as completed and relocate to the completed/ subfolder.
 
@@ -65,6 +66,7 @@ class TicketRepository(Protocol):
             ticket: Ticket entity, file Path, or identifier string.
             completed_at: Optional completion timestamp (datetime or ISO-8601 string).
                 Defaults to current UTC time.
+            status_note: Optional human commentary or review summary.
 
         Returns:
             Destination Path of the relocated ticket file.
@@ -75,12 +77,14 @@ class TicketRepository(Protocol):
         self,
         ticket: Ticket | Path | str,
         details: str | Mapping[str, Any] | None = None,
+        status_note: str | None = None,
     ) -> Path:
         """Mark a ticket as skipped with failure details and relocate to completed/.
 
         Args:
             ticket: Ticket entity, file Path, or identifier string.
             details: Optional failure reason or dictionary of failure metadata.
+            status_note: Optional human commentary or skip reason.
 
         Returns:
             Destination Path of the relocated ticket file.

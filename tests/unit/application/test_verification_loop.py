@@ -13,18 +13,21 @@ import pytest
 
 from runner.application.gatekeeper import (
     CommandOutcome,
+    GatekeeperCommandExecutor,
     VerificationLoop,
     VerificationReport,
+    verify_ticket_mutation,
 )
 from runner.application.handoff_coordinator import (
     SingleCycleStatus,
     WorkerRunResult,
 )
 from runner.domain.config import VerificationConfig
-from runner.domain.exceptions import SignalFormatError
+from runner.domain.evidence import ApprovalDecision
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
+from tests.fakes.fake_approval_gateway import FakeApprovalGateway
 from tests.fakes.fake_intervention import FakeInterventionGateway
 
 
@@ -74,8 +77,9 @@ class _StubCycleRunner:
         return self._response
 
 
-class _StubExecutor:
+class _StubExecutor(GatekeeperCommandExecutor):
     def __init__(self, report: VerificationReport) -> None:
+        super().__init__()
         self._report = report
 
     async def verify(self, config: VerificationConfig) -> VerificationReport:
@@ -98,6 +102,12 @@ class _StubSignalRepo:
 
     def clean_question(self, ticket_id: str) -> None:
         pass
+
+    def purge(self, ticket_id: str) -> None:
+        pass
+
+    def write_answer(self, ticket_id: str, answer: str) -> Any:
+        return None
 
 
 @pytest.fixture
@@ -343,4 +353,339 @@ def test_no_smoke_log_appended_after_pass(
 
     smoke_logs = list((tmp_path / ".agent").glob("smoke_log_*.md"))
     assert len(smoke_logs) == 0
+
+
+def _create_disk_ticket(
+    tmp_path: Path,
+    ticket_id: str = "T125",
+    content: str | None = None,
+) -> tuple[Ticket, Path]:
+    ticket_file = tmp_path / f"{ticket_id}-test.md"
+    if content is None:
+        content = (
+            f"# {ticket_id} — Baseline Boundary Test\n"
+            "**Mode:** AFK\n"
+            "**Status:** pending\n"
+            "**Spec:** docs/specs/17-test.md\n"
+            "\n"
+            "## What to build\n"
+            "The feature to build.\n"
+            "\n"
+            "## Jump-start\n"
+            "- **Files/areas to touch:** `runner/foo.py`\n"
+            "\n"
+            "## Acceptance criteria\n"
+            "- [ ] Criterion 1\n"
+            "- [ ] Criterion 2\n"
+            "- [ ] Criterion 3\n"
+            "\n"
+            "## Smoke scenarios\n"
+            "- [ ] Scenario 1\n"
+            "\n"
+            "## Gotchas\n"
+            "- Quirk 1\n"
+        )
+    ticket_file.write_text(content, encoding="utf-8")
+    ticket = Ticket(
+        id=ticket_id,
+        title="Baseline Boundary Test",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/17-test.md",
+        requirements=("The feature to build.",),
+        acceptance_criteria=("Criterion 1", "Criterion 2", "Criterion 3"),
+        gotchas=("- Quirk 1",),
+        path=ticket_file,
+    )
+    return ticket, ticket_file
+
+
+def _make_ready_signal(ticket_id: str = "T125") -> ReadySignal:
+    return ReadySignal(
+        ticket_id=ticket_id,
+        status=SignalStatus.READY_FOR_VERIFICATION,
+        modified_files=("runner/foo.py",),
+        self_review_notes="Verified",
+        new_gotchas=(),
+        timestamp=datetime.now(timezone.utc),
+        scope="test-spec",
+    )
+
+
+def test_verify_ticket_mutation_pure_unit() -> None:
+    baseline = (
+        "# T125 — Title\n"
+        "**Status:** pending\n\n"
+        "## What to build\n\n"
+        "Feature description.\n\n"
+        "## Acceptance criteria\n\n"
+        "- [ ] Criterion 1\n"
+        "- [ ] Criterion 2\n\n"
+        "## Gotchas\n\n"
+        "- Quirk\n"
+    )
+
+    # 1. Identical content is valid
+    ok, _ = verify_ticket_mutation(baseline, baseline)
+    assert ok
+
+    # 2. Flipping - [ ] to - [x] or - [X] is valid
+    valid_edit = baseline.replace("- [ ] Criterion 1", "- [x] Criterion 1").replace(
+        "- [ ] Criterion 2", "- [X] Criterion 2"
+    )
+    ok, msg = verify_ticket_mutation(baseline, valid_edit)
+    assert ok
+    assert msg == ""
+
+    # 3. Modifying header fails
+    bad_header = baseline.replace("**Status:** pending", "**Status:** completed")
+    ok, msg = verify_ticket_mutation(baseline, bad_header)
+    assert not ok
+    assert "outside '## Acceptance criteria'" in msg
+
+    # 4. Modifying What to build fails
+    bad_wtb = baseline.replace("Feature description.", "Hacked description.")
+    ok, msg = verify_ticket_mutation(baseline, bad_wtb)
+    assert not ok
+    assert "outside '## Acceptance criteria'" in msg
+
+    # 5. Modifying criterion wording fails
+    bad_wording = baseline.replace("- [ ] Criterion 1", "- [x] Criterion 1 changed")
+    ok, msg = verify_ticket_mutation(baseline, bad_wording)
+    assert not ok
+    assert "acceptance criterion text was modified" in msg
+
+    # 6. Unchecking an existing criterion fails
+    ticked_baseline = baseline.replace("- [ ] Criterion 1", "- [x] Criterion 1")
+    unticked_edit = ticked_baseline.replace("- [x] Criterion 1", "- [ ] Criterion 1")
+    ok, msg = verify_ticket_mutation(ticked_baseline, unticked_edit)
+    assert not ok
+    assert "un-ticking an existing criterion is prohibited" in msg
+
+    # 7. Adding lines fails
+    added_lines = baseline + "- [ ] Criterion 3\n"
+    ok, msg = verify_ticket_mutation(baseline, added_lines)
+    assert not ok
+    assert "line count changed" in msg
+
+    # 8. Deleting lines fails
+    deleted_lines = baseline.replace("- [ ] Criterion 2\n", "")
+    ok, msg = verify_ticket_mutation(baseline, deleted_lines)
+    assert not ok
+    assert "line count changed" in msg
+
+    # 9. Modifying gotchas fails
+    bad_gotchas = baseline.replace("- Quirk", "- Hacked quirk")
+    ok, msg = verify_ticket_mutation(baseline, bad_gotchas)
+    assert not ok
+    assert "outside '## Acceptance criteria'" in msg
+
+
+def test_dispatch_baseline_permits_ticking_acceptance_criteria(tmp_path: Path) -> None:
+    ticket, ticket_file = _create_disk_ticket(tmp_path)
+    ready = _make_ready_signal(ticket.id)
+
+    async def _worker_cycle(t: Ticket, **kwargs: Any) -> WorkerRunResult:
+        # Worker flips checkboxes in the ticket file on disk
+        text = ticket_file.read_text(encoding="utf-8")
+        updated = text.replace("- [ ] Criterion 1", "- [x] Criterion 1").replace(
+            "- [ ] Criterion 2", "- [X] Criterion 2"
+        )
+        ticket_file.write_text(updated, encoding="utf-8")
+        return WorkerRunResult(
+            status=SingleCycleStatus.READY,
+            occupancy=500,
+            session_id="ses_1",
+            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+        )
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_worker_cycle,
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+    assert res.attempts == 1
+
+    # Ticks are preserved on disk
+    final_text = ticket_file.read_text(encoding="utf-8")
+    assert "- [x] Criterion 1" in final_text
+    assert "- [X] Criterion 2" in final_text
+    assert "- [ ] Criterion 3" in final_text
+
+
+def test_dispatch_baseline_rejects_header_mutation(tmp_path: Path) -> None:
+    ticket, ticket_file = _create_disk_ticket(tmp_path)
+    ready = _make_ready_signal(ticket.id)
+
+    cycle_count = 0
+    received_prompts: list[str] = []
+
+    async def _worker_cycle(t: Ticket, **kwargs: Any) -> WorkerRunResult:
+        nonlocal cycle_count
+        cycle_count += 1
+        prompt = kwargs.get("prompt")
+        if prompt:
+            received_prompts.append(prompt)
+
+        if cycle_count == 1:
+            # Unauthorized edit: changes header
+            text = ticket_file.read_text(encoding="utf-8")
+            hacked = text.replace("**Status:** pending", "**Status:** completed")
+            ticket_file.write_text(hacked, encoding="utf-8")
+        else:
+            # Cycle 2: compliant edit
+            text = ticket_file.read_text(encoding="utf-8")
+            valid = text.replace("- [ ] Criterion 1", "- [x] Criterion 1")
+            ticket_file.write_text(valid, encoding="utf-8")
+
+        return WorkerRunResult(
+            status=SingleCycleStatus.READY,
+            occupancy=500,
+            session_id="ses_1",
+            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+        )
+
+    signal_repo = _StubSignalRepo(ready)
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_worker_cycle,
+        signal_repository=signal_repo,
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+    # Attempt was consumed by the rejection, so total attempts == 2
+    assert res.attempts == 2
+    assert cycle_count == 2
+
+    # Baseline was restored after cycle 1 failure, and prompt informed worker
+    assert len(received_prompts) == 1
+    assert "outside '## Acceptance criteria'" in received_prompts[0]
+
+
+def test_dispatch_baseline_rejects_modifying_criterion_wording(tmp_path: Path) -> None:
+    ticket, ticket_file = _create_disk_ticket(tmp_path)
+    ready = _make_ready_signal(ticket.id)
+
+    cycle_count = 0
+    received_prompts: list[str] = []
+
+    async def _worker_cycle(t: Ticket, **kwargs: Any) -> WorkerRunResult:
+        nonlocal cycle_count
+        cycle_count += 1
+        prompt = kwargs.get("prompt")
+        if prompt:
+            received_prompts.append(prompt)
+
+        if cycle_count == 1:
+            # Unauthorized edit: modifies wording of criterion
+            text = ticket_file.read_text(encoding="utf-8")
+            hacked = text.replace("- [ ] Criterion 1", "- [x] Criterion 1 (hacked)")
+            ticket_file.write_text(hacked, encoding="utf-8")
+        else:
+            # Compliant edit
+            text = ticket_file.read_text(encoding="utf-8")
+            valid = text.replace("- [ ] Criterion 1", "- [x] Criterion 1")
+            ticket_file.write_text(valid, encoding="utf-8")
+
+        return WorkerRunResult(
+            status=SingleCycleStatus.READY,
+            occupancy=500,
+            session_id="ses_1",
+            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+        )
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_worker_cycle,
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+    assert res.attempts == 2
+    assert len(received_prompts) == 1
+    assert "acceptance criterion text was modified" in received_prompts[0]
+
+
+def test_dispatch_baseline_rejects_ticket_deletion(tmp_path: Path) -> None:
+    ticket, ticket_file = _create_disk_ticket(tmp_path)
+    ready = _make_ready_signal(ticket.id)
+
+    cycle_count = 0
+
+    async def _worker_cycle(t: Ticket, **kwargs: Any) -> WorkerRunResult:
+        nonlocal cycle_count
+        cycle_count += 1
+        if cycle_count == 1:
+            ticket_file.unlink()
+        else:
+            text = ticket_file.read_text(encoding="utf-8")
+            ticket_file.write_text(
+                text.replace("- [ ] Criterion 1", "- [x] Criterion 1"), encoding="utf-8"
+            )
+
+        return WorkerRunResult(
+            status=SingleCycleStatus.READY,
+            occupancy=500,
+            session_id="ses_1",
+            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+        )
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_worker_cycle,
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+    assert res.attempts == 2
+    assert ticket_file.is_file()
+
+
+def test_evidence_card_populated_with_unticked_criteria(tmp_path: Path) -> None:
+    ticket, ticket_file = _create_disk_ticket(tmp_path)
+    ready = _make_ready_signal(ticket.id)
+
+    async def _worker_cycle(t: Ticket, **kwargs: Any) -> WorkerRunResult:
+        # Worker ticks only Criterion 1; leaves Criterion 2 and 3 unticked
+        text = ticket_file.read_text(encoding="utf-8")
+        updated = text.replace("- [ ] Criterion 1", "- [x] Criterion 1")
+        ticket_file.write_text(updated, encoding="utf-8")
+        return WorkerRunResult(
+            status=SingleCycleStatus.READY,
+            occupancy=500,
+            session_id="ses_1",
+            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+        )
+
+    fake_approval = FakeApprovalGateway(decisions=[ApprovalDecision.APPROVE])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_worker_cycle,
+        signal_repository=_StubSignalRepo(ready),
+        executor=_StubExecutor(_passing_report()),
+        intervention_gateway=FakeInterventionGateway(),
+        approval_gateway=fake_approval,
+        approval_mode="human",
+    )
+
+    res = asyncio.run(loop.run())
+    assert res.is_passed
+    assert len(fake_approval.received_cards) == 1
+    card = fake_approval.received_cards[0]
+    assert card.unticked_criteria == ("Criterion 2", "Criterion 3")
+
 

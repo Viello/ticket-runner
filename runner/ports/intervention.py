@@ -11,16 +11,17 @@ from runner.domain.ticket import Ticket
 
 
 class InterventionAction(Enum):
-    """Human decisions available when the verification budget is exhausted."""
+    """Human decisions available when the verification budget is exhausted or at pre-dispatch gate."""
 
     RETRY = "retry"
     SKIP = "skip"
     ABORT = "abort"
+    PROCEED = "proceed"
 
 
 @dataclass(frozen=True)
 class InterventionDecision:
-    """Human decision and optional hint after budget exhaustion."""
+    """Human decision and optional hint/guidance after budget exhaustion or HITL pre-dispatch gate."""
 
     action: InterventionAction
     hint: str | None = None
@@ -85,4 +86,19 @@ class InterventionGateway(Protocol):
             NonInteractiveError: If no interactive stdin is available.
         """
         ...
-
+
+    def request_hitl_intervention(self, ticket: Ticket) -> InterventionDecision:
+        """Ask the human for pre-dispatch guidance before spawning a Worker.
+
+        Args:
+            ticket: Ticket marked with mode='HITL' or status=TicketStatus.BLOCKED.
+
+        Returns:
+            InterventionDecision with action PROCEED, SKIP, or ABORT.
+            When PROCEED, hint carries the operator's instructions.
+
+        Raises:
+            NonInteractiveError: If no interactive stdin is available and the
+                adapter cannot fall back to abort.
+        """
+        ...

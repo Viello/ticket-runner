@@ -162,6 +162,19 @@ def build_evidence_card_embed(card: EvidenceCard) -> dict[str, Any]:
         "inline": False,
     })
 
+    # 4. Unticked Criteria (if present)
+    if card.unticked_criteria:
+        lines = [f"• [ ] {_scrub_secrets(str(c))}" for c in card.unticked_criteria]
+        unticked_val = "\n".join(lines)
+        if len(unticked_val) > MAX_DISCORD_FIELD_VALUE_LENGTH:
+            suffix = "\n... (truncated)"
+            unticked_val = unticked_val[: MAX_DISCORD_FIELD_VALUE_LENGTH - len(suffix)] + suffix
+        fields.append({
+            "name": "Unticked Criteria",
+            "value": unticked_val,
+            "inline": False,
+        })
+
     # Ensure field count strictly clamped to 25
     fields = fields[:MAX_DISCORD_FIELDS_COUNT]
 

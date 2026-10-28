@@ -1310,6 +1310,10 @@ class _FakePresenceCoordinator:
         self.schedule_calls: list[tuple[str, str, Any]] = []
         self.cancel_calls: int = 0
 
+    def set_mode(self, mode: str) -> str:
+        self.current_mode = mode
+        return mode
+
     async def schedule_escalation(self, ticket_id: str, thread_id: str, discord_logger: Any) -> None:
         self.schedule_calls.append((ticket_id, thread_id, discord_logger))
 
@@ -1762,3 +1766,257 @@ def test_transient_discord_errors_do_not_abort_processing(tmp_path: Path) -> Non
 
 
 
+
+
+def test_hitl_mode_halts_before_cycle_runner_and_proceeds_with_guidance(tmp_path: Path) -> None:
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "mode", "HITL")
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(
+        hitl_decisions=[InterventionDecision(action=InterventionAction.PROCEED, hint="Focus on domain model")]
+    )
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["model.py"],
+                "self_review_notes": "Implemented with guidance",
+                "new_gotchas": [],
+                "timestamp": "2026-10-28T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+    assert len(gateway.hitl_records) == 1
+    assert gateway.hitl_records[0].id == "T126"
+    assert len(cycle_runner.calls) == 1
+    prompt_used = cycle_runner.calls[0]["prompt"]
+    assert prompt_used is not None
+    assert "Focus on domain model" in prompt_used
+    assert prompt_used.startswith("Human guidance:\nFocus on domain model")
+
+
+def test_hitl_mode_transitions_state_publishes_status_and_escalates(tmp_path: Path) -> None:
+    from runner.domain.state import StateStatus
+    from runner.domain.status_event import RunState
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+    from tests.fakes.fake_state_store import FakeStateStore
+    from runner.application.state_coordinator import StateCoordinator
+    from tests.fakes.fake_status_publisher import FakeStatusPublisher
+
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "mode", "HITL")
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(
+        hitl_decisions=[InterventionDecision(action=InterventionAction.PROCEED, hint="Proceed please")]
+    )
+    thread_mgr = _FakeDiscordThreadManager()
+    discord_logger = _FakeDiscordLogger()
+    presence_coord = _FakePresenceCoordinator(mode="away")
+
+    state_store = FakeStateStore()
+    state_coord = StateCoordinator(state_store=state_store)
+    status_publisher = FakeStatusPublisher()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["foo.py"],
+                "self_review_notes": "Done",
+                "new_gotchas": [],
+                "timestamp": "2026-10-28T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+        state_coordinator=state_coord,
+        status_publisher=status_publisher,
+        discord_thread_manager=thread_mgr,
+        discord_logger=discord_logger,
+        presence_coordinator=presence_coord,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+
+    # 1. StateCoordinator recorded WAITING_FOR_USER
+    saved_statuses = [call.get("status") for call in state_store.write_calls]
+    assert StateStatus.WAITING_FOR_USER.value in saved_statuses
+
+    # 2. StatusPublisher received WAITING_FOR_USER event
+    waiting_events = [e for e in status_publisher.events if e.run_state == RunState.WAITING_FOR_USER]
+    assert len(waiting_events) >= 1
+    assert waiting_events[0].ticket_id == "T126"
+
+    # 3. Discord Status Card was updated with Waiting for User before Working
+    card_statuses = [call[2].get("status", "") for call in thread_mgr.update_calls]
+    assert any("Waiting for User" in s for s in card_statuses)
+
+    # 4. PresenceCoordinator was called to schedule escalation and then cancelled
+    assert len(presence_coord.schedule_calls) >= 1
+    assert presence_coord.schedule_calls[0][0] == "T126"
+    assert presence_coord.cancel_calls >= 1
+
+
+def test_hitl_mode_skip_marks_ticket_skipped_and_never_spawns_worker(tmp_path: Path) -> None:
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "mode", "HITL")
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(
+        hitl_decisions=[InterventionDecision(action=InterventionAction.SKIP)]
+    )
+
+    cycle_runner = _StubCycleRunner([])
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_skipped is True
+    assert outcome.status_note == "Skipped by operator at HITL pre-dispatch gate"
+    assert len(cycle_runner.calls) == 0
+
+
+def test_hitl_mode_abort_maps_to_aborted_and_never_spawns_worker(tmp_path: Path) -> None:
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "mode", "HITL")
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(
+        hitl_decisions=[InterventionDecision(action=InterventionAction.ABORT)]
+    )
+
+    cycle_runner = _StubCycleRunner([])
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_aborted is True
+    assert "aborted" in str(outcome.details).lower()
+    assert len(cycle_runner.calls) == 0
+
+
+def test_blocked_status_triggers_hitl_gate(tmp_path: Path) -> None:
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "status", TicketStatus.BLOCKED)
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(
+        hitl_decisions=[InterventionDecision(action=InterventionAction.SKIP)]
+    )
+
+    cycle_runner = _StubCycleRunner([])
+    executor = _StubExecutor([])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_skipped is True
+    assert outcome.status_note == "Skipped by operator at HITL pre-dispatch gate"
+    assert len(gateway.hitl_records) == 1
+    assert len(cycle_runner.calls) == 0
+
+
+def test_afk_mode_does_not_trigger_hitl_gate(tmp_path: Path) -> None:
+    ticket = _make_ticket(ticket_id="T126")
+    object.__setattr__(ticket, "mode", "AFK")
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway()
+
+    ready_path = paths.signals_dir / f"{ticket.id}_ready.json"
+    ready_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _on_call(t: Ticket, count: int) -> None:
+        ready_path.write_text(
+            json.dumps({
+                "ticket_id": t.id,
+                "status": "ready_for_verification",
+                "modified_files": ["foo.py"],
+                "self_review_notes": "Implemented",
+                "new_gotchas": [],
+                "timestamp": "2026-10-28T00:00:00+00:00",
+            }),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")],
+        on_call=_on_call,
+    )
+    executor = _StubExecutor([_passing_report()])
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=executor,
+        intervention_gateway=gateway,
+    )
+
+    outcome = asyncio.run(processor(ticket))
+    assert outcome.is_approved is True
+    assert len(gateway.hitl_records) == 0
+    assert len(cycle_runner.calls) == 1

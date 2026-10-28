@@ -151,7 +151,9 @@ def generate_catalog_readme(skills: list[SkillMetadata]) -> str:
         "<skill-name>/",
         "├── SKILL.md            # Instruction manual with YAML frontmatter (name, description)",
         "├── scripts/            # (Optional) Deterministic automation or validation scripts",
-        "└── references/         # (Optional) Deep architectural references, schemas, or templates",
+        "├── references/         # (Optional) Deep architectural references, schemas, or templates",
+        "└── agents/             # (Optional) Harness-specific interface metadata",
+        "    └── openai.yaml     # Codex app display name, short description, optional policy",
         "```",
         "",
         "## Contributing",
@@ -309,6 +311,12 @@ def verify_tarball_endpoint(repo: str, branch: str = "main") -> int:
     names = tf.getnames()
     assert any("implement/SKILL.md" in n for n in names), (
         "Tarball does not contain canonical skill 'implement/SKILL.md'"
+    )
+    assert any("implement-ticket-runner/SKILL.md" in n for n in names), (
+        "Tarball does not contain canonical skill 'implement-ticket-runner/SKILL.md'"
+    )
+    assert any("to-ticket-runner/SKILL.md" in n for n in names), (
+        "Tarball does not contain canonical skill 'to-ticket-runner/SKILL.md'"
     )
     return len(names)
 

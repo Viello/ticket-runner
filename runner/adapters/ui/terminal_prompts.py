@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import sys
-from typing import Any
 
 from runner.domain.exceptions import NonInteractiveError
 from runner.domain.signal import QuestionSignal, QuestionType
@@ -12,13 +11,13 @@ from runner.domain.ticket import Ticket
 from runner.ports.intervention import (
     InterventionAction,
     InterventionDecision,
-    InterventionGateway,
 )
 from runner.ports.terminal_display import TerminalDisplay, paused_display
 
 _RETRY_WORDS = ("r", "retry")
 _SKIP_WORDS = ("s", "skip")
-_ABORT_WORDS = ("a", "abort")
+_ABORT_WORDS = ("a", "abort", "c", "cancel")
+_PROCEED_WORDS = ("p", "proceed", "continue")
 _CONFIRM_WORDS = ("y", "yes")
 
 _INTERACTIVE_FAILURES = (OSError, EOFError)
@@ -81,6 +80,14 @@ class TerminalInterventionGateway:
             "[R]etry [hint] | [S]kip | [A]bort: "
         )
 
+    def _render_hitl_menu(self, ticket: Ticket) -> str:
+        return (
+            f"[HITL Gate] Ticket {ticket.id} requires human guidance before dispatch "
+            f"(Mode: {ticket.mode}, Status: {ticket.status.value}).\n"
+            f"Title: {ticket.title}\n"
+            "[P]roceed [instructions] | [S]kip | [A]bort: "
+        )
+
     @staticmethod
     def _parse_menu_input(raw: str) -> tuple[InterventionAction | None, str | None]:
         text = raw.strip()
@@ -91,6 +98,22 @@ class TerminalInterventionGateway:
         hint = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
         if word in _RETRY_WORDS:
             return InterventionAction.RETRY, hint
+        if word in _SKIP_WORDS:
+            return InterventionAction.SKIP, None
+        if word in _ABORT_WORDS:
+            return InterventionAction.ABORT, None
+        return None, None
+
+    @staticmethod
+    def _parse_hitl_input(raw: str) -> tuple[InterventionAction | None, str | None]:
+        text = raw.strip()
+        if not text:
+            return None, None
+        parts = text.split(maxsplit=1)
+        word = parts[0].lower()
+        guidance = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+        if word in _PROCEED_WORDS:
+            return InterventionAction.PROCEED, guidance
         if word in _SKIP_WORDS:
             return InterventionAction.SKIP, None
         if word in _ABORT_WORDS:
@@ -136,6 +159,20 @@ class TerminalInterventionGateway:
             if action is None:
                 continue
             return InterventionDecision(action=action, hint=hint)
+
+    def request_hitl_intervention(self, ticket: Ticket) -> InterventionDecision:
+        """Prompt operator at pre-dispatch HITL gate before spawning a Worker."""
+        self._output_fn(
+            f"[HITL Gate] Ticket {ticket.id} requires human guidance before dispatch."
+        )
+        while True:
+            raw = self._read_line(self._render_hitl_menu(ticket))
+            if raw is None:
+                return InterventionDecision(action=InterventionAction.ABORT)
+            action, guidance = self._parse_hitl_input(raw)
+            if action is None:
+                continue
+            return InterventionDecision(action=action, hint=guidance)
 
     def prompt_escalation(self, ticket: Ticket, report: str) -> bool:
         """Prompt operator whether to run /diagnosing-bugs upon diagnostic escalation."""

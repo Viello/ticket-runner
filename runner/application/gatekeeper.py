@@ -16,10 +16,15 @@ import re
 import shutil
 import sys
 import time
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.markdown.atomic_write import atomic_write_text
+from runner.adapters.markdown.parser import (
+    SECTION_FIELDS,
+    SECTION_PATTERN,
+    TicketMarkdownParser,
+)
 from runner.application.handoff_coordinator import SingleCycleStatus, WorkerRunResult
 from runner.application.state_coordinator import StateCoordinator
 from runner.domain.config import TokenBudgetConfig, VerificationConfig
@@ -39,7 +44,6 @@ from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import (
     InterventionAction,
-    InterventionDecision,
     InterventionGateway,
 )
 from runner.ports.signal_repository import SignalRepository
@@ -641,6 +645,7 @@ class VerificationLoopResult:
     resources_accessed: frozenset[str] = frozenset()
     failure_diagnostic: FailureDiagnostic | None = None
     approval_decision: ApprovalDecision | None = None
+    status_note: str | None = None
 
     @property
     def is_passed(self) -> bool:
@@ -695,6 +700,7 @@ class VerificationLoopResult:
         attempts: int,
         session_id: str | None = None,
         resources_accessed: frozenset[str] = frozenset(),
+        status_note: str | None = None,
     ) -> VerificationLoopResult:
         return cls(
             status=VerificationLoopStatus.SKIPPED,
@@ -702,6 +708,7 @@ class VerificationLoopResult:
             attempts=attempts,
             session_id=session_id,
             resources_accessed=resources_accessed,
+            status_note=status_note,
         )
 
     @classmethod
@@ -747,6 +754,101 @@ class WorkerCycleRunner(Protocol):
         prompt: str | None = None,
     ) -> WorkerRunResult:
         ...
+
+
+CHECKBOX_LINE_PATTERN: re.Pattern[str] = re.compile(
+    r"^(?P<prefix>\s*-\s*\[)(?P<tick>[ xX])(?P<suffix>\].*)$"
+)
+
+
+def verify_ticket_mutation(
+    baseline_text: str,
+    current_text: str,
+    ticket_path: Path | str | None = None,
+) -> tuple[bool, str]:
+    """Verify that current_text mutates baseline_text only by flipping '- [ ] ' to '- [x] ' or '- [X] '
+
+    inside '## Acceptance criteria'. Any other edit (headers, other sections, modified wording,
+    added or deleted lines, or un-ticking criteria) returns (False, diagnostic_message).
+    """
+    path_desc = f" in ticket file '{ticket_path}'" if ticket_path else ""
+    baseline_lines = baseline_text.splitlines()
+    current_lines = current_text.splitlines()
+
+    if len(baseline_lines) != len(current_lines):
+        return (
+            False,
+            f"Unauthorized ticket modification{path_desc}: line count changed from "
+            f"{len(baseline_lines)} to {len(current_lines)} (adding or deleting lines is prohibited).",
+        )
+
+    current_section: str | None = None
+    for i, (base_line, curr_line) in enumerate(zip(baseline_lines, current_lines)):
+        match = SECTION_PATTERN.match(base_line)
+        if match:
+            heading_name = match.group("name").strip().lower()
+            current_section = SECTION_FIELDS.get(heading_name, heading_name)
+
+        if base_line == curr_line:
+            continue
+
+        line_no = i + 1
+        if current_section != "acceptance_criteria":
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no} outside '## Acceptance criteria':\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+        m_base = CHECKBOX_LINE_PATTERN.match(base_line)
+        m_curr = CHECKBOX_LINE_PATTERN.match(curr_line)
+        if m_base is None or m_curr is None:
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no}: "
+                f"modified line is not a valid checkbox criterion:\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+        if m_base.group("prefix") != m_curr.group("prefix"):
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no}: "
+                f"checkbox bullet or indentation was modified:\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+        if m_base.group("suffix") != m_curr.group("suffix"):
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no}: "
+                f"acceptance criterion text was modified (only flipping '- [ ] ' to '- [x] ' is permitted):\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+        if m_base.group("tick") != " ":
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no}: "
+                f"un-ticking an existing criterion is prohibited:\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+        if m_curr.group("tick") not in ("x", "X"):
+            return (
+                False,
+                f"Unauthorized ticket modification{path_desc} at line {line_no}: "
+                f"invalid checkbox mark {m_curr.group('tick')!r} (expected 'x' or 'X'):\n"
+                f"Expected: {base_line!r}\n"
+                f"Actual:   {curr_line!r}",
+            )
+
+    return True, ""
 
 
 class VerificationLoop:
@@ -816,6 +918,7 @@ class VerificationLoop:
         self._approval_mode = approval_mode
         self._tui_coordinator = tui_coordinator
         self._handoff_logged = False
+        self._pre_dispatch_checked = False
         if isinstance(token_budget, TokenBudgetConfig):
             self._effective_token_budget = token_budget.ceiling
         elif isinstance(token_budget, int) and not isinstance(token_budget, bool):
@@ -992,9 +1095,93 @@ class VerificationLoop:
         if prompt is not None:
             self._pending_prompt = prompt
 
+        if not self._pre_dispatch_checked:
+            self._pre_dispatch_checked = True
+            if self._ticket.is_hitl:
+                if self._state_coordinator is not None:
+                    self._state_coordinator.transition_to_waiting_for_user()
+
+                self._publish_status(
+                    event_name="WAITING_FOR_USER",
+                    run_state=RunState.WAITING_FOR_USER,
+                    attempt=0,
+                    last_step_summary="Waiting for user at HITL pre-dispatch gate",
+                )
+
+                await self._trigger_phase("Waiting for User")
+
+                if (
+                    self._presence_coordinator is not None
+                    and self._discord_logger is not None
+                    and self._thread_id
+                ):
+                    try:
+                        schedule_res = self._presence_coordinator.schedule_escalation(
+                            self._ticket.id, self._thread_id, self._discord_logger
+                        )
+                        if inspect.iscoroutine(schedule_res):
+                            await schedule_res
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning(
+                            "Failed to schedule escalation at HITL pre-dispatch gate: %s", exc
+                        )
+
+                hitl_decision = self._intervention_gateway.request_hitl_intervention(self._ticket)
+                if inspect.iscoroutine(hitl_decision):
+                    hitl_decision = await hitl_decision
+
+                if self._presence_coordinator is not None:
+                    try:
+                        self._presence_coordinator.cancel_escalation()
+                        self._presence_coordinator.set_mode("nearby")
+                    except (DiscordGatewayError, Exception) as exc:
+                        logger.warning("Failed to cancel escalation after HITL decision: %s", exc)
+
+                if hitl_decision.action == InterventionAction.ABORT:
+                    raise UserAbortError(
+                        f"Execution aborted by operator at HITL pre-dispatch gate for ticket '{self._ticket.id}'."
+                    )
+
+                if hitl_decision.action == InterventionAction.SKIP:
+                    return VerificationLoopResult.skipped(
+                        diagnostics="Skipped by operator at HITL pre-dispatch gate",
+                        attempts=self._attempts,
+                        session_id=self._active_session_id,
+                        resources_accessed=frozenset(self._accumulated_resources),
+                        status_note="Skipped by operator at HITL pre-dispatch gate",
+                    )
+
+                if hitl_decision.action == InterventionAction.PROCEED:
+                    guidance = hitl_decision.hint or getattr(hitl_decision, "guidance", None)
+                    if guidance and guidance.strip():
+                        guidance_prefix = f"Human guidance:\n{guidance.strip()}\n\n"
+                        if self._pending_prompt:
+                            self._pending_prompt = f"{guidance_prefix}{self._pending_prompt}"
+                        else:
+                            self._pending_prompt = guidance.strip()
+                    if self._state_coordinator is not None:
+                        self._state_coordinator.transition_to_working(
+                            ticket_id=self._ticket.id,
+                            session_id=self._active_session_id,
+                            verification_attempts=self._attempts,
+                        )
+
         while True:
             current_prompt = self._pending_prompt
             current_session = self._active_session_id
+
+            # Snapshot dispatch baseline for active ticket if present on disk
+            self._dispatch_baseline: str | None = None
+            if self._ticket.path and self._ticket.path.is_file():
+                try:
+                    self._dispatch_baseline = self._ticket.path.read_text(encoding="utf-8")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to snapshot dispatch baseline for ticket %s: %s",
+                        self._ticket.id,
+                        exc,
+                    )
+                    self._dispatch_baseline = None
 
             await self._trigger_phase("Working")
 
@@ -1062,6 +1249,56 @@ class VerificationLoop:
                 ready_format_error = exc
 
             if ready_signal is not None:
+                # Security boundary: compare active ticket on disk against dispatch baseline
+                if self._dispatch_baseline is not None:
+                    ticket_deleted = not (self._ticket.path and self._ticket.path.is_file())
+                    if ticket_deleted:
+                        atomic_write_text(self._ticket.path, self._dispatch_baseline)
+                        self._clean_question(self._ticket.id)
+                        self._signal_repository.consume_ready(self._ticket.id)
+                        diagnostics = (
+                            f"Unauthorized ticket modification: ticket file '{self._ticket.path}' "
+                            f"was deleted by worker subprocess."
+                        )
+                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        if escalation_result is not None:
+                            return escalation_result
+                        self._attempts += 1
+                        self._last_diagnostics = diagnostics
+                        action = await self._handle_failure(diagnostics)
+                        if action == InterventionAction.SKIP:
+                            return VerificationLoopResult.skipped(
+                                diagnostics=self._last_diagnostics,
+                                attempts=self._attempts,
+                                session_id=self._active_session_id,
+                                resources_accessed=frozenset(self._accumulated_resources),
+                            )
+                        continue
+
+                    current_content = self._ticket.path.read_text(encoding="utf-8")
+                    is_valid, reason = verify_ticket_mutation(
+                        self._dispatch_baseline, current_content, self._ticket.path
+                    )
+                    if not is_valid:
+                        atomic_write_text(self._ticket.path, self._dispatch_baseline)
+                        self._clean_question(self._ticket.id)
+                        self._signal_repository.consume_ready(self._ticket.id)
+                        diagnostics = reason
+                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        if escalation_result is not None:
+                            return escalation_result
+                        self._attempts += 1
+                        self._last_diagnostics = diagnostics
+                        action = await self._handle_failure(diagnostics)
+                        if action == InterventionAction.SKIP:
+                            return VerificationLoopResult.skipped(
+                                diagnostics=self._last_diagnostics,
+                                attempts=self._attempts,
+                                session_id=self._active_session_id,
+                                resources_accessed=frozenset(self._accumulated_resources),
+                            )
+                        continue
+
                 await self._trigger_phase("Reviewing")
                 if self._discord_thread_manager is not None and self._thread_id:
                     try:
@@ -1121,25 +1358,54 @@ class VerificationLoop:
                             except Exception as exc:
                                 logger.warning("Failed to collect evidence paths: %s", exc)
 
+                        unticked: tuple[str, ...] = ()
+                        if self._ticket.path and self._ticket.path.is_file():
+                            try:
+                                parsed_ticket = TicketMarkdownParser().parse(self._ticket.path)
+                                unticked = tuple(
+                                    c for c in parsed_ticket.acceptance_criteria
+                                    if c not in parsed_ticket.checked_criteria
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to re-parse ticket '%s' for unticked criteria: %s",
+                                    self._ticket.id,
+                                    exc,
+                                )
+                                unticked = tuple(
+                                    c for c in self._ticket.acceptance_criteria
+                                    if c not in self._ticket.checked_criteria
+                                )
+                        else:
+                            unticked = tuple(
+                                c for c in self._ticket.acceptance_criteria
+                                if c not in self._ticket.checked_criteria
+                            )
+
                         card = EvidenceCard(
                             ticket_id=self._ticket.id,
                             test_status="passed",
                             harness_status=None,
                             evidence_paths=evidence_paths,
+                            unticked_criteria=unticked,
                         )
 
                         if self._state_coordinator is not None:
                             self._state_coordinator.transition_to_waiting_for_user()
 
-                        decision = self._approval_gateway.request_approval(card)
-                        if inspect.iscoroutine(decision):
-                            decision = await decision
+                        raw_decision = self._approval_gateway.request_approval(card)
+                        decision: ApprovalDecision
+                        if inspect.isawaitable(raw_decision):
+                            decision = await raw_decision
+                        else:
+                            decision = raw_decision  # type: ignore[assignment]
 
                         if decision == ApprovalDecision.APPROVE:
                             approval_decision = decision
                         elif decision == ApprovalDecision.REJECT:
-                            reason = getattr(decision, "reason", None)
-                            self._pending_prompt = _format_rejection_hint(reason)
+                            raw_reason = getattr(decision, "reason", None)
+                            reason_str: str | None = str(raw_reason) if raw_reason is not None else None
+                            self._pending_prompt = _format_rejection_hint(reason_str)
                             if self._state_coordinator is not None:
                                 self._state_coordinator.transition_to_working(
                                     ticket_id=self._ticket.id,

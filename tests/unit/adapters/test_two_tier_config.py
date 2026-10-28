@@ -79,7 +79,7 @@ worker:
     assert cfg.presence.idle_escalation_minutes == 7
 
     # Machine defaults
-    assert cfg.worker.execution_skill == ".agents/skills/implement/SKILL.md"
+    assert cfg.worker.execution_skill == ".agents/skills/implement-ticket-runner/SKILL.md"
     assert cfg.lifecycle.queue_completion == "standby"
     assert cfg.git.auto_push is False
 
@@ -117,7 +117,7 @@ verification:
     assert cfg.lifecycle.clean_slate == "interactive"
     assert cfg.git.auto_push is False
     assert cfg.worker.provider == "opencode"
-    assert cfg.worker.execution_skill == ".agents/skills/implement/SKILL.md"
+    assert cfg.worker.execution_skill == ".agents/skills/implement-ticket-runner/SKILL.md"
 
 
 def test_load_two_tier_missing_global_file_fallback(tmp_path: Path) -> None:

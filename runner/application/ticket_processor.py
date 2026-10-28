@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
 
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.markdown.gotchas_store import GotchasStore
@@ -28,8 +27,6 @@ from runner.application.prompt_builder import PromptBuilder
 from runner.application.state_coordinator import StateCoordinator
 from runner.application.queue_orchestrator import (
     TicketOutcome,
-    TicketOutcomeStatus,
-    TicketProcessor as TicketProcessorProtocol,
 )
 from runner.adapters.discord.logger import CRITICAL_EVENT_TYPES
 from runner.application.git_operations import GitOperations
@@ -42,6 +39,8 @@ from runner.ports.approval_gateway import ApprovalGateway
 from runner.ports.intervention import InterventionGateway
 from runner.ports.signal_repository import SignalRepository
 from runner.ports.status_publisher import StatusPublisher
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_PRINTER: Callable[[str], None] = print
 
@@ -113,6 +112,7 @@ class GatekeeperTicketProcessor:
         )
         self._current_thread_id: str = ""
         self._current_status_card_message_id: str = ""
+        self._git_operations: GitOperations | None
         if git_operations is not None:
             self._git_operations = git_operations
         elif coordinator is not None and getattr(coordinator, "git_operations", None) is not None:
@@ -131,6 +131,7 @@ class GatekeeperTicketProcessor:
         else:
             self._signal_repository = FilesystemSignalRepository(RuntimePaths())
 
+        self._cycle_runner: WorkerCycleRunner | Callable[..., Awaitable[WorkerRunResult]] | None
         if cycle_runner is not None:
             self._cycle_runner = cycle_runner
         elif coordinator is not None:
@@ -315,7 +316,7 @@ class GatekeeperTicketProcessor:
         execution_skill = (
             self._worker_config.execution_skill
             if self._worker_config is not None
-            else ".agents/skills/implement/SKILL.md"
+            else ".agents/skills/implement-ticket-runner/SKILL.md"
         )
 
         return self._prompt_builder.build(
@@ -434,8 +435,9 @@ class GatekeeperTicketProcessor:
             except (DiscordGatewayError, Exception) as exc:
                 logger.warning("Failed to emit Discord event %s: %s", event_type, exc)
 
-        # Transition to initial Working phase
-        await _on_phase_change("Working")
+        # Transition to initial Working phase if not HITL/blocked
+        if not ticket.is_hitl:
+            await _on_phase_change("Working")
 
         # 3. Create and drive VerificationLoop
         factory = self._loop_factory or VerificationLoop
@@ -577,7 +579,18 @@ class GatekeeperTicketProcessor:
 
             if result.is_skipped:
                 diagnostics = result.diagnostics or loop.last_diagnostics or ""
-                return TicketOutcome.skipped(details=diagnostics)
+                status_note = getattr(result, "status_note", None)
+                details: Any
+                if status_note:
+                    details = {
+                        "status_note": status_note,
+                    }
+                else:
+                    details = diagnostics
+                return TicketOutcome.skipped(
+                    details=details,
+                    status_note=status_note,
+                )
 
             if result.is_intervention_requested:
                 diagnostics = result.diagnostics or loop.last_diagnostics or ""
