@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
-from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from rich.console import Console
@@ -67,6 +64,26 @@ def test_render_card_contents(sample_card: EvidenceCard) -> None:
     assert "PASSED" in rendered
     assert ".agent/evidence/T110/output.log" in rendered
     assert "Smoke Scenarios" not in rendered
+    assert "Unticked Criteria" not in rendered
+
+
+def test_render_card_surfaces_unticked_criteria() -> None:
+    card = EvidenceCard(
+        ticket_id="T110",
+        test_status="passed",
+        unticked_criteria=("Criterion 1: add flag", "Criterion 2: verify logs"),
+    )
+    out = io.StringIO()
+    console = Console(file=out, width=80, force_terminal=False)
+    adapter = TerminalApprovalAdapter(console=console)
+
+    panel = adapter.render_card(card)
+    console.print(panel)
+    rendered = out.getvalue()
+
+    assert "Unticked Criteria:" in rendered
+    assert "Criterion 1: add flag" in rendered
+    assert "Criterion 2: verify logs" in rendered
     assert "[y]" in rendered
     assert "[n]" in rendered
     assert "[d]" in rendered
@@ -215,6 +232,7 @@ def test_render_card_empty_paths() -> None:
     assert "FAILED" in rendered
     assert "Harness Status:" in rendered
     assert "Smoke Scenarios" not in rendered
+    assert "Unticked Criteria" not in rendered
 
 
 @pytest.mark.anyio

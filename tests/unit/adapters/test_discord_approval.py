@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 import discord
@@ -22,7 +20,6 @@ from runner.adapters.discord.approval import (
     register_approval_commands,
     sanitize_rejection_reason,
 )
-from runner.domain.config import DiscordConfig, RunnerConfig
 from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.ports.approval_gateway import ApprovalGateway
 from tests.fakes.fake_discord_gateway import FakeDiscordGateway
@@ -83,6 +80,42 @@ async def test_embed_contains_required_fields(
 
     assert not any("Smoke" in name for name in field_names)
     assert "Smoke Scenarios" not in field_values
+    assert "Unticked Criteria" not in field_values
+
+
+def test_build_embed_surfaces_unticked_criteria() -> None:
+    """Evidence card embed surfaces unticked criteria with [ ] markers."""
+    card = EvidenceCard(
+        ticket_id="T111",
+        test_status="passed",
+        unticked_criteria=("Criterion 1: add flag", "Criterion 2: verify logs"),
+    )
+    embed = build_evidence_card_embed(card)
+    fields = embed.get("fields", [])
+    field_dict = {f["name"]: f["value"] for f in fields}
+
+    assert "Unticked Criteria" in field_dict
+    val = field_dict["Unticked Criteria"]
+    assert "• [ ] Criterion 1: add flag" in val
+    assert "• [ ] Criterion 2: verify logs" in val
+
+
+def test_build_embed_truncates_oversized_unticked_criteria() -> None:
+    """Oversized unticked criteria list is truncated cleanly to fit field value bounds."""
+    many_criteria = tuple(f"Criterion {i}: " + ("x" * 60) for i in range(30))
+    card = EvidenceCard(
+        ticket_id="T111",
+        test_status="passed",
+        unticked_criteria=many_criteria,
+    )
+    embed = build_evidence_card_embed(card)
+    fields = embed.get("fields", [])
+    field_dict = {f["name"]: f["value"] for f in fields}
+
+    assert "Unticked Criteria" in field_dict
+    val = field_dict["Unticked Criteria"]
+    assert len(val) <= MAX_DISCORD_FIELD_VALUE_LENGTH
+    assert val.endswith("... (truncated)")
 
 
 @pytest.mark.anyio

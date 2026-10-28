@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+
 
 from runner.domain.runtime_paths import TICKET_ID_PATTERN
 
@@ -55,6 +55,7 @@ class EvidenceCard:
     test_status: str
     harness_status: str | None = None
     evidence_paths: tuple[str, ...] = ()
+    unticked_criteria: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.ticket_id, str) or not TICKET_ID_PATTERN.match(self.ticket_id):
@@ -70,4 +71,10 @@ class EvidenceCard:
                 self,
                 "evidence_paths",
                 tuple(str(p) for p in self.evidence_paths),
+            )
+        if not isinstance(self.unticked_criteria, tuple):
+            object.__setattr__(
+                self,
+                "unticked_criteria",
+                tuple(str(c) for c in self.unticked_criteria),
             )

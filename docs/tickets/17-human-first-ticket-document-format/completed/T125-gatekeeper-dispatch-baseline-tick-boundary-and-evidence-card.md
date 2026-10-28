@@ -1,6 +1,7 @@
 # T125: Gatekeeper Dispatch-Baseline Tick Boundary and Evidence Card Unticked Criteria
 
-**Status:** ready-for-agent
+**Status:** done (reviewed; Security PASSED)
+**Completed:** 2026-10-28T06:07:00Z
 **Labels:** ready-for-agent, security
 **Security:** required (trust boundaries: Gatekeeper dispatch baseline comparison preventing unauthorized Worker mutation of ticket requirements, headers, or acceptance criteria text)
 **Parent:** docs/specs/17-human-first-ticket-document-format.md
@@ -23,7 +24,9 @@
 
 **Blocked by:** T124 (Canonical `to-ticket-runner` Document Model, Parser, Dialect Guard, and In-Place Bold-Label Serializer)
 
-- [ ] Before each Worker cycle in `VerificationLoop`, the Gatekeeper snapshots the active ticket file on disk (when present) as the dispatch baseline.
-- [ ] Security verification: When a ready Signal arrives, the Gatekeeper compares the current on-disk ticket file against the dispatch baseline and permits **only** flipping `- [ ] ` to `- [x] ` (or `- [X] `) on existing lines inside `## Acceptance criteria`. Any other edit (header fields, `## What to build`, `## Jump-start`, criterion wording, `## Smoke scenarios`, `## Gotchas`, or added/deleted lines) is rejected, atomically restores the dispatch baseline on disk, refuses the ready Signal with actionable diagnostics, and consumes a Verification Attempt (ADR 0002, ADR 0012, ADR 0017).
-- [ ] `EvidenceCard` gains `unticked_criteria: tuple[str, ...] = ()`, populated by `VerificationLoop` from the active ticket's remaining `- [ ]` acceptance criteria after re-parsing the verified ticket file.
-- [ ] `TerminalApprovalAdapter.render_card` and `DiscordApprovalAdapter` (`build_evidence_card_embed`) render `unticked_criteria` on the Evidence Card whenever one or more acceptance criteria remain unticked so the operator sees unacknowledged criteria before approving.
+- [x] Before each Worker cycle in `VerificationLoop`, the Gatekeeper snapshots the active ticket file on disk (when present) as the dispatch baseline.
+- [x] Security verification: When a ready Signal arrives, the Gatekeeper compares the current on-disk ticket file against the dispatch baseline and permits **only** flipping `- [ ] ` to `- [x] ` (or `- [X] `) on existing lines inside `## Acceptance criteria`. Any other edit (header fields, `## What to build`, `## Jump-start`, criterion wording, `## Smoke scenarios`, `## Gotchas`, or added/deleted lines) is rejected, atomically restores the dispatch baseline on disk, refuses the ready Signal with actionable diagnostics, and consumes a Verification Attempt (ADR 0002, ADR 0012, ADR 0017).
+- [x] `EvidenceCard` gains `unticked_criteria: tuple[str, ...] = ()`, populated by `VerificationLoop` from the active ticket's remaining `- [ ]` acceptance criteria after re-parsing the verified ticket file.
+- [x] `TerminalApprovalAdapter.render_card` and `DiscordApprovalAdapter` (`build_evidence_card_embed`) render `unticked_criteria` on the Evidence Card whenever one or more acceptance criteria remain unticked so the operator sees unacknowledged criteria before approving.
+
+**Verified:** 2026-10-28 — All 4 criteria verified test-first across 52 targeted unit tests and full 1,995-test suite; Security Review PASSED; dispatch-baseline mutation boundaries and EvidenceCard unticked criteria verified.
