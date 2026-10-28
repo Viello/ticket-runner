@@ -1,22 +1,22 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-28T11:12:00
+last_updated: 2026-10-28T12:38:00
 author: Gab
 branch: agent/ticket-runner
-active_ticket: docs/specs/17-human-first-ticket-document-format.md
+active_ticket: docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md
 status: ready
 stopped_at:
-  file: "docs/specs/17-human-first-ticket-document-format.md"
-  symbol: "Spec 17 committed; new catalog skills vendored and verified"
+  file: "docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md"
+  symbol: "Spec 17 decomposed into T124–T129; AGENTS.md aligned with Human+AI workflow and dual-backend parity (b045307); ready to implement T124"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Upstream catalog skills (`brainstorming`, `diagnosing-superpowers`, `finishing-a-development-branch`) merged and vendored into `.agents/skills/`; full test suite green (1,948 passed).
-- **Last Touchpoint**: `.agents/skills/` vendoring commit `230744a` on branch `agent/ticket-runner` (working tree clean).
-- **Blockers**: None. Live run and vendoring complete with 0 errors.
-- **Next Step**: Decompose [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into tracer-bullet tickets under `docs/tickets/17-human-first-ticket-document-format/`.
+- **Focus**: Decomposed [17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into 6 tracer-bullet tickets (`T124`–`T129`) under `docs/tickets/17-human-first-ticket-document-format/`.
+- **Last Touchpoint**: Committed `b045307` (`docs(adapters): Update AGENTS.md for Human+AI Workflow and Dual-Backend Parity`), decoupling `scaffold_sandbox.py` and updating [AGENTS.md](file:///D:/Projects/AGENTS.md).
+- **Blockers**: None.
+- **Next Step**: Implement [T124-canonical-ticket-model-parser-and-serializer.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md) test-first via `/implement`.
 
 ## 🎯 Active Tickets & Progress
 - [x] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **COMPLETED**
@@ -32,21 +32,30 @@ stopped_at:
   - Context / Spec: [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md)
   - Subtasks:
     - [x] Author and settle Spec 17 ([docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md))
-    - [ ] Decompose Spec 17 into tracer-bullet tickets under `docs/tickets/17-human-first-ticket-document-format/`
-    - [ ] Implement canonical Ticket parser and bold-label metadata header ([`TicketMarkdownParser`](file:///D:/Projects/runner/adapters/queue/ticket_parser.py))
-    - [ ] Implement section extraction (`What to build`, `Jump-start`, checkbox `Acceptance criteria`, inert `Smoke scenarios`, `Gotchas`) and domain model updates
-    - [ ] Implement Gatekeeper dispatch-baseline comparison and strict Tick-permission boundary ([`GatekeeperCommandExecutor`](file:///D:/Projects/runner/domain/gatekeeper.py))
-    - [ ] Update Worker execution discipline and prompt generation ([`PromptBuilder`](file:///D:/Projects/runner/adapters/worker/prompt_builder.py), [`.agents/skills/implement/SKILL.md`](file:///D:/Projects/.agents/skills/implement/SKILL.md))
-    - [ ] Synchronize canonical template to `to-tickets` and catalogue, migrate live target tickets and update living documents
+    - [x] Decompose Spec 17 into tracer-bullet tickets (`T124`–`T129`) under `docs/tickets/17-human-first-ticket-document-format/`
+    - [ ] `T124`: [Canonical `to-ticket-runner` Document Model, Parser, Dialect Guard, and In-Place Bold-Label Serializer](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md)
+    - [ ] `T125`: [Gatekeeper Dispatch-Baseline Tick Boundary and Evidence Card Unticked Criteria](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T125-gatekeeper-dispatch-baseline-tick-boundary-and-evidence-card.md)
+    - [ ] `T126`: [Pre-Dispatch `HITL` Gate in Gatekeeper, Intervention Port, and Terminal/Discord Prompts](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T126-pre-dispatch-hitl-gate-and-intervention-prompts.md)
+    - [ ] `T127`: [Default `implement-ticket-runner` Execution Skill Plumbing and Canonical Prompt Builder](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T127-default-implement-ticket-runner-skill-and-prompt-builder.md)
+    - [ ] `T128`: [Dual-Track Skills Catalog (`Viello/agent-skills`) and Local `.agents/skills/` Vendoring](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T128-dual-track-skills-catalog-and-vendoring.md)
+    - [ ] `T129`: [Queue Migrations, End-to-End Spec 17 Verification Suite, and Spec-Closing Living Docs Alignment](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T129-queue-migrations-spec-17-suite-and-living-docs-alignment.md)
 
 ## 🚧 Exact Work-In-Progress
 - **Branch**: `agent/ticket-runner`
 - **Uncommitted Files**:
-  - `docs/specs/17-human-first-ticket-document-format.md`: Settled Spec 17 document ready for commit and ticket decomposition
+  - `docs/specs/17-human-first-ticket-document-format.md`: Settled Spec 17 document
+  - `docs/tickets/17-human-first-ticket-document-format/`: `T124`–`T129` ticket files + `completed/.gitkeep`
   - `observations/`: Historical run traces and debug reports
-- **Last Stopped At**: [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) at line 1; live test in `D:\Repos\agent-skills` fully passed.
+- **Last Stopped At**: [T124-canonical-ticket-model-parser-and-serializer.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md) at line 1; ready for `/implement`.
 
 ## 📦 Recent Completed Work & Key Decisions
+- **AGENTS.md Aligned & Scaffolder Decoupled (`b045307`)**:
+  - Rewrote [AGENTS.md](file:///D:/Projects/AGENTS.md) to explicitly separate the **Human + AI interactive workflow on `D:\Projects`** from the **autonomous product architecture** built for Target Projects.
+  - Mandated universal compatibility and testing across both **OpenCode** (`OpenCodeWorker`) and **Antigravity CLI** (`AntigravityWorker`) on every feature, with adapter bridging and explicit graceful gating.
+  - Decoupled [`scaffold_sandbox.py`](file:///D:/Projects/runner/tools/scaffold_sandbox.py) and [`sync_agents_md.py`](file:///D:/Projects/scripts/sync_agents_md.py) to embed a built-in canonical Target Project starter template (`DEFAULT_UPSTREAM_AGENTS_MD`) instead of scraping `D:\Projects\AGENTS.md`.
+  - Verified test suite: 60 passed, 0 failures.
+- **Spec 17 Ticket Queue Published (`T124`–`T129`)**:
+  - Authored 6 tracer-bullet tickets under `docs/tickets/17-human-first-ticket-document-format/` in the `to-tickets` (Human+AI) format for `D:\Projects`.
 - **New Canonical Skills Vendored (`230744a`)**:
   - Merged upstream `origin/main` into local clone [D:\Repos\agent-skills](file:///D:/Repos/agent-skills) (`500be3a`), cleanly harmonizing the 3 new skills and catalog anatomy documentation.
   - Vendored [`brainstorming`](file:///D:/Projects/.agents/skills/brainstorming), [`diagnosing-superpowers`](file:///D:/Projects/.agents/skills/diagnosing-superpowers), and [`finishing-a-development-branch`](file:///D:/Projects/.agents/skills/finishing-a-development-branch) into [D:\Projects\.agents\skills/](file:///D:/Projects/.agents/skills).
@@ -57,19 +66,12 @@ stopped_at:
   - `T101`: Gatekeeper verified, approved, committed as `d3ca102` (`feat(queue): Add Codex Interface Metadata to Catalog Skills Currently Missing It`)
   - `T102`: Gatekeeper verified, approved, committed as `59eb828` (`feat(queue): Document agents/openai.yaml in the Catalog's Skill Directory Anatomy`)
   - Target project `.agent/status.json` cleanly reports `run_state: "done"`, `last_step_summary: "Verification passed"`.
-- **Spec 16 Completed & Committed (`f94609f`)**:
-  - Gatekeeper shell quoting escaped for `cmd.exe /d /s /c`
-  - Antigravity per-step token occupancy and ready-signal precedence over budget terminations verified
-  - Autonomous `docs/tickets/` boundary enforcement and idempotent finalization in place
-- **Spec 17 Drafted and Settled (`17-human-first-ticket-document-format`)**:
-  - Canonical bold-label header (`**Type:**`, `**Status:**`, etc.)
-  - 5 explicit top-level sections (`## What to build`, `## Jump-start`, `## Acceptance criteria`, `## Smoke scenarios`, `## Gotchas`)
-  - Worker tick permission for `- [ ]` to `- [x]` with Gatekeeper dispatch baseline comparison (unauthorized modifications consume verification attempts)
 
 ## ⚠️ Blockers & Gotchas
 - **Live Run Quirks Resolved**: Spec 16 fixes completely cleared previous Windows shell quoting issues and telemetry miscounts. Live run completed with 1 attempt per ticket.
-- **Dispatch Baseline Enforcement (Spec 17)**: When implementing Spec 17, the dispatch baseline taken by the Gatekeeper before Worker execution is the security boundary preventing prompt injection or unauthorized ticket rewriting. Refusal consumes an attempt (ADR 0017).
+- **Dispatch Baseline Enforcement (Spec 17)**: When implementing Spec 17 (`T125`), the dispatch baseline taken by the Gatekeeper before Worker execution is the security boundary preventing prompt injection or unauthorized ticket rewriting. Refusal consumes an attempt (ADR 0017).
 
 ## ⏭️ Next 1–3 Actionable Steps
-1. `Decompose Spec 17 into Tickets`: Run `/to-tickets` against [docs/specs/17-human-first-ticket-document-format.md](file:///D:/Projects/docs/specs/17-human-first-ticket-document-format.md) into `docs/tickets/17-human-first-ticket-document-format/`.
-2. `Implement Spec 17 Queue`: Execute the tracer-bullet tickets test-first via `/implement`.
+1. `Implement T124`: Execute [T124-canonical-ticket-model-parser-and-serializer.md](file:///D:/Projects/docs/tickets/17-human-first-ticket-document-format/T124-canonical-ticket-model-parser-and-serializer.md) test-first via `/implement`.
+2. `Implement T125 & T126`: Implement the Gatekeeper dispatch-baseline tick boundary and Pre-Dispatch `HITL` gate.
+3. `Implement T127–T129`: Plumb `implement-ticket-runner`, update `Viello/agent-skills`, and complete the Spec 17 verification suite and queue migrations.
