@@ -24,3 +24,18 @@ include = ["runner*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["live-test-target", "scratch", ".tmp_test", "observations"]
+
+[tool.ruff.lint]
+# Pin the rule set so Ruff upgrades do not silently broaden the gate.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+follow_imports = "silent"
+ignore_missing_imports = true
+show_error_codes = true
+exclude = ["^live-test-target/", "^scratch/", "^\\.tmp_test/", "^observations/"]
