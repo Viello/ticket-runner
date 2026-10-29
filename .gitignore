@@ -48,6 +48,13 @@ htmlcov/
 .tox/
 .nox/
 
+# Playwright / browser-automation artifacts
+.playwright-mcp/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
 # IDE / OS artifacts
 .vscode/
 .idea/
