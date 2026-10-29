@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 import pytest
 
 from runner.application.gatekeeper import (
@@ -19,7 +20,7 @@ from runner.application.handoff_coordinator import (
 )
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import NonInteractiveError
-from runner.domain.failure_analyser import FailureDiagnostic, LABEL_HANG
+from runner.domain.failure_analyser import FailureDiagnostic, LABEL_HANG, LABEL_PROTOCOL
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
@@ -326,5 +327,86 @@ async def test_escalation_at_zero_never_escalates() -> None:
     assert result.status == VerificationLoopStatus.SKIPPED
     # No escalation prompt was ever shown
     assert len(intervention_gateway.escalation_records) == 0
+
+
+class _MutatingCycleRunner:
+    """Cycle runner that mutates the ticket on disk before returning READY."""
+
+    def __init__(self, response: WorkerRunResult, mutate: Callable[[], None]) -> None:
+        self._response = response
+        self._mutate = mutate
+
+    async def __call__(self, ticket: Ticket, **kwargs: object) -> WorkerRunResult:
+        self._mutate()
+        return self._response
+
+
+_PRISTINE_MUTATION_TICKET = """# T066 — Mutation Guard
+
+**Status:** pending
+
+## Acceptance criteria
+
+- [ ] Escalates with diagnostic report.
+
+## Smoke scenarios
+
+- [ ] Scenario: One page-flow authority
+"""
+
+
+@pytest.mark.anyio
+async def test_unauthorized_ticket_mutation_escalates_as_protocol_not_flaky(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    ticket_path = tmp_path / "docs" / "tickets" / "10-stuck-detection-and-observability" / "T066.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(_PRISTINE_MUTATION_TICKET, encoding="utf-8")
+    ticket = replace(_make_ticket(), path=ticket_path)
+
+    def _mutate_smoke_section() -> None:
+        ticket_path.write_text(
+            _PRISTINE_MUTATION_TICKET.replace(
+                "- [ ] Scenario: One page-flow authority",
+                "- [x] Scenario: One page-flow authority",
+            ),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _MutatingCycleRunner(
+        WorkerRunResult(status=SingleCycleStatus.READY, occupancy=60_585),
+        _mutate_smoke_section,
+    )
+    signal_repo = _StubSignalRepo([_make_ready_signal(ticket.id)])
+    executor = _StubExecutor([_make_failed_report()])
+    intervention_gateway = FakeInterventionGateway(escalation_answers=[True])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=cycle_runner,
+        signal_repository=signal_repo,
+        executor=executor,
+        intervention_gateway=intervention_gateway,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1),
+        token_budget=150000,
+    )
+
+    result = await loop.run()
+
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_PROTOCOL
+
+    assert len(intervention_gateway.escalation_records) == 1
+    _, report = intervention_gateway.escalation_records[0]
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
+    assert "FLAKY detected" not in report
+    assert "Scenario: One page-flow authority" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+
+    # Security boundary still restored the baseline ticket file
+    assert ticket_path.read_text(encoding="utf-8") == _PRISTINE_MUTATION_TICKET
 
 

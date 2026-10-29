@@ -66,6 +66,22 @@ class GitClient:
         """Run `git checkout <branch>` to switch to an existing branch."""
         return await self._run(["checkout", branch], cwd=cwd)
 
+    async def checkout_path(
+        self,
+        path: str,
+        ref: str = "HEAD",
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        """Run `git checkout <ref> -- <path>` to restore a single literal path from a ref."""
+        return await self._run(
+            ["--literal-pathspecs", "checkout", ref, "--", path],
+            cwd=cwd,
+        )
+
+    async def show(self, spec: str, cwd: Path | None = None) -> CommandResult:
+        """Run `git show <spec>` to read an object (e.g. `HEAD:path/to/file`)."""
+        return await self._run(["show", spec], cwd=cwd)
+
     async def checkout_new_branch(
         self,
         branch: str,

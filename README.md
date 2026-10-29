@@ -466,6 +466,7 @@ Ticket Runner adheres to a strict exit code contract for operators, CI pipelines
 | `0` | **Clean Termination** | Queue drained cleanly under `terminate` policy, or standby watch loop exited via cooperative stop. |
 | `1` | **Runtime Error** | Pre-flight Doctor check failure, misconfiguration, or unhandled runtime pipeline error. |
 | `2` | **Operator Abort** | Operator selected abort (`UserAbortError`) at circuit-breaker escalation prompt. |
+| `3` | **Human Intervention Requested** | Operator accepted the `/diagnosing-bugs` escalation prompt; queue stopped, ticket left pending, and working tree preserved for diagnosis. |
 | `130` | **Graceful SIGINT** | Graceful shutdown via Ctrl+C (single cooperative stop or forced second press). |
 
 ### Terminal UI & Hotkeys

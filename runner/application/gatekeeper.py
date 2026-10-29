@@ -32,6 +32,8 @@ from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import DiscordGatewayError, NonInteractiveError, SignalFormatError, UserAbortError
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
+    LABEL_PROTOCOL,
+    SUGGESTED_ACTIONS,
     analyse,
     render_diagnostic_report,
     strip_ansi,
@@ -1260,7 +1262,10 @@ class VerificationLoop:
                             f"Unauthorized ticket modification: ticket file '{self._ticket.path}' "
                             f"was deleted by worker subprocess."
                         )
-                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        escalation_result = await self._check_escalation(
+                            diagnostics=diagnostics,
+                            diagnostic=self._protocol_diagnostic(diagnostics),
+                        )
                         if escalation_result is not None:
                             return escalation_result
                         self._attempts += 1
@@ -1284,7 +1289,10 @@ class VerificationLoop:
                         self._clean_question(self._ticket.id)
                         self._signal_repository.consume_ready(self._ticket.id)
                         diagnostics = reason
-                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        escalation_result = await self._check_escalation(
+                            diagnostics=diagnostics,
+                            diagnostic=self._protocol_diagnostic(diagnostics),
+                        )
                         if escalation_result is not None:
                             return escalation_result
                         self._attempts += 1
@@ -1489,7 +1497,10 @@ class VerificationLoop:
                 # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
                 self._clean_question(self._ticket.id)
                 diagnostics = str(exc)
-                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics,
+                    diagnostic=self._protocol_diagnostic(diagnostics),
+                )
                 if escalation_result is not None:
                     return escalation_result
                 self._attempts += 1
@@ -1535,7 +1546,10 @@ class VerificationLoop:
             if ready_format_error is not None:
                 self._signal_repository.consume_ready(self._ticket.id)
                 diagnostics = str(ready_format_error)
-                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics,
+                    diagnostic=self._protocol_diagnostic(diagnostics),
+                )
                 if escalation_result is not None:
                     return escalation_result
                 self._attempts += 1
@@ -1552,7 +1566,10 @@ class VerificationLoop:
             diagnostics = (
                 f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
             )
-            escalation_result = await self._check_escalation(diagnostics=diagnostics)
+            escalation_result = await self._check_escalation(
+                diagnostics=diagnostics,
+                diagnostic=self._protocol_diagnostic(diagnostics),
+            )
             if escalation_result is not None:
                 return escalation_result
             self._attempts += 1
@@ -1566,10 +1583,22 @@ class VerificationLoop:
                 )
             continue
 
+    def _protocol_diagnostic(self, diagnostics: str) -> FailureDiagnostic:
+        """Build a diagnostic describing a Gatekeeper ticket/signal protocol failure."""
+        return FailureDiagnostic(
+            label=LABEL_PROTOCOL,
+            root_tests=["gatekeeper"],
+            top_errors=[],
+            log_tail=[strip_ansi(line) for line in diagnostics.splitlines()[-100:]],
+            isolation_output=None,
+            suggested_action=SUGGESTED_ACTIONS[LABEL_PROTOCOL],
+        )
+
     async def _check_escalation(
         self,
         diagnostics: str,
         outcome: CommandOutcome | None = None,
+        diagnostic: FailureDiagnostic | None = None,
     ) -> VerificationLoopResult | None:
         """Check escalation policy and prompt operator if threshold met (T066)."""
         current_attempt = self._attempts + 1
@@ -1589,16 +1618,17 @@ class VerificationLoop:
         if not should_escalate:
             return None
 
-        output_lines = outcome.tail if outcome and outcome.tail else diagnostics
-        exit_code = outcome.exit_code if outcome else 1
-        termination_reason = outcome.termination_reason if outcome else None
+        if diagnostic is None:
+            output_lines = outcome.tail if outcome and outcome.tail else diagnostics
+            exit_code = outcome.exit_code if outcome else 1
+            termination_reason = outcome.termination_reason if outcome else None
 
-        diagnostic = self._failure_analyser(
-            output_lines=output_lines,
-            exit_code=exit_code,
-            termination_reason=termination_reason,
-            config=self._verification_config,
-        )
+            diagnostic = self._failure_analyser(
+                output_lines=output_lines,
+                exit_code=exit_code,
+                termination_reason=termination_reason,
+                config=self._verification_config,
+            )
 
         report_text = render_diagnostic_report(
             diagnostic=diagnostic,

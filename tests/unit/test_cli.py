@@ -234,6 +234,58 @@ def test_cli_start_aborted_by_operator_exits_with_code_2(
     assert pending_ticket.status == TicketStatus.PENDING
 
 
+def test_cli_start_intervention_requested_exits_with_code_3_without_abort_message(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Pending Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-pending.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: asyncio.sleep(
+            0.001, result=TicketOutcome.intervention_requested(details="Run /diagnosing-bugs")
+        ),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+
+    assert code == 3
+    captured = capsys.readouterr()
+    assert "Human intervention requested" in captured.out
+    assert "/diagnosing-bugs" in captured.out
+    assert "Aborted" not in captured.out
+    assert "Aborted" not in captured.err
+    assert pending_ticket.status == TicketStatus.PENDING
+
+
+def test_cli_exit_code_contract_documents_intervention_code_3(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = ticket_runner.main([])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "3    Human intervention requested" in captured.out
+    assert "3" in ticket_runner.EXIT_CODE_CONTRACT
+    assert "Human intervention requested" in ticket_runner.EXIT_CODE_CONTRACT
+
+
 def test_cli_start_empty_queue_terminates_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

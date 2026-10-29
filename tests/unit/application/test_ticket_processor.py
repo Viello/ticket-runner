@@ -16,6 +16,7 @@ from runner.application.gatekeeper import (
     CommandOutcome,
     GatekeeperCommandExecutor,
     VerificationLoop,
+    VerificationLoopResult,
     VerificationReport,
     build_verification_failure_prompt,
 )
@@ -24,6 +25,7 @@ from runner.application.handoff_coordinator import (
     SingleCycleStatus,
     WorkerRunResult,
 )
+from runner.application.git_operations import GitOperations
 from runner.application.prompt_builder import PromptBuilder
 from runner.application.queue_orchestrator import (
     TicketOutcome,
@@ -33,6 +35,7 @@ from runner.application.queue_orchestrator import (
 from runner.application.ticket_processor import GatekeeperTicketProcessor, TicketProcessor
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import UserAbortError
+from runner.domain.failure_analyser import FailureDiagnostic, LABEL_PROTOCOL
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import QuestionSignal, QuestionType, ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
@@ -2020,3 +2023,237 @@ def test_afk_mode_does_not_trigger_hitl_gate(tmp_path: Path) -> None:
     assert outcome.is_approved is True
     assert len(gateway.hitl_records) == 0
     assert len(cycle_runner.calls) == 1
+
+
+# --- Intervention Outcome Mapping and Stale-Baseline Normalization ---
+
+
+class _NullSignalRepo:
+    """Minimal SignalRepository stub for processor tests without filesystem state."""
+
+    def purge(self, ticket_id: str) -> None:
+        pass
+
+    def read_ready(self, ticket_id: str) -> ReadySignal | None:
+        return None
+
+    def consume_ready(self, ticket_id: str) -> None:
+        pass
+
+    def read_pending_question(self, ticket_id: str) -> None:
+        return None
+
+    def clean_question(self, ticket_id: str) -> None:
+        pass
+
+    def write_answer(self, ticket_id: str, answer: str) -> None:
+        pass
+
+
+class _StubLoop:
+    """VerificationLoop stub returning a canned result and recording the ticket at dispatch."""
+
+    last_diagnostics = ""
+
+    def __init__(
+        self,
+        result: VerificationLoopResult,
+        on_run: Callable[[], None] | None = None,
+    ) -> None:
+        self._result = result
+        self._on_run = on_run
+
+    async def run(self, prompt: str | None = None) -> VerificationLoopResult:
+        if self._on_run is not None:
+            self._on_run()
+        return self._result
+
+
+async def _dummy_cycle_runner(ticket: Ticket, **kwargs: Any) -> WorkerRunResult:
+    raise AssertionError("cycle runner must not be called when loop_factory is injected")
+
+
+def test_intervention_requested_verification_result_maps_to_ticket_outcome() -> None:
+    diagnostic = FailureDiagnostic(
+        label=LABEL_PROTOCOL,
+        root_tests=["gatekeeper"],
+        top_errors=[],
+        log_tail=["Unauthorized ticket modification"],
+        isolation_output=None,
+        suggested_action="Fix the ticket or signal protocol violation reported above, then retry.",
+    )
+    loop_result = VerificationLoopResult.intervention_requested(
+        failure_diagnostic=diagnostic,
+        attempts=0,
+        diagnostics="Unauthorized ticket modification in ticket file 'T001'",
+    )
+
+    processor = TicketProcessor(
+        cycle_runner=_dummy_cycle_runner,
+        signal_repository=_NullSignalRepo(),  # type: ignore[arg-type]
+        loop_factory=lambda **kwargs: _StubLoop(loop_result),  # type: ignore[arg-type,return-value]
+    )
+
+    outcome = asyncio.run(processor(_make_ticket()))
+
+    assert outcome.is_intervention_requested is True
+    assert outcome.is_skipped is False
+    assert outcome.details == "Unauthorized ticket modification in ticket file 'T001'"
+
+
+class _RestoringCommandRunner(FakeCommandRunner):
+    """FakeCommandRunner that simulates `git checkout <ref> -- <path>` on disk."""
+
+    def __init__(self, restore_path: Path, pristine_text: str) -> None:
+        super().__init__()
+        self._restore_path = restore_path
+        self._pristine_text = pristine_text
+        self.checkout_invocations: list[list[str]] = []
+
+    async def run(
+        self,
+        cmd: list[str],
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> Any:
+        result = await super().run(cmd, cwd=cwd, env=env)
+        if cmd[:4] == ["git", "--literal-pathspecs", "checkout", "HEAD"]:
+            self.checkout_invocations.append(list(cmd))
+            self._restore_path.write_text(self._pristine_text, encoding="utf-8")
+        return result
+
+
+_PRISTINE_TICKET = """# T001 — Stale Baseline
+
+**Status:** pending
+
+## Acceptance criteria
+
+- [ ] First criterion
+- [ ] Second criterion
+
+## Smoke scenarios
+
+- [ ] Scenario: One page-flow authority
+"""
+
+
+def _make_disk_ticket(tmp_path: Path) -> tuple[Ticket, Path]:
+    ticket_dir = tmp_path / "docs" / "tickets" / "02-test"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "T001-test.md"
+    ticket_path.write_text(_PRISTINE_TICKET, encoding="utf-8")
+    ticket = _make_ticket(ticket_id="T001")
+    return (
+        Ticket(
+            id=ticket.id,
+            title=ticket.title,
+            status=ticket.status,
+            spec_path=ticket.spec_path,
+            requirements=ticket.requirements,
+            acceptance_criteria=ticket.acceptance_criteria,
+            gotchas=ticket.gotchas,
+            path=ticket_path,
+        ),
+        ticket_path,
+    )
+
+
+def _processor_for_baseline(
+    tmp_path: Path,
+    runner: FakeCommandRunner,
+    ticket_path: Path,
+    observed: list[str],
+) -> GatekeeperTicketProcessor:
+    def _record() -> None:
+        try:
+            observed.append(ticket_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            observed.append("<missing>")
+
+    return GatekeeperTicketProcessor(
+        cycle_runner=_dummy_cycle_runner,
+        signal_repository=_NullSignalRepo(),  # type: ignore[arg-type]
+        git_operations=GitOperations(runner=runner, cwd=tmp_path),
+        loop_factory=lambda **kwargs: _StubLoop(
+            VerificationLoopResult.skipped(diagnostics="spy", attempts=1),
+            on_run=_record,
+        ),  # type: ignore[arg-type,return-value]
+    )
+
+
+def test_dispatch_restores_tick_only_ticket_edits_from_head(tmp_path: Path) -> None:
+    ticket, ticket_path = _make_disk_ticket(tmp_path)
+    ticket_path.write_text(
+        _PRISTINE_TICKET.replace(
+            "- [ ] First criterion\n- [ ] Second criterion",
+            "- [x] First criterion\n- [x] Second criterion",
+        ),
+        encoding="utf-8",
+    )
+    relative = ticket_path.relative_to(tmp_path).as_posix()
+    runner = _RestoringCommandRunner(ticket_path, _PRISTINE_TICKET)
+    runner.register(["git", "show", f"HEAD:{relative}"], stdout=_PRISTINE_TICKET)
+    runner.register(["git", "--literal-pathspecs", "checkout", "HEAD", "--", relative], stdout="")
+
+    observed: list[str] = []
+    processor = _processor_for_baseline(tmp_path, runner, ticket_path, observed)
+
+    asyncio.run(processor(ticket))
+
+    assert observed == [_PRISTINE_TICKET]
+    assert runner.checkout_invocations == [
+        ["git", "--literal-pathspecs", "checkout", "HEAD", "--", relative]
+    ]
+
+
+def test_dispatch_preserves_non_tick_ticket_edits(tmp_path: Path) -> None:
+    ticket, ticket_path = _make_disk_ticket(tmp_path)
+    human_edit = _PRISTINE_TICKET.replace(
+        "- [ ] First criterion",
+        "- [ ] First criterion (revised by human)",
+    )
+    ticket_path.write_text(human_edit, encoding="utf-8")
+    relative = ticket_path.relative_to(tmp_path).as_posix()
+    runner = _RestoringCommandRunner(ticket_path, _PRISTINE_TICKET)
+    runner.register(["git", "show", f"HEAD:{relative}"], stdout=_PRISTINE_TICKET)
+
+    observed: list[str] = []
+    processor = _processor_for_baseline(tmp_path, runner, ticket_path, observed)
+
+    asyncio.run(processor(ticket))
+
+    assert observed == [human_edit]
+    assert runner.checkout_invocations == []
+    assert ticket_path.read_text(encoding="utf-8") == human_edit
+
+
+def test_dispatch_skips_untracked_or_missing_ticket(tmp_path: Path) -> None:
+    ticket, ticket_path = _make_disk_ticket(tmp_path)
+    relative = ticket_path.relative_to(tmp_path).as_posix()
+    runner = _RestoringCommandRunner(ticket_path, _PRISTINE_TICKET)
+    runner.register(["git", "show", f"HEAD:{relative}"], exit_code=128, stderr="fatal: not a valid object name")
+
+    observed: list[str] = []
+    processor = _processor_for_baseline(tmp_path, runner, ticket_path, observed)
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_skipped is True
+    assert observed == [_PRISTINE_TICKET]
+    assert runner.checkout_invocations == []
+
+
+def test_dispatch_skips_when_ticket_file_is_missing(tmp_path: Path) -> None:
+    ticket, ticket_path = _make_disk_ticket(tmp_path)
+    ticket_path.unlink()
+    runner = _RestoringCommandRunner(ticket_path, _PRISTINE_TICKET)
+
+    observed: list[str] = []
+    processor = _processor_for_baseline(tmp_path, runner, ticket_path, observed)
+
+    outcome = asyncio.run(processor(ticket))
+
+    assert outcome.is_skipped is True
+    assert observed == ["<missing>"]
+    assert runner.invocations == []

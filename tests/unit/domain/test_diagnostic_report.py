@@ -10,6 +10,8 @@ from runner.domain.failure_analyser import (
     LABEL_ENV,
     LABEL_FLAKY,
     LABEL_HANG,
+    LABEL_PROTOCOL,
+    SUGGESTED_ACTIONS,
     render_diagnostic_report,
 )
 
@@ -92,3 +94,28 @@ def test_render_diagnostic_report_bounds_log_tail_to_100_lines() -> None:
     assert "log line 49" not in report
     assert "log line 50" in report
     assert "log line 149" in report
+
+
+def test_protocol_diagnostic_renders_protocol_label() -> None:
+    tail = [f"protocol line {i}" for i in range(150)]
+    diag = FailureDiagnostic(
+        label=LABEL_PROTOCOL,
+        root_tests=["gatekeeper"],
+        top_errors=[],
+        log_tail=tail,
+        isolation_output=None,
+        suggested_action=SUGGESTED_ACTIONS[LABEL_PROTOCOL],
+    )
+    report = render_diagnostic_report(diag, token_count=60_585, token_budget=150000)
+
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
+    assert "Top errors: none" in report
+    assert "FLAKY detected" not in report
+    assert SUGGESTED_ACTIONS[LABEL_PROTOCOL] in report
+    assert "Token budget: 60,585 / 150,000" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+
+    # Tail is bounded to the last 100 lines
+    assert "protocol line 49" not in report
+    assert "protocol line 50" in report
+    assert "protocol line 149" in report

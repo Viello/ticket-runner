@@ -44,6 +44,7 @@ EXIT_CODE_CONTRACT = """Exit codes:
   0    Clean termination (queue drained under terminate policy, or standby exited via stop)
   1    Runtime error
   2    Operator abort (UserAbortError)
+  3    Human intervention requested (queue stopped; ticket left pending)
   130  Graceful SIGINT (single or forced second press)
 """
 

@@ -1751,3 +1751,162 @@ def test_queue_orchestrator_hitl_skip_finalizes_with_status_note(
     assert outcome.status_note == "Skipped by operator at HITL pre-dispatch gate"
     assert t1.status == TicketStatus.SKIPPED
     assert t1.status_note == "Skipped by operator at HITL pre-dispatch gate"
+
+
+# --- Intervention Requested: Clean Exit Without Commit ---
+
+
+class _RecordingEventSink:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    def emit(self, source: str, message: str) -> None:
+        self.events.append((source, message))
+
+
+def test_run_next_intervention_requested_stops_queue_without_commit(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    fake_runner: FakeCommandRunner,
+) -> None:
+    ticket = _make_ticket("T001", title="Intervention Ticket")
+    ticket_repo = FakeTicketRepository([ticket])
+    store = _InMemoryStateStore()
+    coordinator = StateCoordinator(state_store=store, branch="agent/ticket-runner")  # type: ignore[arg-type]
+    sink = _RecordingEventSink()
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        state_coordinator=coordinator,
+        ui_event_sink=sink,
+        processor=lambda t: asyncio.sleep(
+            0.001, result=TicketOutcome.intervention_requested(details="Run /diagnosing-bugs")
+        ),
+    )
+
+    outcome = asyncio.run(orchestrator.run_next())
+
+    assert outcome is not None
+    assert outcome.is_intervention_requested is True
+    assert outcome.is_skipped is False
+    assert orchestrator.last_outcome is outcome
+
+    # 1. Queue stops and releases the sentinel lock
+    assert orchestrator.is_paused is True
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False
+
+    # 2. Ticket stays pending in its original location
+    assert ticket.status == TicketStatus.PENDING
+    pending = ticket_repo.select_next_pending()
+    assert pending is not None
+    assert pending.id == "T001"
+    assert "completed" not in str(ticket.path)
+
+    # 3. State transitions to WAITING_FOR_USER
+    assert coordinator.current_state is not None
+    assert coordinator.current_state.status == StateStatus.WAITING_FOR_USER
+
+    # 4. No commit, reset, or clean was invoked
+    for invocation in fake_runner.invocations:
+        assert "commit" not in invocation.cmd
+        assert "reset" not in invocation.cmd
+        assert "clean" not in invocation.cmd
+
+    # 5. Operator is told the next action via the UI event sink
+    messages = [message for source, message in sink.events if source == "runner"]
+    assert any("Human intervention requested for ticket 'T001'" in m for m in messages)
+    assert any("/diagnosing-bugs" in m for m in messages)
+
+
+def test_run_all_stops_after_intervention(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+) -> None:
+    t1 = _make_ticket("T001", title="First Ticket")
+    t2 = _make_ticket("T002", title="Second Ticket")
+    ticket_repo = FakeTicketRepository([t1, t2])
+    executed: list[str] = []
+
+    async def fake_processor(ticket: Ticket) -> TicketOutcome:
+        executed.append(ticket.id)
+        return TicketOutcome.intervention_requested(details="needs human")
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        processor=fake_processor,
+    )
+
+    outcomes = asyncio.run(orchestrator.run_all())
+
+    assert len(outcomes) == 1
+    assert outcomes[0].is_intervention_requested is True
+    assert executed == ["T001"]
+    assert ticket_repo.select_next_pending() is not None
+    assert ticket_repo.select_next_pending().id == "T001"
+
+
+def test_run_lifecycle_intervention_returns_exit_code_3(
+    git_ops: GitOperations,
+    queue_lock: QueueFileLock,
+    gotchas_store: GotchasStore,
+    temp_dir: Path,
+) -> None:
+    tickets_dir = temp_dir / "docs" / "tickets"
+    spec_dir = tickets_dir / "02-test"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    ticket_file = spec_dir / "T001-test.md"
+    ticket_file.write_text("# T001 — Test\nStatus: pending\n", encoding="utf-8")
+
+    t1 = _make_ticket("T001", spec_path="docs/specs/02-test.md", path=ticket_file)
+    ticket_repo = FakeTicketRepository([t1])
+    printed: list[str] = []
+    archive_calls: list[str] = []
+
+    class FakeArchiver:
+        async def clean_slate(self, spec_slug: str, policy: str, printer: Any = None) -> Any:
+            archive_calls.append(f"{spec_slug}:{policy}")
+            return True
+
+    orchestrator = QueueOrchestrator(
+        ticket_store=ticket_repo,
+        lock=queue_lock,
+        gotchas_store=gotchas_store,
+        git_operations=git_ops,
+        tickets_dir=tickets_dir,
+        clean_slate_archiver=FakeArchiver(),  # type: ignore[arg-type]
+        processor=lambda t: asyncio.sleep(
+            0.001, result=TicketOutcome.intervention_requested(details="Run /diagnosing-bugs")
+        ),
+    )
+
+    config = LifecycleConfig(queue_completion="terminate", clean_slate="always")
+    exit_code = asyncio.run(
+        orchestrator.run_lifecycle(
+            lifecycle=config,
+            printer=printed.append,
+            banner_delay=0.0,
+        )
+    )
+
+    assert exit_code == 3
+    assert any("Human intervention requested" in p for p in printed)
+    assert any("Run /diagnosing-bugs" in p for p in printed)
+    assert any("Completion Summary" in p for p in printed)
+    assert any("1 awaiting intervention" in p for p in printed)
+
+    # Lifecycle must not celebrate, archive, or relocate
+    assert not any("Queue complete" in p for p in printed)
+    assert archive_calls == []
+    assert t1.status == TicketStatus.PENDING
+    assert ticket_file.is_file()
+    assert orchestrator.is_locked is False
+    assert queue_lock.is_locked is False

@@ -79,6 +79,59 @@ class GitOperations:
             raise GitError(f"Failed to run git diff --stat: {err_msg}")
         return result.stdout
 
+    def _git_path(self, path: str | Path) -> str | None:
+        """Resolve a filesystem path to a repository-relative POSIX path for Git.
+
+        Returns None when an absolute path lies outside the configured working
+        directory, so Git never sees a path it would reinterpret.
+        """
+        p = Path(path)
+        if p.is_absolute():
+            if self._cwd is None:
+                return None
+            try:
+                p = p.relative_to(self._cwd)
+            except ValueError:
+                return None
+        return p.as_posix()
+
+    async def show_file(self, path: str | Path, ref: str = "HEAD") -> str | None:
+        """Return the blob content of a tracked path at ``ref``, or None on failure.
+
+        Args:
+            path: Filesystem path, absolute or relative to the configured cwd.
+            ref: Git revision to read from (default ``HEAD``).
+
+        Returns:
+            The file content at ``ref``, or None when the path is untracked, missing,
+            outside the repository, or Git inspection fails.
+        """
+        git_path = self._git_path(path)
+        if git_path is None:
+            return None
+        try:
+            result = await self._client.show(f"{ref}:{git_path}", cwd=self._cwd)
+        except Exception:
+            return None
+        if not result.success:
+            return None
+        return result.stdout
+
+    async def restore_file(self, path: str | Path, ref: str = "HEAD") -> bool:
+        """Restore a single tracked path from ``ref`` via ``git checkout``.
+
+        Returns:
+            True when Git restored the path, False when the restore failed.
+        """
+        git_path = self._git_path(path)
+        if git_path is None:
+            return False
+        try:
+            result = await self._client.checkout_path(git_path, ref=ref, cwd=self._cwd)
+        except Exception:
+            return False
+        return result.success
+
     async def is_inside_work_tree(self, cwd: Path | None = None) -> bool:
         """Check if directory is inside a valid git working tree via git rev-parse --is-inside-work-tree.
 
