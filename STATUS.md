@@ -1,22 +1,27 @@
 ---
 project: ticket-runner
-last_updated: 2026-10-28T16:15:00
+last_updated: 2026-10-30T19:40:00
 author: Gab
 branch: agent/ticket-runner
-active_ticket: null
-status: ready
+active_ticket: discord-away-and-200k-budget
+status: paused
 stopped_at:
-  file: "docs/specs/17-human-first-ticket-document-format.md"
-  symbol: "All tickets T124-T129 completed and verified"
+  file: "runner/container.py"
+  symbol: "build_container (Discord stack wiring pending)"
 ---
 
 # Project Status: ticket-runner
 
 ## ⚡ Quick Resume (4-Bullet Briefing)
-- **Focus**: Spec 17 (`17-human-first-ticket-document-format.md`) fully completed; ready for next spec / operator direction.
-- **Last Touchpoint**: Implemented `T129` (`feat(queue): Spec 17 Queue Migrations, Verification Suite, and Living Docs Alignment`), verified full test suite (2,032 passed, 0 failures), active queues migrated, Target Projects synchronized, and root living documents aligned.
-- **Blockers**: None.
-- **Next Step**: Await operator direction or select next backlog item / live run.
+- **Focus**: Fix away-mode Discord integration for `start` and raise the `ticket-runner-site` token budget to 180k / 190k / 200k.
+- **Last Touchpoint**: Planning session on 2026-10-30. No source changes made; implementation is queued for the next session.
+- **Blockers**: None. The site config enables Discord, but `start` never constructs or starts the Discord adapters, so `processor.is_discord_enabled` is `False`.
+- **Next Step**: Follow the plan at [2026-10-30-ticket-runner-discord-away-and-200k-budget.md](file:///C:/Users/Acer/.opencode/plan/2026-10-30-ticket-runner-discord-away-and-200k-budget.md) starting with the red container test.
+
+## 🗂️ Next Session Plan (2026-10-30)
+- **Plan:** [2026-10-30-ticket-runner-discord-away-and-200k-budget.md](file:///C:/Users/Acer/.opencode/plan/2026-10-30-ticket-runner-discord-away-and-200k-budget.md)
+- **Scope:** Wire and start `DiscordClient` / `DiscordLoggerImpl` / `DiscordThreadManager` in `start`; honor `presence.default_mode`; raise the site's token budget to 180k / 190k / 200k; make TUI, Discord Status Card, worker prompt, and handoff prompt use the configured budget.
+- **Status:** PLAN ONLY — implementation is for the next session. No runner source or site config has been changed yet.
 
 ## 🎯 Active Tickets & Progress
 - [x] `orchestrate-runner-first-run`: Execute the canonical first-run sequence (Phases 1–9) against `D:\Repos\agent-skills` — **COMPLETED**
