@@ -16,6 +16,20 @@ if TYPE_CHECKING:
 
 OFFLINE_NOTICE = "Runner is offline (standalone bot mode). Command is unavailable."
 PAUSE_CONFIRMATION = "Runner paused. Current ticket will complete verification before stopping."
+UNAUTHORIZED_NOTICE = "Not authorized: only the configured operator may use this command."
+
+
+def _is_authorized(interaction: discord.Interaction, allowed_user_id: str | None) -> bool:
+    """Return True when no operator is configured or the caller matches it."""
+    if not allowed_user_id:
+        return True
+    user = getattr(interaction, "user", None)
+    user_id = getattr(user, "id", None)
+    return user_id is not None and str(user_id) == str(allowed_user_id)
+
+
+async def _reject_unauthorized(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(UNAUTHORIZED_NOTICE, ephemeral=True)
 
 
 def _load_state(state_store: StateStore | None) -> dict[str, Any] | None:
@@ -90,8 +104,13 @@ def format_status_response(state: Mapping[str, Any] | None) -> str:
 async def handle_status(
     interaction: discord.Interaction,
     state_store: StateStore | None = None,
+    *,
+    allowed_user_id: str | None = None,
 ) -> None:
     """Handler logic for /status slash command."""
+    if not _is_authorized(interaction, allowed_user_id):
+        await _reject_unauthorized(interaction)
+        return
     state = _load_state(state_store)
     content = format_status_response(state)
     await interaction.response.send_message(content)
@@ -100,8 +119,13 @@ async def handle_status(
 async def handle_pause(
     interaction: discord.Interaction,
     state_coordinator: StateCoordinator | None = None,
+    *,
+    allowed_user_id: str | None = None,
 ) -> None:
     """Handler logic for /pause slash command."""
+    if not _is_authorized(interaction, allowed_user_id):
+        await _reject_unauthorized(interaction)
+        return
     if state_coordinator is None:
         await interaction.response.send_message(OFFLINE_NOTICE)
         return
@@ -120,8 +144,13 @@ async def handle_mode(
     interaction: discord.Interaction,
     mode: str | app_commands.Choice[str] = "nearby",
     presence_coordinator: PresenceCoordinator | None = None,
+    *,
+    allowed_user_id: str | None = None,
 ) -> None:
     """Handler logic for /mode slash command."""
+    if not _is_authorized(interaction, allowed_user_id):
+        await _reject_unauthorized(interaction)
+        return
     if presence_coordinator is None:
         await interaction.response.send_message(OFFLINE_NOTICE)
         return
@@ -144,21 +173,24 @@ def register_commands(
     state_store: StateStore | None = None,
     presence_coordinator: PresenceCoordinator | None = None,
     state_coordinator: StateCoordinator | None = None,
+    notify_user_id: str = "",
 ) -> tuple[app_commands.Command, app_commands.Command, app_commands.Command]:
     """Register /status, /pause, and /mode command handlers on the CommandTree."""
     if state_store is None and state_coordinator is not None and hasattr(state_coordinator, "state_store"):
         state_store = state_coordinator.state_store
 
+    allowed_user_id = notify_user_id.strip() or None
+
     @tree.command(name="status", description="Show the current Ticket Runner status.")
     async def status_cmd(interaction: discord.Interaction) -> None:
-        await handle_status(interaction, state_store)
+        await handle_status(interaction, state_store, allowed_user_id=allowed_user_id)
 
     @tree.command(
         name="pause",
         description="Pause runner execution (offline notice in standalone mode).",
     )
     async def pause_cmd(interaction: discord.Interaction) -> None:
-        await handle_pause(interaction, state_coordinator)
+        await handle_pause(interaction, state_coordinator, allowed_user_id=allowed_user_id)
 
     @tree.command(
         name="mode",
@@ -174,7 +206,12 @@ def register_commands(
         interaction: discord.Interaction,
         mode: app_commands.Choice[str],
     ) -> None:
-        await handle_mode(interaction, mode=mode, presence_coordinator=presence_coordinator)
+        await handle_mode(
+            interaction,
+            mode=mode,
+            presence_coordinator=presence_coordinator,
+            allowed_user_id=allowed_user_id,
+        )
 
     return status_cmd, pause_cmd, mode_cmd
 
@@ -182,6 +219,7 @@ def register_commands(
 __all__ = [
     "OFFLINE_NOTICE",
     "PAUSE_CONFIRMATION",
+    "UNAUTHORIZED_NOTICE",
     "format_status_response",
     "handle_status",
     "handle_pause",

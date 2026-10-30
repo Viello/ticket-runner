@@ -1159,6 +1159,100 @@ def test_run_start_starts_and_stops_terminal_display(tmp_path: Path) -> None:
     assert stopped is True
 
 
+def test_run_start_starts_and_closes_discord_client(tmp_path: Path) -> None:
+    """run_start connects the container's Discord client before the queue and closes it after."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient()
+    lifecycle_ran = False
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal lifecycle_ran
+            lifecycle_ran = True
+            assert fake_client.started is True
+            assert fake_client.closed is False
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert lifecycle_ran is True
+    assert fake_client.started is True
+    assert fake_client.closed is True
+
+
+def test_run_start_local_only_does_not_start_discord(tmp_path: Path) -> None:
+    """--local-only keeps the Discord client disconnected even when one is wired."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient()
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert fake_client.started is False
+
+
+def test_run_start_continues_when_discord_fails_to_connect(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Discord connection error must not block the queue lifecycle."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient(ready=False, ready_error=RuntimeError("gateway boom"))
+    lifecycle_ran = False
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal lifecycle_ran
+            lifecycle_ran = True
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert lifecycle_ran is True
+    assert fake_client.closed is True
+    captured = capsys.readouterr()
+    assert "[Discord] Enabled but not connected" in captured.out
+
+
 # ==============================================================================
 # T076: CLI doctor --live flag tests
 # ==============================================================================

@@ -563,5 +563,66 @@ def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() ->
     assert ".agents/skills/implement-ticket-runner/SKILL.md" in prompt
 
 
+def test_prompt_renders_configured_token_budget(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("## Invariants\n- Stay scoped.\n", encoding="utf-8")
+
+    prompt = build_prompt(
+        ticket=_make_ticket(ticket_id="T130"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
+
+
+def test_prompt_replaces_stale_token_budget_line_without_duplicating(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "## Invariants\n"
+        "- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes the checkpoint.\n"
+        "- Stay scoped.\n",
+        encoding="utf-8",
+    )
+
+    prompt = build_prompt(
+        ticket=_make_ticket(ticket_id="T131"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    assert prompt.count("- Token budget:") == 1
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
+    assert "warn 120k" not in prompt
+
+
+def test_prompt_builder_instance_forwards_token_budget(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("## Invariants\n- Stay scoped.\n", encoding="utf-8")
+
+    builder = PromptBuilder(
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    prompt = builder.build(
+        ticket=_make_ticket(ticket_id="T132"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
+
+
 
 

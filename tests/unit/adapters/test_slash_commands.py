@@ -287,3 +287,77 @@ async def test_register_commands_backward_compatibility(
 
     await mode_cmd._callback(mock_interaction, mode="away")
     mock_interaction.response.send_message.assert_awaited_with(OFFLINE_NOTICE)
+
+
+@pytest.mark.anyio
+async def test_handle_pause_rejects_unauthorized_user(mock_interaction: MagicMock) -> None:
+    """A caller other than the configured operator cannot pause the Runner."""
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = 42
+    fake_state = FakeStateCoordinator()
+
+    await handle_pause(mock_interaction, fake_state, allowed_user_id="999")
+
+    assert fake_state.request_pause_called is False
+    sent = mock_interaction.response.send_message.await_args
+    assert "Not authorized" in sent.args[0]
+    assert sent.kwargs.get("ephemeral") is True
+
+
+@pytest.mark.anyio
+async def test_handle_mode_rejects_unauthorized_user(mock_interaction: MagicMock) -> None:
+    """A caller other than the configured operator cannot switch presence mode."""
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = 42
+    fake_presence = FakePresenceCoordinator()
+
+    await handle_mode(
+        mock_interaction,
+        mode="away",
+        presence_coordinator=fake_presence,
+        allowed_user_id="999",
+    )
+
+    assert fake_presence.set_mode_calls == []
+    sent = mock_interaction.response.send_message.await_args
+    assert "Not authorized" in sent.args[0]
+
+
+@pytest.mark.anyio
+async def test_handle_pause_accepts_configured_operator(mock_interaction: MagicMock) -> None:
+    """The configured operator can still pause the Runner."""
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = 999
+    fake_state = FakeStateCoordinator()
+
+    await handle_pause(mock_interaction, fake_state, allowed_user_id="999")
+
+    assert fake_state.request_pause_called is True
+    sent = mock_interaction.response.send_message.await_args
+    assert sent.args[0] == PAUSE_CONFIRMATION
+
+
+@pytest.mark.anyio
+async def test_register_commands_wires_notify_user_id_restriction(
+    mock_interaction: MagicMock,
+) -> None:
+    """register_commands forwards notify_user_id to the command callbacks."""
+    mock_client = MagicMock()
+    mock_client._connection._command_tree = None
+    tree = app_commands.CommandTree(mock_client)
+    fake_presence = FakePresenceCoordinator()
+
+    _status_cmd, _pause_cmd, mode_cmd = register_commands(
+        tree,
+        state_store=FakeStateStore({"runner_status": "running"}),
+        presence_coordinator=fake_presence,
+        notify_user_id="999",
+    )
+
+    mock_interaction.user = MagicMock()
+    mock_interaction.user.id = 42
+    await mode_cmd._callback(
+        mock_interaction, mode=app_commands.Choice(name="away", value="away")
+    )
+
+    assert fake_presence.set_mode_calls == []

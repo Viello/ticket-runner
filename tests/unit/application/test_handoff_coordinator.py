@@ -2046,3 +2046,17 @@ def test_run_cycle_ready_signal_precedence_over_killed_handoff(tmp_path: Path) -
     assert cycle_result.status == SingleCycleStatus.READY
     assert cycle_result.ready_signal_present is True
     assert cycle_result.occupancy == 138000
+
+
+def test_build_handoff_prompt_uses_configured_budget(tmp_path: Path) -> None:
+    """The handoff prompt quotes the configured handoff threshold, not 135k."""
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    coordinator = HandoffCoordinator(
+        runtime_paths=runtime_paths,
+        budget_config=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    prompt = coordinator.build_handoff_prompt(_make_ticket("T130"))
+
+    assert "Context budget threshold reached (190k tokens)." in prompt
+    assert ".agents/skills/handoff/SKILL.md" in prompt

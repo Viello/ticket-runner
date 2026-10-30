@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
+from runner.domain.config import TokenBudgetConfig
 from runner.domain.ticket import Ticket
 
 DEFAULT_INVARIANTS = """## Invariants
@@ -113,6 +114,24 @@ def _format_global_gotchas(gotchas_path: str | Path = "docs/tickets/gotchas.md")
     )
 
 
+def _with_token_budget(invariants: str, budget: TokenBudgetConfig | None) -> str:
+    """Rewrite the token-budget invariant line to match the active configuration."""
+    if budget is None:
+        return invariants
+    line = (
+        f"- Token budget: warn {budget.warn // 1000}k, "
+        f"handoff {budget.handoff // 1000}k, "
+        f"hard ceiling {budget.ceiling // 1000}k; "
+        "handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via "
+        "`.agents/skills/handoff/SKILL.md`."
+    )
+    if re.search(r"^- Token budget:.*$", invariants, re.MULTILINE):
+        return re.sub(
+            r"^- Token budget:.*$", line, invariants, count=1, flags=re.MULTILINE
+        )
+    return f"{invariants.rstrip()}\n{line}"
+
+
 def build_prompt(
     ticket: Ticket,
     spec_excerpt: SpecExcerpt | str,
@@ -122,6 +141,7 @@ def build_prompt(
     spec_path: str | None = None,
     global_gotchas: str | None = None,
     agents_path: str | Path = "AGENTS.md",
+    token_budget: TokenBudgetConfig | None = None,
 ) -> str:
     """Render a pure scoped prompt for an OpenCode Worker session.
 
@@ -133,6 +153,7 @@ def build_prompt(
         spec_path: Optional explicit path to the spec file; inferred if omitted.
         global_gotchas: Optional legacy alias for gotchas_path.
         agents_path: Path to AGENTS.md for inlining repository invariants.
+        token_budget: Active token budget used to rewrite the budget invariant line.
 
     Returns:
         Rendered prompt string containing all operational rules and scoped context.
@@ -157,7 +178,7 @@ def build_prompt(
     effective_gotchas = global_gotchas if global_gotchas is not None else gotchas_path
     formatted_global_gotchas = _format_global_gotchas(effective_gotchas)
 
-    invariants_text = extract_invariants(agents_path)
+    invariants_text = _with_token_budget(extract_invariants(agents_path), token_budget)
 
     security_review_line = ""
     if ticket.security_required:
@@ -261,7 +282,6 @@ class _BuildDispatcher:
                     agents_path=agents_path,
                 )
             return _class_build
-
         def _instance_build(
             ticket: Ticket,
             spec_excerpt: SpecExcerpt | str,
@@ -283,6 +303,7 @@ class _BuildDispatcher:
                 spec_path=spec_path,
                 global_gotchas=global_gotchas,
                 agents_path=agents,
+                token_budget=instance.token_budget,
             )
 
         return _instance_build
@@ -296,6 +317,7 @@ class PromptBuilder:
         execution_skill: str | Path | None = None,
         gotchas_path: str | Path | None = None,
         agents_path: str | Path | None = None,
+        token_budget: TokenBudgetConfig | None = None,
     ) -> None:
         self.default_execution_skill = (
             Path(execution_skill).as_posix() if execution_skill is not None else None
@@ -306,6 +328,7 @@ class PromptBuilder:
         self.default_agents_path = (
             Path(agents_path).as_posix() if agents_path is not None else "AGENTS.md"
         )
+        self.token_budget = token_budget
 
     build = _BuildDispatcher()
     build_prompt = staticmethod(build_prompt)

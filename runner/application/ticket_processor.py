@@ -151,6 +151,20 @@ class GatekeeperTicketProcessor:
         self._loop_factory = loop_factory
         self._printer = printer
 
+    def _current_status_card_fields(self) -> dict[str, Any]:
+        """Snapshot the live token count and attempt so card edits never reset them."""
+        state = None
+        if self._state_coordinator is not None and hasattr(
+            self._state_coordinator, "get_or_create_state"
+        ):
+            try:
+                state = self._state_coordinator.get_or_create_state()
+            except Exception:
+                state = None
+        tokens_current = getattr(getattr(state, "tokens", None), "current", 0) or 0
+        completed_attempts = getattr(state, "verification_attempts", 0) or 0
+        return {"tokens_current": tokens_current, "attempt": completed_attempts + 1}
+
     def _notify(self, message: str) -> None:
         """Emit notification notice to configured notification sink or printer."""
         if self._notify_sink is not None:
@@ -454,6 +468,7 @@ class GatekeeperTicketProcessor:
                         thread_id,
                         status_card_message_id,
                         status=status_label,
+                        **self._current_status_card_fields(),
                     )
                 except (DiscordGatewayError, Exception) as exc:
                     logger.warning(

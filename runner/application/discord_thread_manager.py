@@ -11,6 +11,7 @@ from runner.adapters.discord.logger import (
     DiscordLoggerImpl,
     build_status_card_embed,
 )
+from runner.domain.config import TokenBudgetConfig
 from runner.domain.exceptions import DiscordGatewayError
 from runner.ports.discord_gateway import DiscordGateway
 from runner.ports.discord_logger import DiscordLogger
@@ -32,12 +33,14 @@ class DiscordThreadManager:
         gateway: DiscordGateway,
         logger: DiscordLogger | None = None,
         discord_enabled: bool = True,
+        token_budget: TokenBudgetConfig | None = None,
     ) -> None:
         self._gateway = gateway
         self._logger: DiscordLogger = (
             logger if logger is not None else DiscordLoggerImpl(gateway)
         )
         self.discord_enabled = discord_enabled
+        self._token_budget = token_budget or TokenBudgetConfig()
         self._threads: dict[str, dict[str, Any]] = {}
 
     def _resolve_thread_name(self, ticket_id: str, slug: str) -> str:
@@ -96,6 +99,9 @@ class DiscordThreadManager:
             attempt=attempt,
             tokens_current=tokens_current,
             started_at=started_at,
+            ceiling=self._token_budget.ceiling,
+            warn=self._token_budget.warn,
+            handoff=self._token_budget.handoff,
         )
 
         # 1. Create thread from starter Status Card embed in channel_id

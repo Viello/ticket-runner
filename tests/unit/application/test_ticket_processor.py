@@ -2257,3 +2257,51 @@ def test_dispatch_skips_when_ticket_file_is_missing(tmp_path: Path) -> None:
     assert outcome.is_skipped is True
     assert observed == ["<missing>"]
     assert runner.invocations == []
+
+
+def test_phase_change_status_card_preserves_tokens_and_attempt(tmp_path: Path) -> None:
+    """Phase transitions must not reset the Status Card to 0k / 1."""
+    from dataclasses import replace
+
+    from runner.application.state_coordinator import StateCoordinator
+    from runner.domain.state import RunnerState, TokenState
+    from tests.fakes.fake_state_store import FakeStateStore
+
+    ticket = _make_ticket()
+    paths = RuntimePaths(root_dir=tmp_path)
+    signals = FilesystemSignalRepository(paths)
+    gateway = FakeInterventionGateway(decisions=["abort"])
+    thread_mgr = _FakeDiscordThreadManager()
+
+    state_coord = StateCoordinator(state_store=FakeStateStore())
+    state_coord.save_state(
+        replace(
+            RunnerState.idle(),
+            verification_attempts=2,
+            tokens=TokenState(current=190_000),
+        )
+    )
+
+    cycle_runner = _StubCycleRunner(
+        [WorkerRunResult(status=SingleCycleStatus.FAILED, escalation_details="boom")],
+        on_call=lambda t, count: None,
+    )
+
+    processor = TicketProcessor(
+        cycle_runner=cycle_runner,
+        signal_repository=signals,
+        executor=_StubExecutor([]),
+        intervention_gateway=gateway,
+        max_attempts=1,
+        state_coordinator=state_coord,
+        discord_thread_manager=thread_mgr,
+        discord_logger=_FakeDiscordLogger(),
+    )
+
+    asyncio.run(processor(ticket))
+
+    assert thread_mgr.update_calls
+    for _thread_id, _message_id, fields in thread_mgr.update_calls:
+        assert fields.get("tokens_current") == 190_000
+        # Two completed attempts means the gatekeeper is on attempt 3.
+        assert fields.get("attempt") == 3

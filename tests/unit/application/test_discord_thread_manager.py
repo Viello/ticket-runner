@@ -304,3 +304,26 @@ async def test_close_ticket_thread_fallback_when_logger_lacks_post_embed() -> No
     assert post_calls[0].embed["title"] == "✅ Committed"
     assert post_calls[0].embed["description"] == "minimal commit"
 
+
+@pytest.mark.anyio
+async def test_open_ticket_thread_uses_configured_token_budget() -> None:
+    """Status Card opened by the manager reflects the configured 200k budget."""
+    from runner.domain.config import TokenBudgetConfig
+
+    gateway = FakeDiscordGateway(create_thread_return=("thread-99", "msg-1"))
+    logger = DiscordLoggerImpl(
+        gateway,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+    manager = DiscordThreadManager(
+        gateway,
+        logger,
+        discord_enabled=True,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    await manager.open_ticket_thread(make_test_ticket(), channel_id="channel-1", tokens_current=190_000)
+
+    create_calls = [c for c in gateway.calls if c.method == "create_thread"]
+    assert create_calls
+    assert "~190k / 200k" in create_calls[0].embed["description"]
