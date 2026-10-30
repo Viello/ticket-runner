@@ -222,8 +222,10 @@ def test_happy_path_approved_outcome_mapping(tmp_path: Path) -> None:
         "Update runner/application/ticket_processor.py",
         "Update tests/unit/test_foo.py",
     )
-    # new_gotchas passed through
-    assert outcome.new_gotchas == ("Discovered async queue timing nuance.",)
+    # new_gotchas canonicalised by the domain to the Gotchas store's text form
+    assert outcome.new_gotchas == (
+        "Problem: Discovered async queue timing nuance.\nSolution: Not specified.",
+    )
     # scope mapped from signal
     assert outcome.scope == "application"
     # self_review_notes surfaced to terminal log only (never in changes or gotchas)
