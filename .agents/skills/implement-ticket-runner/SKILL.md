@@ -1,6 +1,6 @@
 ---
 name: implement-ticket-runner
-description: "Autonomous worker execution skill for Ticket Runner queues: test-driven implementation at jump-start seams, 3-axis review, checkbox criteria acknowledgement, and explicit signal durability."
+description: "Autonomous worker execution skill for Ticket Runner queues: test-driven implementation at jump-start seams, Standards and Spec review with a conditional Security axis, checkbox criteria acknowledgement, and explicit signal durability."
 disable-model-invocation: true
 ---
 
@@ -23,11 +23,11 @@ You are an autonomous Worker subprocess executing a single Ticket from `docs/tic
 - Target platform is Windows/PowerShell: never pipe to Unix-only commands (`tail`, `grep`, `head`).
 - **Stuck-Test-Suite Protocol**: If tests hang or cascade, follow `/diagnosing-bugs` § Stuck-Test-Suite Protocol. Run the fastest single test file first, check for dangling subprocesses or locks, and isolate the failing seam before retrying.
 
-### 3. Three-Axis Review
-Run `/code-review` along three parallel axes before signalling readiness:
+### 3. Review (Security When Required)
+Run `/code-review` before signalling readiness:
 1. **Standards**: Code follows repository coding standards, architectural layers, and Fowler smell baselines.
 2. **Spec**: Code matches the ticket requirements in `## What to build` and `## Acceptance criteria` without scope creep.
-3. **Security**: When `**Security:** required` is declared or the change touches trust boundaries (credentials, subprocesses, path sanitization, network, or untrusted inputs), audit security referencing `.agents/skills/security-review/SKILL.md`.
+3. **Security (conditional)**: Run this axis only when the ticket's `Security:` field is `required`, `true`, or `yes`. Audit security referencing `.agents/skills/security-review/SKILL.md`. Do not add it merely because the change touches trust boundaries; those are review checkpoints once the axis is active (ADR 0013).
 
 ### 4. Severity-Gated Question Escalation
 Handle review findings by severity:
@@ -64,7 +64,7 @@ Handle review findings by severity:
     "modified_files": [
       "path/to/modified_file.py"
     ],
-    "self_review_notes": "Standards, Spec, and Security clean. All acceptance criteria verified.",
+    "self_review_notes": "Standards and Spec clean. Security audited when required. All acceptance criteria verified.",
     "new_gotchas": [
       {
         "problem": "<Brief description of platform quirk or non-obvious pitfall encountered>",

@@ -1,17 +1,19 @@
 ---
 name: code-review
-description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along three axes: Standards, Spec, and Security (referencing security-review). Runs axes in parallel sub-agents and aggregates findings with severity-gated escalation."
+description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards and Spec. Adds a Security axis only when the ticket marks Security as required or the user asks. Runs active axes in parallel sub-agents and aggregates findings with severity-gated escalation."
 ---
 
 # Code Review
 
-Three-axis review of the diff between `HEAD` and a fixed point the user supplies:
+Review of the diff between `HEAD` and a fixed point the user supplies:
 
 - **Standards**: does the code conform to this repo's documented coding standards and Fowler smell baselines?
 - **Spec**: does the code faithfully implement the originating issue / spec without scope creep?
-- **Security**: does the code introduce security vulnerabilities, unsafe data handling, secret exposure, or breach trust boundaries? (referencing `.agents/skills/security-review/SKILL.md`)
+- **Security (conditional)**: does the code introduce security vulnerabilities, unsafe data handling, secret exposure, or breach trust boundaries? (referencing `.agents/skills/security-review/SKILL.md`)
 
-All three axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+The **Standards** and **Spec** axes always run. The **Security** axis runs only when the ticket frontmatter marks security as required (the `Security:` field is `required`, `true`, or `yes`, with or without bold markup) or the user explicitly asks for a security review. Do not infer it from paths, subprocesses, or other trust boundaries (ADR 0013).
+
+The active axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
 
 The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, tell the user to run `/setup-matt-pocock-skills`.
 
@@ -58,18 +60,24 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-### 4. Identify the security context
+### 4. Decide whether the Security axis applies
 
-Check whether the diff touches security-sensitive areas:
+Run the **Security** axis only when one of these is true:
+- The ticket frontmatter marks security as required: the `Security:` field is `required`, `true`, or `yes` (with or without bold markup).
+- The user explicitly asks for a security review.
+
+Do not add the Security axis merely because the diff touches subprocesses, filesystem paths, network calls, parsers, or other trust boundaries. Those are review checkpoints once the axis is active, not invocation triggers (ADR 0013).
+
+When the Security axis applies, scope it to security-sensitive areas:
 - Subprocess invocation or shell commands
 - Credentials, tokens, keys, or authentication secrets
 - Filesystem paths, directory traversal, or file permissions
 - External network requests or untrusted input parsing
 - Authorization, access control, or database RLS
 
-If `Security: required` is declared on the ticket or any security boundary is touched, the **Security** sub-agent is mandatory.
-
 ### 5. Spawn parallel sub-agents
+
+Spawn sub-agents for the active axes.
 
 **Standards sub-agent prompt** should include:
 - The full diff command and commit list.
@@ -81,14 +89,14 @@ If `Security: required` is declared on the ticket or any security boundary is to
 - The path or fetched contents of the spec/ticket.
 - Brief: "Report (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
-**Security sub-agent prompt** should include:
+**If the Security axis applies, the Security sub-agent prompt** should include:
 - The diff command and commit list.
 - Reference to `.agents/skills/security-review/SKILL.md`.
 - Brief: "Audit the diff for security vulnerabilities: (a) input validation & command injection / subprocess safety; (b) secret/credential exposure; (c) path traversal / filesystem boundaries; (d) authentication / authorization / RLS; (e) unsafe deserialization or data handling. Classify each finding by severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`. Under 400 words."
 
 ### 6. Aggregate & Severity-Gated Escalation
 
-Present the three reports under `## Standards`, `## Spec`, and `## Security` headings verbatim or lightly cleaned. Do **not** merge or rerank findings.
+Present the reports for the active axes under `## Standards`, `## Spec`, and, when it ran, `## Security` headings verbatim or lightly cleaned. Do **not** merge or rerank findings. If the Security axis did not apply, do not emit a Security section.
 
 Handle findings with severity-gated escalation:
 - **`LOW` / `MEDIUM` findings**: Remediate in-pass or record in review notes. Never block or interrupt the human operator.
@@ -99,10 +107,10 @@ Handle findings with severity-gated escalation:
 
 End with a summary: total findings per axis, and the worst issue within each axis.
 
-## Why three axes
+## Why separate axes
 
-A change can pass standards and spec while introducing a dangerous vulnerability:
+When the Security axis applies, a change can pass standards and spec while introducing a dangerous vulnerability:
 - Code that follows every convention and implements the spec but leaks a token → **Standards pass, Spec pass, Security FAIL.**
 - Code that is secure and standards-compliant but implements the wrong feature → **Standards pass, Spec FAIL, Security pass.**
 
-Reporting them separately ensures no single concern masks the others.
+Reporting them separately ensures no single concern masks the others. When the Security axis does not apply, the Standards and Spec reports still run independently.

@@ -331,6 +331,7 @@ def test_spec_03_us_02_to_us_06_initial_prompt_contract(
     # US 05: review self-checks and self_review_notes
     assert "/code-review" in prompt
     assert "/security-review" not in prompt
+    assert "`Security` axis" not in prompt
     assert "self_review_notes" in prompt
 
     # US 06: diagnosing-bugs pointer available on disk

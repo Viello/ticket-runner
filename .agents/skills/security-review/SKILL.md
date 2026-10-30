@@ -1,6 +1,6 @@
 ---
 name: security-review
-description: Reviews application code for security vulnerabilities, unsafe data handling, secret exposure, and risky defaults before commit, ready-signal, or release.
+description: Reviews application code for security vulnerabilities, unsafe data handling, secret exposure, and risky defaults when a ticket or user explicitly requests a security review.
 ---
 
 # Security Review
@@ -9,7 +9,9 @@ Conduct a scoped security audit of pending changes before completing a task or e
 
 ## When to Invoke
 
-Invoke this skill when explicitly flagged by ticket requirements/frontmatter (`Security: required`), by user request, or when changes introduce or modify security-sensitive behavior:
+Invoke this skill only when the ticket frontmatter marks security as required (the `Security:` field is `required`, `true`, or `yes`, with or without bold markup) or by direct user request. Do not invoke it merely because a change touches subprocesses, filesystem paths, network calls, parsers, or other trust boundaries; those are review checkpoints once the skill is active (ADR 0013).
+
+When invoked, scope the review to the relevant areas:
 
 - **Authentication & Access Control**: permissions, roles, access checks, or authorization boundaries.
 - **External Integrations & Network**: API endpoints, webhooks, HTTP requests, or external services.
@@ -24,7 +26,7 @@ Invoke this skill when explicitly flagged by ticket requirements/frontmatter (`S
 - **Dependencies & Build Scripts**: new package dependencies, build scripts, or deployment manifests.
 - **Logging & Telemetry**: log statements, error handlers, or tracebacks that could leak sensitive runtime state.
 - **Trust Boundaries**: any seam exposing internal functionality to another system, user, or service.
-- **General Vulnerability Risk**: any change where a security defect or exploit could reasonably be introduced.
+- **General Vulnerability Risk**: any in-scope change where a security defect or exploit could reasonably be introduced.
 
 ## Review & Remediation Process
 

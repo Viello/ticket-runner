@@ -116,6 +116,8 @@ def test_implement_ticket_runner_skill_conforms_to_autonomous_spec() -> None:
         assert "Jump-start" in body
         assert "Stuck-Test-Suite Protocol" in body or "stuck-test-suite" in body.lower()
         assert "code-review" in body
+        assert "Security (conditional)" in body
+        assert "`Security:` field is `required`, `true`, or `yes`" in body
         assert "Acceptance criteria" in body
         assert "- [ ]" in body and "- [x]" in body
         assert ".agent/signals/" in body
@@ -167,8 +169,12 @@ def test_implement_skill_is_pure_human_ai_interactive() -> None:
         assert "completed/" in body
         assert "gotchas.md" in body
 
+        # Security review is ticket-driven, not unconditional (ADR 0013)
+        assert "`Security:` field is `required`, `true`, or `yes`" in body
+        assert "operator explicitly asks" in body
 
-def test_code_review_skill_runs_3_axis_review() -> None:
+
+def test_code_review_skill_gates_security_axis() -> None:
     for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
         skill_dir = base_dir / "code-review"
         skill_md = skill_dir / "SKILL.md"
@@ -178,8 +184,11 @@ def test_code_review_skill_runs_3_axis_review() -> None:
 
         assert "Standards" in content
         assert "Spec" in content
-        assert "Security" in content
+        assert "Security (conditional)" in content
         assert "security-review" in content
+        assert "`Security:` field is `required`, `true`, or `yes`" in content
+        assert "user explicitly asks" in content
+        assert "any security boundary is touched" not in content
         assert "ready-for-human" in content or "escalat" in content.lower()
 
 

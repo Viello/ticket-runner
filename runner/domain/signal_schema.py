@@ -47,7 +47,7 @@ READY_SIGNAL_FIELDS: tuple[SignalFieldSpec, ...] = (
     ),
     SignalFieldSpec(
         name="self_review_notes",
-        description="summary of the Standards, Spec, and Security review findings",
+        description="summary of the Standards and Spec review findings, plus Security when the ticket requires it",
         example="Reviews passed: no findings above Low; targeted tests and the full suite are green.",
     ),
     SignalFieldSpec(

@@ -1044,7 +1044,7 @@ implement-ticket-runner (executing) · code-review before the ready signal
 
 <span class="c">## Immediate Next Steps</span>
 1. Finish test_repo.py round-trips; 2. run py -3 -m pytest tests/unit/test_repo.py;
-3. run 3-axis review; 4. tick acceptance criteria; 5. write .agent/signals/T001_ready.json</pre>
+3. run Standards + Spec review (plus Security when required); 4. tick acceptance criteria; 5. write .agent/signals/T001_ready.json</pre>
             </section>
           </div>
         </div>
@@ -1952,7 +1952,7 @@ sequenceDiagram
 <pre>{ <span class="jkey">"ticket_id"</span>: <span class="jstr">"T004"</span>,          <span class="d">// must match the active ticket</span>
   <span class="jkey">"status"</span>: <span class="jstr">"ready_for_verification"</span>,  <span class="d">// the ONLY allowed value here</span>
   <span class="jkey">"modified_files"</span>: [<span class="jstr">…paths…</span>],
-  <span class="jkey">"self_review_notes"</span>: <span class="jstr">"3-axis review summary (+security notes if Security: required)"</span>,
+  <span class="jkey">"self_review_notes"</span>: <span class="jstr">"Standards + Spec review summary (+security notes if Security: required)"</span>,
   <span class="jkey">"new_gotchas"</span>: [<span class="jstr">…strings, may be []</span>],
   <span class="jkey">"timestamp"</span>: <span class="jstr">"ISO-8601 UTC"</span>,
   <span class="jkey">"scope"</span>: <span class="jstr">"ui"</span> <span class="d">// optional; lowercase layer token, never a ticket number</span> }

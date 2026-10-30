@@ -184,7 +184,7 @@ def build_prompt(
     if ticket.security_required:
         security_review_line = (
             "\n   - Explicit Security Mandate: This ticket is explicitly marked `Security: required` in ticket frontmatter. "
-            "Read `.agents/skills/security-review/SKILL.md` using your file-reading tool, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
+            "Read `.agents/skills/security-review/SKILL.md` using your file-reading tool, run the `Security` axis of the code review, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
             "and document detailed security findings in `self_review_notes`."
         )
 
@@ -224,7 +224,7 @@ Full specification reference: `{resolved_spec_path}`
    - Strict Queue Immutability: The Worker is strictly forbidden from modifying any other line or section of the active ticket file (the bold-label header, `## What to build`, `## Jump-start`, criterion wording, or `## Gotchas`), editing `docs/tickets/gotchas.md` directly, or touching any other file under `docs/tickets/`. Modifying, moving, or deleting any ticket markdown file under `docs/tickets/` (other than checking off satisfied acceptance criteria in the active ticket file) is strictly prohibited. Ticket relocation, header finalization (`**Status:** completed`), gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
    - Do NOT run `git add` or `git commit`. Worker git staging and commits are strictly forbidden. Do not edit `docs/tickets/gotchas.md` directly.
 2. **Review Self-Checks & Severity-Gated Escalation**:
-   - 3-Axis Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and evaluate changes across three axes: `Standards`, `Spec`, and `Security`. Summarize verification findings in `self_review_notes`.{security_review_line}
+   - Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and evaluate changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
    - Severity-Gated Escalation:
      - Low and Medium findings never interrupt the human; remediate in-pass or summarize findings in `self_review_notes`.
      - Critical and High findings must be remediated in-pass before signalling readiness.

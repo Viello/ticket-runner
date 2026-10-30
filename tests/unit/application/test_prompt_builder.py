@@ -249,6 +249,8 @@ def test_prompt_conditional_security_review_toggle() -> None:
     assert "Explicit Security Mandate" in prompt_sec
     assert "Security: required" in prompt_sec
     assert "Explicit Security Mandate" not in prompt_no_sec
+    assert "`Security` axis" in prompt_sec
+    assert "`Security` axis" not in prompt_no_sec
     assert "`/security-review`" not in prompt_sec
     assert "`/security-review`" not in prompt_no_sec
 
@@ -533,7 +535,7 @@ def test_prompt_states_spec_17_checkbox_tick_permission_boundary() -> None:
     assert "touching any other file under `docs/tickets/`" in prompt
 
 
-def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> None:
+def test_prompt_instructs_review_and_severity_gated_escalation_when_security_required() -> None:
     ticket = _make_ticket(ticket_id="T127", security_required=True)
     prompt = build_prompt(
         ticket=ticket,
@@ -550,6 +552,21 @@ def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> 
     assert "Critical and High findings must be remediated in-pass" in prompt
     assert "Only if remediation is blocked" in prompt
     assert ".agent/questions/T127.json" in prompt
+
+
+def test_prompt_omits_security_axis_when_not_required() -> None:
+    ticket = _make_ticket(ticket_id="T127", security_required=False)
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert ".agents/skills/code-review/SKILL.md" in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+    assert "Standards" in prompt
+    assert "Spec" in prompt
+    assert "`Security` axis" not in prompt
 
 
 def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() -> None:
