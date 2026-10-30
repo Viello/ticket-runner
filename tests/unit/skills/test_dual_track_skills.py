@@ -126,6 +126,11 @@ def test_implement_ticket_runner_skill_conforms_to_autonomous_spec() -> None:
         assert "never commit" in body.lower() or "never run `git commit`" in body.lower()
         assert "never relocate" in body.lower() or "gatekeeper relocates" in body.lower() or "gatekeeper owns" in body.lower()
 
+        # Dropped embedded JSON signal examples; points to prompt protocol sections
+        assert "```json" not in body
+        assert "Ready Signal Protocol" in body
+        assert "Question Signal Protocol" in body
+
 
 def test_to_tickets_skill_conforms_to_specimen_b() -> None:
     for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:

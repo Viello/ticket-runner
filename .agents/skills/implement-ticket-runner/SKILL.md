@@ -33,16 +33,7 @@ Run `/code-review` before signalling readiness:
 Handle review findings by severity:
 - **Low / Medium findings**: Remediate in code or document in `self_review_notes`. Never block or interrupt the human operator.
 - **Critical / High findings**: Remediate immediately in the session and verify tests pass.
-- **Blocked Escalation**: If remediation is genuinely blocked by a required human architectural decision, missing external secret/credential, or policy ambiguity (the condition that would be `ready-for-human` in an interactive session), emit a durable question signal to `.agent/questions/<ticket_id>.json`:
-  ```json
-  {
-    "ticket_id": "<ticket_id>",
-    "question": "<clear concise description of the blocker and choices>",
-    "context": "<relevant files or findings>",
-    "timestamp": "<ISO-8601-UTC>"
-  }
-  ```
-  The Gatekeeper will halt at the intervention gate (`WAITING_FOR_USER`) and await the human operator's response on Discord or Terminal before resuming.
+- **Blocked Escalation**: If remediation is genuinely blocked by a required human architectural decision, missing external secret/credential, or policy ambiguity (the condition that would be `ready-for-human` in an interactive session), emit a durable question signal to `.agent/questions/<ticket_id>.json` following the schema in the task prompt's `Question Signal Protocol` section. The Gatekeeper will halt at the intervention gate (`WAITING_FOR_USER`) and await the human operator's response on Discord or Terminal before resuming.
 
 ### 5. Checkbox Criteria Acknowledgement & Permission Boundary
 - In the active ticket file, flip satisfied criteria from `- [ ]` to `- [x]` under `## Acceptance criteria`.
@@ -56,21 +47,4 @@ Handle review findings by severity:
   - You must **NEVER** relocate ticket files to `completed/`.
   - You must **NEVER** edit `docs/tickets/gotchas.md`.
   - Gatekeeper owns commits, ticket relocation, and gotchas logging exclusively.
-- Emit your completion signal by writing `.agent/signals/<ticket_id>_ready.json`:
-  ```json
-  {
-    "ticket_id": "<ticket_id>",
-    "status": "ready_for_verification",
-    "modified_files": [
-      "path/to/modified_file.py"
-    ],
-    "self_review_notes": "Standards and Spec clean. Security audited when required. All acceptance criteria verified.",
-    "new_gotchas": [
-      {
-        "problem": "<Brief description of platform quirk or non-obvious pitfall encountered>",
-        "solution": "<Actionable target behavior and concrete solution>"
-      }
-    ],
-    "timestamp": "<ISO-8601-UTC>"
-  }
-  ```
+- Emit your completion signal by writing `.agent/signals/<ticket_id>_ready.json` following the schema in the task prompt's `Ready Signal Protocol` section.

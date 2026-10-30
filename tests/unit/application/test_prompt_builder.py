@@ -4,6 +4,11 @@ from pathlib import Path
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
 from runner.application.prompt_builder import PromptBuilder, build_prompt
+from runner.domain.signal import QuestionSignal, ReadySignal
+from runner.domain.signal_schema import (
+    render_question_signal_protocol,
+    render_ready_signal_protocol,
+)
 from runner.domain.ticket import Ticket, TicketStatus
 
 
@@ -305,14 +310,10 @@ def test_prompt_documents_full_ready_signal_schema() -> None:
     assert ".agent/signals/T032_ready.json" in prompt
 
     # Required and optional schema fields
-    assert "`ticket_id`: \"T032\"" in prompt
+    for field_name in ReadySignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
     assert "\"ready_for_verification\"" in prompt
-    assert "`modified_files`" in prompt
-    assert "`self_review_notes`" in prompt
-    assert "`new_gotchas`" in prompt
-    assert "`timestamp`" in prompt
-    assert "`scope`" in prompt
-    assert "never use a ticket number" in prompt
+    assert "never a ticket number" in prompt
 
 
 def test_prompt_documents_question_protocol_and_schema() -> None:
@@ -329,13 +330,77 @@ def test_prompt_documents_question_protocol_and_schema() -> None:
     assert "stop working immediately" in prompt.lower() or "stop working" in prompt.lower()
 
     # Question schema fields
-    assert "`ticket_id`: \"T032\"" in prompt
-    assert "`question`" in prompt
-    assert "`type`: \"choice\" or \"text\"" in prompt
-    assert "`options`" in prompt
-    assert "`status`: \"pending\"" in prompt
-    assert "`answer`: null" in prompt
-    assert "`created_at`" in prompt
+    for field_name in QuestionSignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert "\"choice\"" in prompt
+    assert "\"text\"" in prompt
+    assert "\"pending\"" in prompt
+
+
+def test_prompt_renders_ready_signal_protocol_from_domain_authority() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    ready_protocol = render_ready_signal_protocol("T032")
+    assert ready_protocol in prompt
+
+    for field_name in ReadySignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert "\"ready_for_verification\"" in prompt
+    assert ".agent/signals/T032_ready.json" in prompt
+
+
+def test_prompt_renders_question_signal_protocol_from_domain_authority() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    question_protocol = render_question_signal_protocol("T032")
+    assert question_protocol in prompt
+
+    for field_name in QuestionSignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert ".agent/questions/T032.json" in prompt
+
+
+def test_prompt_protocols_declare_themselves_authoritative() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    authority_sentence = (
+        "This section is the single authority for this Signal payload schema: if the "
+        "execution skill or any other document shows a different example, follow this section."
+    )
+    assert prompt.count(authority_sentence) >= 2
+
+
+def test_prompt_teaches_canonical_gotcha_shape_with_string_fallback_without_fix_alias() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    assert "\"problem\":" in prompt
+    assert "\"solution\":" in prompt
+    assert "plain strings are also accepted" in prompt
+    assert "\"fix\"" not in prompt
 
 
 def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() -> None:
@@ -350,8 +415,8 @@ def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() ->
     )
     cmd = build_opencode_run_command(prompt)
     total_length = sum(len(arg) for arg in cmd) + len(cmd) - 1
-    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 9,000 chars
-    assert total_length < 9000
+    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 10,000 chars
+    assert total_length < 10000
     assert total_length < 32767
 
 

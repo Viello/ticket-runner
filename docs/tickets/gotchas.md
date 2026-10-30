@@ -547,3 +547,11 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Loosening `ReadySignal.new_gotchas` to accept `{problem, solution}` objects changes the value every downstream consumer sees: a Worker's plain string now arrives canonicalised as `Problem: …` / `Solution: Not specified.`, so tests or code asserting raw string passthrough break, and the Gotchas Store's freeform separators (semicolon, em-dash) no longer split that text into a solution.
 - **Solution:** Expect the canonical text form in every test that asserts `TicketOutcome.new_gotchas` or Gotchas Store input, and teach Workers the `{problem, solution}` object so the solution is explicit; keep plain strings as an accepted fallback only and never advertise the `fix` alias. Signal renderers must also take `.agent/` paths from `RuntimePaths` and validate Ticket ids against `TICKET_ID_PATTERN` instead of interpolating them, so rendered protocol text can never point a Worker outside the runtime directory.
 
+---
+
+## Prompt Signal Protocol Authority & Skill Schema Pointer
+
+- **Problem:** Hand-maintained Signal schema bullets in `PromptBuilder` and embedded JSON payloads in `implement-ticket-runner/SKILL.md` drift apart and from the domain parsers, leading to worker rejections when obeying one document over another. In addition, prompt command length tests with hardcoded thresholds fail when complete example payloads are inlined into task prompts.
+- **Solution:** In `PromptBuilder`, generate the ready and question protocol sections directly from `render_ready_signal_protocol` and `render_question_signal_protocol`, declaring them authoritative over the execution skill and any other document. Remove embedded JSON payloads from `implement-ticket-runner/SKILL.md`, pointing workers directly to the task prompt's `Ready Signal Protocol` and `Question Signal Protocol` sections as the sole schema authority. Ensure command length tests allow sufficient headroom for complete inlined example payloads while remaining comfortably beneath the 32,767 Windows subprocess ceiling.
+
+

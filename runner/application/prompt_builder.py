@@ -8,6 +8,10 @@ from typing import Any
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
 from runner.domain.config import TokenBudgetConfig
+from runner.domain.signal_schema import (
+    render_question_signal_protocol,
+    render_ready_signal_protocol,
+)
 from runner.domain.ticket import Ticket
 
 DEFAULT_INVARIANTS = """## Invariants
@@ -179,6 +183,8 @@ def build_prompt(
     formatted_global_gotchas = _format_global_gotchas(effective_gotchas)
 
     invariants_text = _with_token_budget(extract_invariants(agents_path), token_budget)
+    ready_protocol = render_ready_signal_protocol(ticket.id)
+    question_protocol = render_question_signal_protocol(ticket.id)
 
     security_review_line = ""
     if ticket.security_required:
@@ -230,29 +236,13 @@ Full specification reference: `{resolved_spec_path}`
      - Critical and High findings must be remediated in-pass before signalling readiness.
      - Only if remediation is blocked by an architectural decision or missing secret does the Worker emit `.agent/questions/{ticket.id}.json` and stop working immediately.
 3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs/SKILL.md` using your file-reading tool.
-4. **Ready Signal Protocol**: When implementation and self-reviews are complete, emit the ready signal by writing `.agent/signals/{ticket.id}_ready.json`.
-   The ready Signal JSON payload must follow this exact schema:
-   - `ticket_id`: "{ticket.id}" (must match this active ticket)
-   - `status`: "ready_for_verification"
-   - `modified_files`: array of strings containing repository-relative paths modified during this ticket (e.g. `["runner/application/foo.py"]`)
-   - `self_review_notes`: string summarizing findings, verification results, and standards compliance
-   - `new_gotchas`: array of newly discovered runtime gotchas or lessons learned strings (empty array `[]` if none)
-   - `timestamp`: current ISO-8601 UTC timestamp string
-   - `scope`: optional lowercase architectural layer token (e.g. "application", "domain", "adapters"; omit or null to use the default queue scope; never use a ticket number)
-   **Live QA Verification Contract**:
+4. **Live QA Verification Contract**:
    - Human verification happens after green checks via a `/live-qa` session the human runs.
    - The Worker drafts no scenarios and self-reports no manual verification.
-5. **Question Protocol (Clarification / Blocked)**:
-   If blocked, requirements are ambiguous, or an architectural decision is required:
-   - Write a question Signal to `.agent/questions/{ticket.id}.json` and **stop working immediately**. Do not guess or continue working while blocked.
-   The question Signal JSON payload must follow this exact schema:
-   - `ticket_id`: "{ticket.id}"
-   - `question`: string describing the clarifying question
-   - `type`: "choice" or "text"
-   - `options`: array of choice strings when type is "choice", or null when type is "text"
-   - `status`: "pending"
-   - `answer`: null
-   - `created_at`: current ISO-8601 UTC timestamp string
+
+{ready_protocol}
+
+{question_protocol}
 """
     return prompt
 
