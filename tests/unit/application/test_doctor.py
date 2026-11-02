@@ -14,6 +14,7 @@ from runner.application.doctor import (
     CHECK_MODEL,
     CHECK_OPENCODE,
     CHECK_QUEUE,
+    CHECK_SIGNAL_CONTRACT,
     CHECK_SKILLS,
     CHECK_TARGET_GIT_REPO,
     CHECK_TERMINAL_HOST,
@@ -635,7 +636,8 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
 
     assert report.passed is False
     # All 11 checks executed
-    assert len(report.checks) == 11
+    # All 12 checks executed
+    assert len(report.checks) == 12
 
 
 
@@ -855,6 +857,172 @@ async def test_check_skills_respects_custom_configured_execution_skill(tmp_path:
     assert custom_skill in result.remediation
     assert "code-review" not in result.remediation
     assert "diagnosing-bugs" not in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_passes_when_skill_has_no_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract passes when execution skill has no embedded JSON blocks."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text("# Skill with no examples\nJust plain instructions.\n", encoding="utf-8")
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is True
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert "signal contract verified" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_passes_when_skill_has_valid_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract passes when execution skill has valid ready signal examples."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(
+        "# Valid Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "status": "ready_for_verification",\n'
+        '  "modified_files": ["foo.py"],\n'
+        '  "self_review_notes": "Implemented and verified.",\n'
+        '  "new_gotchas": [],\n'
+        '  "timestamp": "<ISO-8601-UTC>",\n'
+        '  "scope": "implementation"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is True
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_fails_when_skill_has_stale_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract fails when execution skill has a stale signal example."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(
+        "# Stale Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What should we do?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is False
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.message
+    assert "missing required field 'type'" in result.message
+    assert result.remediation is not None
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.remediation
+    assert "missing required field 'type'" in result.remediation
+    assert "ticket-runner skills sync" in result.remediation
+    file_pos = result.remediation.index(".agents/skills/implement-ticket-runner/SKILL.md")
+    rule_pos = result.remediation.index("missing required field 'type'")
+    sync_pos = result.remediation.index("ticket-runner skills sync")
+    assert file_pos < sync_pos
+    assert rule_pos < sync_pos
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_respects_custom_configured_execution_skill(tmp_path: Path) -> None:
+    """Verify check_signal_contract resolves custom worker.execution_skill."""
+    custom_path = tmp_path / "custom" / "my_skill.md"
+    custom_path.parent.mkdir(parents=True, exist_ok=True)
+    custom_path.write_text(
+        "# Custom Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What is this?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+    config = _make_config(execution_skill="custom/my_skill.md")
+
+    doctor = Doctor(cwd=tmp_path, config_loader=FakeConfigLoader(config=config))
+    await doctor.check_config()
+
+    result = await doctor.check_signal_contract()
+    assert result.passed is False
+    assert "custom/my_skill.md" in result.message
+    assert result.remediation is not None
+    assert "custom/my_skill.md" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_respects_explicit_execution_skill_path(tmp_path: Path) -> None:
+    """Verify check_signal_contract resolves explicit execution_skill_path parameter."""
+    explicit_path = tmp_path / "explicit" / "SKILL.md"
+    explicit_path.parent.mkdir(parents=True, exist_ok=True)
+    explicit_path.write_text(
+        "# Explicit Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "status": "ready_for_verification",\n'
+        '  "modified_files": ["bar.py"],\n'
+        '  "self_review_notes": "All checks green.",\n'
+        '  "new_gotchas": [],\n'
+        '  "timestamp": "<ISO-8601-UTC>",\n'
+        '  "scope": "implementation"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path, execution_skill_path="explicit/SKILL.md")
+    result = await doctor.check_signal_contract()
+    assert result.passed is True
+    assert "explicit/SKILL.md" in result.message
+
+
+@pytest.mark.anyio
+async def test_doctor_run_includes_signal_contract_after_skills(tmp_path: Path) -> None:
+    """Verify Doctor.run() executes CHECK_SIGNAL_CONTRACT immediately after CHECK_SKILLS."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    config = _make_config()
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,  # type: ignore[arg-type]
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,  # type: ignore[arg-type]
+    )
+
+    report = await doctor.run(local_only=True, halt_on_failure=False)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_SKILLS in check_names
+    assert CHECK_SIGNAL_CONTRACT in check_names
+    skills_idx = check_names.index(CHECK_SKILLS)
+    contract_idx = check_names.index(CHECK_SIGNAL_CONTRACT)
+    assert contract_idx == skills_idx + 1
 
 
 @pytest.mark.anyio

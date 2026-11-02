@@ -1,6 +1,7 @@
 # T133: Doctor Pre-Flight and Skills Publish Gate
 
-**Status:** ready-for-agent
+**Status:** done (reviewed; pre-flight doctor signal contract check and skills publish gate)
+**Completed:** 2026-11-02T10:14:00Z
 **Labels:** ready-for-agent
 **Parent:** docs/specs/18-signal-contract-hardening.md
 
@@ -18,9 +19,9 @@
 
 **Blocked by:** T132
 
-- [ ] A new `CHECK_SIGNAL_CONTRACT` check runs after `check_skills` in `Doctor.run`; it resolves the configured `worker.execution_skill` (or an explicit `execution_skill_path`) relative to the Target Project root.
-- [ ] A skill with no embedded examples passes, a skill with valid examples passes, and a provisioned stale skill fails before dispatch.
-- [ ] The failure message names the skill file and the violated rule; the remediation names the file and rule first and mentions `ticket-runner skills sync` only as a post-republish step.
-- [ ] `publish_skills` validates every catalog `SKILL.md` Signal example before staging and aborts on any rejected example; the script puts the repository root on its import path when executed directly, and a dry-run validates the same way.
-- [ ] Doctor tests cover stale, clean, and example-free skills; publish tests prove an invalid catalog aborts before staging while a valid catalog reaches the staging step.
-- [ ] Targeted tests pass; Ruff and mypy are clean on every changed file.
+- [x] A new `CHECK_SIGNAL_CONTRACT` check runs after `check_skills` in `Doctor.run`; it resolves the configured `worker.execution_skill` (or an explicit `execution_skill_path`) relative to the Target Project root.
+- [x] A skill with no embedded examples passes, a skill with valid examples passes, and a provisioned stale skill fails before dispatch.
+- [x] The failure message names the skill file and the violated rule; the remediation names the file and rule first and mentions `ticket-runner skills sync` only as a post-republish step.
+- [x] `publish_skills` validates every catalog `SKILL.md` Signal example before staging and aborts on any rejected example; the script puts the repository root on its import path when executed directly, and a dry-run validates the same way.
+- [x] Doctor tests cover stale, clean, and example-free skills; publish tests prove an invalid catalog aborts before staging while a valid catalog reaches the staging step.
+- [x] Targeted tests pass; Ruff and mypy are clean on every changed file.

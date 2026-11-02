@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
+
 import pathlib
-import tempfile
+
 import pytest
 
 from scripts.publish_agent_skills import (
@@ -13,6 +13,8 @@ from scripts.publish_agent_skills import (
     generate_license,
     sanitize_and_copy_skills,
     audit_files_for_secrets,
+    validate_catalog_signal_contracts,
+    publish_skills,
 )
 
 
@@ -107,3 +109,126 @@ def test_audit_files_for_secrets(tmp_path: pathlib.Path) -> None:
     leaky_findings = audit_files_for_secrets(leaky_dir)
     assert len(leaky_findings) > 0
     assert "GitHub personal access token" in leaky_findings[0] or "token" in leaky_findings[0].lower()
+
+
+def test_validate_catalog_signal_contracts_clean_catalog(tmp_path: pathlib.Path) -> None:
+    for name in ["skill-a", "skill-b"]:
+        d = tmp_path / name
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Clean\n---\n# {name}\nNo json here.",
+            encoding="utf-8",
+        )
+    skills = load_all_skills(tmp_path)
+    violations = validate_catalog_signal_contracts(skills)
+    assert violations == []
+
+
+def test_validate_catalog_signal_contracts_catches_invalid_example(tmp_path: pathlib.Path) -> None:
+    clean = tmp_path / "clean-skill"
+    clean.mkdir()
+    (clean / "SKILL.md").write_text(
+        "---\nname: clean-skill\ndescription: Clean\n---\n# Clean",
+        encoding="utf-8",
+    )
+
+    stale = tmp_path / "stale-skill"
+    stale.mkdir()
+    (stale / "SKILL.md").write_text(
+        "---\nname: stale-skill\ndescription: Stale\n---\n# Stale\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "Missing type field",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    skills = load_all_skills(tmp_path)
+    violations = validate_catalog_signal_contracts(skills)
+    assert len(violations) == 1
+    assert "stale-skill/SKILL.md" in violations[0]
+    assert "missing required field 'type'" in violations[0]
+
+
+def test_publish_skills_aborts_before_staging_on_invalid_catalog(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Any
+
+    stale = tmp_path / "stale-skill"
+    stale.mkdir()
+    (stale / "SKILL.md").write_text(
+        "---\nname: stale-skill\ndescription: Stale\n---\n# Stale\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What is this?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    staging_attempted = False
+
+    def fake_sanitize_and_copy(*args: Any, **kwargs: Any) -> list[str]:
+        nonlocal staging_attempted
+        staging_attempted = True
+        return []
+
+    monkeypatch.setattr("scripts.publish_agent_skills.sanitize_and_copy_skills", fake_sanitize_and_copy)
+
+    with pytest.raises(RuntimeError, match="Signal contract validation failed"):
+        publish_skills(source_dir=tmp_path)
+
+    assert staging_attempted is False
+
+
+def test_publish_skills_dry_run_aborts_before_staging_on_invalid_catalog(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Any
+
+    stale = tmp_path / "stale-skill"
+    stale.mkdir()
+    (stale / "SKILL.md").write_text(
+        "---\nname: stale-skill\ndescription: Stale\n---\n# Stale\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What is this?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    staging_attempted = False
+
+    def fake_sanitize_and_copy(*args: Any, **kwargs: Any) -> list[str]:
+        nonlocal staging_attempted
+        staging_attempted = True
+        return []
+
+    monkeypatch.setattr("scripts.publish_agent_skills.sanitize_and_copy_skills", fake_sanitize_and_copy)
+
+    with pytest.raises(RuntimeError, match="Signal contract validation failed"):
+        publish_skills(source_dir=tmp_path, dry_run=True)
+
+    assert staging_attempted is False
+
+
+def test_publish_skills_dry_run_reaches_staging_on_valid_catalog(tmp_path: pathlib.Path) -> None:
+    valid = tmp_path / "valid-skill"
+    valid.mkdir()
+    (valid / "SKILL.md").write_text(
+        "---\nname: valid-skill\ndescription: Valid skill description\n---\n# Valid Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "status": "ready_for_verification",\n'
+        '  "modified_files": ["main.py"],\n'
+        '  "self_review_notes": "All checks passed.",\n'
+        '  "new_gotchas": [],\n'
+        '  "timestamp": "<ISO-8601-UTC>",\n'
+        '  "scope": "implementation"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    result = publish_skills(source_dir=tmp_path, dry_run=True)
+    assert result["dry_run"] is True
+    assert result["skills_count"] == 1
+    assert "valid-skill" in result["staged_skills"]

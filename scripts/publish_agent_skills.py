@@ -24,6 +24,12 @@ from typing import Any
 
 import yaml
 
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from runner.domain.signal_contract import validate_markdown_signal_examples  # noqa: E402
+
 
 FORBIDDEN_FILE_PATTERNS = [
     r"^\.env.*$",
@@ -90,6 +96,29 @@ def load_all_skills(skills_dir: pathlib.Path) -> list[SkillMetadata]:
             skills.append(parse_skill_metadata(item))
 
     return skills
+
+
+def validate_catalog_signal_contracts(skills: list[SkillMetadata]) -> list[str]:
+    """Validate that every SKILL.md in the catalog conforms to domain signal contracts.
+
+    Returns a list of violation messages across all skills, or an empty list if clean.
+    """
+    violations: list[str] = []
+    for skill in skills:
+        skill_md = skill.path / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError as exc:
+            violations.append(f"{skill.name}/SKILL.md: cannot read file ({exc})")
+            continue
+
+        errors = validate_markdown_signal_examples(content)
+        for err in errors:
+            violations.append(f"{skill.name}/SKILL.md: {err}")
+
+    return violations
 
 
 def generate_catalog_readme(skills: list[SkillMetadata]) -> str:
@@ -337,6 +366,15 @@ def publish_skills(
         raise ValueError(f"No skills found in '{source_dir}'.")
 
     print(f"Discovered {len(skills)} canonical skills in '{source_dir}'.")
+
+    # Validate signal contracts across entire catalog before staging or remote preflights
+    contract_violations = validate_catalog_signal_contracts(skills)
+    if contract_violations:
+        for violation in contract_violations:
+            print(f"SIGNAL CONTRACT VIOLATION: {violation}", file=sys.stderr)
+        raise RuntimeError(
+            f"Signal contract validation failed with {len(contract_violations)} violation(s). Aborting publication."
+        )
 
     # Step 1: Preflight GitHub CLI auth check
     if not dry_run:
