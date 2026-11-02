@@ -1,10 +1,10 @@
 ---
 project: ticket-runner
-last_updated: 2026-11-02T19:40:00
+last_updated: 2026-11-02T19:44:00
 author: Gab
 branch: agent/ticket-runner
 active_ticket: null
-status: active
+status: ready_to_verify
 stopped_at:
   file: "docs/specs/18-signal-contract-hardening.md"
   symbol: "Spec 18 Completed; Pending Skills Catalog Republish"
