@@ -338,3 +338,30 @@ def test_ensure_all_dirs_creates_evidence_dirs(tmp_path: Path) -> None:
 
 
 
+
+
+def test_malformed_signal_archive_paths_embed_ticket_id() -> None:
+    paths = RuntimePaths()
+    assert paths.malformed_ready_signal_archive_path("T134") == Path(".agent/logs/T134_malformed_ready.json")
+    assert paths.malformed_question_signal_archive_path("T134") == Path(".agent/logs/T134_malformed_question.json")
+
+    custom = RuntimePaths(root_dir=Path("custom/agent"))
+    assert custom.malformed_ready_signal_archive_path("T134") == Path("custom/agent/logs/T134_malformed_ready.json")
+    assert custom.malformed_question_signal_archive_path("T134") == Path("custom/agent/logs/T134_malformed_question.json")
+
+
+def test_malformed_signal_archive_path_traversal_rejected() -> None:
+    paths = RuntimePaths()
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_ready_signal_archive_path("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_ready_signal_archive_path("T134/../../escape")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_ready_signal_archive_path("T134\\evil")
+
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_question_signal_archive_path("../../evil")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_question_signal_archive_path("T134/../../escape")
+    with pytest.raises(ValueError, match="Invalid ticket identifier or path traversal"):
+        paths.malformed_question_signal_archive_path("T134\\evil")
