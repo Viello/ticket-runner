@@ -197,7 +197,7 @@ def build_prompt(
     prompt = f"""# Ticket Task: {ticket.id} — {ticket.title}
 
 ## Execution Skill & Discipline
-Before writing or modifying any code, use your file-reading tool (e.g. `read`) to first read and adhere to `{skill_path}`, and then read `AGENTS.md` to ground your work in project-wide architectural constraints. Apply the core implementation discipline:
+Before writing or modifying any code, use your file-reading tool (e.g. `read` / `read_file`) to first read and adhere to `{skill_path}`, and then read `AGENTS.md` to ground your work in project-wide architectural constraints (call your file-reading tool on both files even if they appear preloaded in system rules, because Gatekeeper audits session tool telemetry). Apply the core implementation discipline:
 - Test-Driven Development (TDD) at pre-agreed seams.
 - Fast Feedback Loop: Run targeted single test files matching modified modules (e.g. `python -m pytest tests/unit/application/test_foo.py -x`). Do NOT run the full test suite repeatedly during development loops.
 - Windows Shell Environment: Subcommands run under Windows PowerShell. Never pipe test output to Unix-only utilities (`tail`, `grep`, `head`) as they do not exist on Windows.
@@ -230,7 +230,7 @@ Full specification reference: `{resolved_spec_path}`
    - Strict Queue Immutability: The Worker is strictly forbidden from modifying any other line or section of the active ticket file (the bold-label header, `## What to build`, `## Jump-start`, criterion wording, or `## Gotchas`), editing `docs/tickets/gotchas.md` directly, or touching any other file under `docs/tickets/`. Modifying, moving, or deleting any ticket markdown file under `docs/tickets/` (other than checking off satisfied acceptance criteria in the active ticket file) is strictly prohibited. Ticket relocation, header finalization (`**Status:** completed`), gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
    - Do NOT run `git add` or `git commit`. Worker git staging and commits are strictly forbidden. Do not edit `docs/tickets/gotchas.md` directly.
 2. **Review Self-Checks & Severity-Gated Escalation**:
-   - Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and evaluate changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
+   - Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool (`read` / `read_file`, even if skill summaries are preloaded) and evaluate the uncommitted working-tree changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
    - Severity-Gated Escalation:
      - Low and Medium findings never interrupt the human; remediate in-pass or summarize findings in `self_review_notes`.
      - Critical and High findings must be remediated in-pass before signalling readiness.

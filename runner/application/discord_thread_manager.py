@@ -116,7 +116,7 @@ class DiscordThreadManager:
         try:
             await self._gateway.pin_message(thread_id, starter_msg_id)
         except DiscordGatewayError as exc:
-            _logger.warning("Failed to pin Status Card in %s: %s", thread_id, exc)
+            _logger.debug("Failed to pin Status Card in %s: %s", thread_id, exc)
 
         # 3. Start Live Digest
         await self._logger.start_live_digest(thread_id)

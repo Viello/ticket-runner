@@ -708,3 +708,18 @@ def test_prompt_builder_instance_forwards_token_budget(tmp_path: Path) -> None:
 
 
 
+def test_implement_ticket_runner_skill_mandates_explicit_file_read_for_code_review_and_agents_md() -> None:
+    """Execution skill must name '.agents/skills/code-review/SKILL.md' and 'AGENTS.md' for file-reading tool access."""
+    skill_path = Path(".agents/skills/implement-ticket-runner/SKILL.md")
+    content = skill_path.read_text(encoding="utf-8")
+
+    assert ".agents/skills/code-review/SKILL.md" in content
+    assert "AGENTS.md" in content
+    assert "Run `/code-review` before signalling readiness:" not in content
+
+
+def test_ready_signal_protocol_reminds_worker_to_read_code_review_skill_and_agents_md() -> None:
+    """Ready Signal Protocol section reminds the worker to have read code-review/SKILL.md and AGENTS.md."""
+    protocol = render_ready_signal_protocol("T008")
+    assert ".agents/skills/code-review/SKILL.md" in protocol
+    assert "AGENTS.md" in protocol

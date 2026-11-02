@@ -134,6 +134,11 @@ class TicketMarkdownSerializer:
     def _metadata_region_start(self, lines: list[str], path: Path) -> int:
         for index, line in enumerate(lines):
             if line.strip():
+                cursor = index + 1
+                while cursor < len(lines) and not lines[cursor].strip():
+                    cursor += 1
+                if cursor < len(lines) and not HEADING_PATTERN.match(lines[cursor]):
+                    return cursor
                 return index + 1
         raise TicketFormatError(f"Ticket file '{path}' has no header line")
 
