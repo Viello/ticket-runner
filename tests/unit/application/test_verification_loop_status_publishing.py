@@ -7,9 +7,7 @@ import pytest
 
 from runner.application.gatekeeper import (
     CommandOutcome,
-    GatekeeperCommandExecutor,
     VerificationLoop,
-    VerificationLoopResult,
     VerificationLoopStatus,
     VerificationReport,
 )
@@ -18,8 +16,6 @@ from runner.application.handoff_coordinator import (
     WorkerRunResult,
 )
 from runner.domain.config import VerificationConfig
-from runner.domain.failure_analyser import FailureDiagnostic, LABEL_HANG
-from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal, SignalStatus
 from runner.domain.status_event import RunState
 from runner.domain.ticket import Ticket, TicketStatus
@@ -219,3 +215,58 @@ async def test_status_publisher_circuit_breaker_tripped() -> None:
     cb_event = next(e for e in publisher.events if e.last_event == "CIRCUIT_BREAKER_TRIPPED")
     assert cb_event.ticket_id == ticket.id
     assert cb_event.attempt == 1
+
+
+@pytest.mark.anyio
+async def test_status_publisher_signal_format_retry_event() -> None:
+    from runner.domain.exceptions import SignalFormatError
+
+    ticket = _make_ticket()
+    cycle_runner = _StubCycleRunner([
+        WorkerRunResult(status=SingleCycleStatus.READY, occupancy=10000, session_id="ses_1"),
+        WorkerRunResult(status=SingleCycleStatus.READY, occupancy=10000, session_id="ses_1"),
+    ])
+
+    class _RaisingSignalRepo(_StubSignalRepo):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.calls = 0
+
+        def read_ready(self, ticket_id: str) -> ReadySignal | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise SignalFormatError("Ready signal is missing required field 'modified_files'")
+            return _make_ready_signal(ticket_id)
+
+    signal_repo = _RaisingSignalRepo()
+    executor = _StubExecutor([
+        VerificationReport(
+            passed=True,
+            results=(CommandOutcome(label="test", command="pytest", exit_code=0, timed_out=False, tail=""),),
+            diagnostics=(),
+            skipped_commands=(),
+        )
+    ])
+    publisher = FakeStatusPublisher()
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=cycle_runner,
+        signal_repository=signal_repo,  # type: ignore[arg-type]
+        executor=executor,  # type: ignore[arg-type]
+        intervention_gateway=FakeInterventionGateway(escalation_answers=[True]),
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+        status_publisher=publisher,
+    )
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.PASSED
+
+    retry_events = [e for e in publisher.events if e.last_event == "SIGNAL_FORMAT_RETRY"]
+    assert len(retry_events) == 1
+    event = retry_events[0]
+    assert event.ticket_id == ticket.id
+    assert event.run_state == RunState.VERIFYING
+    assert event.attempt == 1
+    assert "modified_files" in (event.last_step_summary or "")
+

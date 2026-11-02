@@ -20,6 +20,7 @@ LABEL_CASCADE: str = "CASCADE"
 LABEL_FLAKY: str = "FLAKY"
 LABEL_WORKER_STALL: str = "WORKER_STALL"
 LABEL_PROTOCOL: str = "PROTOCOL"
+LABEL_SIGNAL_FORMAT: str = "SIGNAL_FORMAT"
 
 FAILURE_LABELS: frozenset[str] = frozenset({
     LABEL_HANG,
@@ -28,6 +29,7 @@ FAILURE_LABELS: frozenset[str] = frozenset({
     LABEL_FLAKY,
     LABEL_WORKER_STALL,
     LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
 })
 
 SUGGESTED_ACTIONS: dict[str, str] = {
@@ -37,6 +39,7 @@ SUGGESTED_ACTIONS: dict[str, str] = {
     LABEL_FLAKY: "Inspect test failure trace or re-run test suite.",
     LABEL_WORKER_STALL: "Worker session stalled or timed out without emitting ready signal. Reset session, check model availability, or inspect prompt.",
     LABEL_PROTOCOL: "Fix the ticket or signal protocol violation reported above, then retry.",
+    LABEL_SIGNAL_FORMAT: "Fix the malformed signal format or schema violation reported above, then retry.",
 }
 
 ANSI_ESCAPE_RE: re.Pattern[str] = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")

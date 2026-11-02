@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
@@ -11,6 +10,7 @@ from runner.domain.failure_analyser import (
     LABEL_FLAKY,
     LABEL_HANG,
     LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
     SUGGESTED_ACTIONS,
     render_diagnostic_report,
 )
@@ -119,3 +119,22 @@ def test_protocol_diagnostic_renders_protocol_label() -> None:
     assert "protocol line 49" not in report
     assert "protocol line 50" in report
     assert "protocol line 149" in report
+
+
+def test_signal_format_diagnostic_renders_signal_format_label() -> None:
+    diag = FailureDiagnostic(
+        label=LABEL_SIGNAL_FORMAT,
+        root_tests=["gatekeeper"],
+        top_errors=[],
+        log_tail=["Ready signal JSON is malformed"],
+        isolation_output=None,
+        suggested_action=SUGGESTED_ACTIONS[LABEL_SIGNAL_FORMAT],
+    )
+    report = render_diagnostic_report(diag, token_count=10_000, token_budget=150000)
+
+    assert "⚠ SIGNAL_FORMAT detected — gatekeeper" in report
+    assert "Top errors: none" in report
+    assert SUGGESTED_ACTIONS[LABEL_SIGNAL_FORMAT] in report
+    assert "Token budget: 10,000 / 150,000" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+

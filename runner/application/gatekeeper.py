@@ -33,6 +33,7 @@ from runner.domain.exceptions import DiscordGatewayError, NonInteractiveError, S
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
     LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
     SUGGESTED_ACTIONS,
     analyse,
     render_diagnostic_report,
@@ -853,6 +854,17 @@ def verify_ticket_mutation(
     return True, ""
 
 
+def _extract_offending_field(diagnostics: str) -> str:
+    """Extract offending signal field name from diagnostics string for status summary."""
+    match = re.search(r"(?:missing required field|field)\s+['\"]([^'\"]+)['\"]", diagnostics)
+    if match:
+        return match.group(1)
+    match = re.search(r"['\"]([a-zA-Z_][a-zA-Z0-9_]*)['\"]", diagnostics)
+    if match:
+        return match.group(1)
+    return "payload"
+
+
 class VerificationLoop:
     """Supervises Worker execution cycles and Gatekeeper verification against an attempt budget (T031)."""
 
@@ -901,6 +913,7 @@ class VerificationLoop:
         self._attempts: int = 0
         self._pending_prompt: str | None = initial_prompt
         self._last_diagnostics: str = ""
+        self._format_retry_exempt_used: bool = False
         self._notify = notify
         self._accumulated_resources: set[str] = set()
         self._state_coordinator = state_coordinator
@@ -1541,7 +1554,8 @@ class VerificationLoop:
                     diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
                 escalation_result = await self._check_escalation(
                     diagnostics=diagnostics,
-                    diagnostic=self._protocol_diagnostic(diagnostics),
+                    diagnostic=self._protocol_diagnostic(diagnostics, label=LABEL_SIGNAL_FORMAT),
+                    self_correctable=True,
                 )
                 if escalation_result is not None:
                     return escalation_result
@@ -1593,7 +1607,8 @@ class VerificationLoop:
                     diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
                 escalation_result = await self._check_escalation(
                     diagnostics=diagnostics,
-                    diagnostic=self._protocol_diagnostic(diagnostics),
+                    diagnostic=self._protocol_diagnostic(diagnostics, label=LABEL_SIGNAL_FORMAT),
+                    self_correctable=True,
                 )
                 if escalation_result is not None:
                     return escalation_result
@@ -1628,15 +1643,17 @@ class VerificationLoop:
                 )
             continue
 
-    def _protocol_diagnostic(self, diagnostics: str) -> FailureDiagnostic:
+    def _protocol_diagnostic(
+        self, diagnostics: str, label: str = LABEL_PROTOCOL
+    ) -> FailureDiagnostic:
         """Build a diagnostic describing a Gatekeeper ticket/signal protocol failure."""
         return FailureDiagnostic(
-            label=LABEL_PROTOCOL,
+            label=label,
             root_tests=["gatekeeper"],
             top_errors=[],
             log_tail=[strip_ansi(line) for line in diagnostics.splitlines()[-100:]],
             isolation_output=None,
-            suggested_action=SUGGESTED_ACTIONS[LABEL_PROTOCOL],
+            suggested_action=SUGGESTED_ACTIONS.get(label, SUGGESTED_ACTIONS[LABEL_PROTOCOL]),
         )
 
     async def _check_escalation(
@@ -1644,8 +1661,9 @@ class VerificationLoop:
         diagnostics: str,
         outcome: CommandOutcome | None = None,
         diagnostic: FailureDiagnostic | None = None,
+        self_correctable: bool = False,
     ) -> VerificationLoopResult | None:
-        """Check escalation policy and prompt operator if threshold met (T066)."""
+        """Check escalation policy and prompt operator if threshold met (T066, T135)."""
         current_attempt = self._attempts + 1
         policy = self._verification_config.bug_escalation_at
 
@@ -1661,6 +1679,29 @@ class VerificationLoop:
             )
 
         if not should_escalate:
+            return None
+
+        # One-shot self-correctable retry exemption for signal format errors (T135)
+        if (
+            self_correctable
+            and not self._format_retry_exempt_used
+            and current_attempt < self._max_attempts
+        ):
+            self._format_retry_exempt_used = True
+            offending_field = _extract_offending_field(diagnostics)
+            summary = f"Signal format retry: {offending_field}"
+            logger.info(
+                "Signal format error on attempt %d for ticket '%s' is self-correctable; granting one-shot retry exemption: %s",
+                current_attempt,
+                self._ticket.id,
+                summary,
+            )
+            self._publish_status(
+                event_name="SIGNAL_FORMAT_RETRY",
+                run_state=RunState.VERIFYING,
+                attempt=current_attempt,
+                last_step_summary=summary,
+            )
             return None
 
         if diagnostic is None:
