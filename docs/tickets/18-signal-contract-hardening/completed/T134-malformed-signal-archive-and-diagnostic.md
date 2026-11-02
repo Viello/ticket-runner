@@ -1,6 +1,7 @@
 # T134: Malformed Signal Archive and Diagnostic on Every Escalation
 
-**Status:** ready-for-agent
+**Status:** done (reviewed; malformed signal archive paths, atomic preservation in Gatekeeper, and pre-prompt diagnostic report)
+**Completed:** 2026-11-02T18:15:00Z
 **Labels:** ready-for-agent, security
 **Security:** required (writes untrusted Signal payloads to filesystem paths derived from Ticket ids)
 **Parent:** docs/specs/18-signal-contract-hardening.md
@@ -20,9 +21,11 @@
 
 **Blocked by:** None (can start immediately; independent of the T130–T133 contract chain)
 
-- [ ] `RuntimePaths` exposes one stable archive path per Ticket and Signal kind under `logs_dir`; both paths validate the Ticket id and are contained within `logs_dir`.
-- [ ] Before a malformed ready or question Signal is consumed or cleaned, the Gatekeeper writes its raw payload atomically to the archive and appends the archive path to the diagnostics; archiving is skipped safely when runtime paths are unavailable and processing continues.
-- [ ] `_check_escalation` writes the diagnostic report before prompting the operator, so the report exists whether the operator answers yes or no; the duplicate write in the declined branch is removed.
-- [ ] Tests prove the archive exists with the raw payload after a malformed Signal, the diagnostics name the archive path, and the diagnostic report exists after both escalation answers; the malformed-question path archives too.
-- [ ] Security: an invalid Ticket id is rejected and no archive can be written outside `.agent/logs/`.
-- [ ] Targeted tests pass; Ruff and mypy are clean on every changed file; the security review is recorded.
+- [x] `RuntimePaths` exposes one stable archive path per Ticket and Signal kind under `logs_dir`; both paths validate the Ticket id and are contained within `logs_dir`.
+- [x] Before a malformed ready or question Signal is consumed or cleaned, the Gatekeeper writes its raw payload atomically to the archive and appends the archive path to the diagnostics; archiving is skipped safely when runtime paths are unavailable and processing continues.
+- [x] `_check_escalation` writes the diagnostic report before prompting the operator, so the report exists whether the operator answers yes or no; the duplicate write in the declined branch is removed.
+- [x] Tests prove the archive exists with the raw payload after a malformed Signal, the diagnostics name the archive path, and the diagnostic report exists after both escalation answers; the malformed-question path archives too.
+- [x] Security: an invalid Ticket id is rejected and no archive can be written outside `.agent/logs/`.
+- [x] Targeted tests pass; Ruff and mypy are clean on every changed file; the security review is recorded.
+
+**Verified:** 2026-11-02 — 51 targeted runtime paths, verification loop, and escalation tests; full suite 2,156 passed / 6 skipped; Ruff and mypy clean on changed files. Standards, Spec, and Security code reviews completed with zero findings above Low.

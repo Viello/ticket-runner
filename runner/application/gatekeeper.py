@@ -1073,6 +1073,45 @@ class VerificationLoop:
         """Last captured failure diagnostics."""
         return self._last_diagnostics
 
+    def _archive_malformed_signal(self, kind: str) -> Path | None:
+        """Atomically copy raw malformed signal payload to its archive path, if possible.
+
+        kind is 'ready' or 'question'.
+        Returns the archive Path if written, or None if skipped/unavailable.
+        """
+        if self._runtime_paths is None:
+            return None
+        try:
+            if kind == "ready":
+                source = self._runtime_paths.ready_signal_path(self._ticket.id)
+                dest = self._runtime_paths.malformed_ready_signal_archive_path(self._ticket.id)
+            elif kind == "question":
+                source = self._runtime_paths.question_path(self._ticket.id)
+                dest = self._runtime_paths.malformed_question_signal_archive_path(self._ticket.id)
+            else:
+                return None
+
+            if not source.is_file():
+                return None
+            raw_payload = source.read_text(encoding="utf-8")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(dest, raw_payload)
+            return dest
+        except Exception as exc:
+            logger.warning("Failed to archive malformed %s signal: %s", kind, exc)
+            return None
+
+    def _write_diagnostic_report(self, report_text: str) -> None:
+        """Write diagnostic report to .agent/logs/<ticket_id>_diagnostic.md."""
+        if self._runtime_paths is None:
+            return
+        try:
+            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
+            diag_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(diag_path, report_text)
+        except Exception as exc:
+            logger.warning("Failed to write diagnostic log: %s", exc)
+
     def _clean_question(self, ticket_id: str) -> None:
         """Clean any stale or malformed question signal for the ticket."""
         if hasattr(self._signal_repository, "clean_question"):
@@ -1495,8 +1534,11 @@ class VerificationLoop:
                 pending_question = self._signal_repository.read_pending_question(self._ticket.id)
             except SignalFormatError as exc:
                 # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
+                archive_path = self._archive_malformed_signal("question")
                 self._clean_question(self._ticket.id)
                 diagnostics = str(exc)
+                if archive_path is not None:
+                    diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
                 escalation_result = await self._check_escalation(
                     diagnostics=diagnostics,
                     diagnostic=self._protocol_diagnostic(diagnostics),
@@ -1544,8 +1586,11 @@ class VerificationLoop:
 
             # 4. Ready signal validation
             if ready_format_error is not None:
+                archive_path = self._archive_malformed_signal("ready")
                 self._signal_repository.consume_ready(self._ticket.id)
                 diagnostics = str(ready_format_error)
+                if archive_path is not None:
+                    diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
                 escalation_result = await self._check_escalation(
                     diagnostics=diagnostics,
                     diagnostic=self._protocol_diagnostic(diagnostics),
@@ -1644,6 +1689,9 @@ class VerificationLoop:
             last_step_summary=f"Escalation emitted: {diagnostic.label}",
         )
 
+        # Write diagnostic report before prompting operator (T134)
+        self._write_diagnostic_report(report_text)
+
         # Terminal prompt via InterventionGateway
         if self._state_coordinator is not None:
             self._state_coordinator.transition_to_waiting_for_user()
@@ -1668,14 +1716,6 @@ class VerificationLoop:
                 diagnostics=diagnostics,
                 resources_accessed=frozenset(self._accumulated_resources),
             )
-
-        # Operator declined or non-interactive: log diagnostic to .agent/logs/<ticket_id>_diagnostic.md
-        try:
-            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
-            diag_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(diag_path, report_text)
-        except Exception as exc:
-            logger.warning("Failed to write diagnostic log: %s", exc)
 
         return None
 
