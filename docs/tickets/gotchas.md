@@ -561,5 +561,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** When an AI coding worker emits a signal file with a minor schema typo or syntax defect (e.g. missing `modified_files` in a ready signal or missing `question` in a question signal), the Gatekeeper originally classified this as a run-ending `PROTOCOL` violation. If `bug_escalation_at: 1` was configured, the run immediately halted and escalated to the operator on attempt 1, treating a self-correctable format error with the same severity as a security boundary violation (like ticket deletion or unauthorized ticket mutation).
 - **Solution:** Introduce `LABEL_SIGNAL_FORMAT: str = "SIGNAL_FORMAT"` into `FAILURE_LABELS` and `SUGGESTED_ACTIONS` for diagnostic reporting. In `VerificationLoop._check_escalation`, accept `self_correctable: bool = False`. Pass `self_correctable=True` and `label=LABEL_SIGNAL_FORMAT` exclusively in the malformed ready and malformed question branches, while keeping `LABEL_PROTOCOL` and `self_correctable=False` for ticket deletion, unauthorized mutation, and missing signals. Track a shared per-ticket boolean `_format_retry_exempt_used`: when the policy would otherwise escalate now and remaining attempt budget exists, grant one automatic retry without prompting the operator, publish a `SIGNAL_FORMAT_RETRY` status event in the `VERIFYING` state naming the offending field, log the exemption, and feed the parser error back to resume the worker session. Preserve `_format_retry_exempt_used` across operator RETRY actions at the Circuit Breaker to prevent exemption re-arming.
 
+---
+
+## Signal Contract Drift Incident & Malformed Signal Hardening
+
+- **Problem:** The execution skill and parser disagreed on the Gotcha shape (the execution skill documented `{problem, solution}` objects while the parser strictly required strings), causing a completed, passing run to be rejected as a malformed signal on the final attempt. The malformed payload was immediately deleted without archiving, preventing post-mortem inspection, and the Gatekeeper escalated immediately without giving the worker a self-correction opportunity, wasting 146k tokens and 42 minutes of queue time.
+- **Solution:** Establish domain ownership of signal schemas with contract checks at Doctor pre-flight, skills publishing, and test suites. Replace skill-embedded schemas with pointers to prompt-rendered protocols. Before consuming or rejecting any malformed signal file, archive the raw payload atomically under `.agent/logs/`, persist diagnostic reports on all escalations, and grant a one-shot self-correctable retry exemption under `SIGNAL_FORMAT` so minor format typos cost a single verification attempt instead of aborting the run.
+
+
 
 

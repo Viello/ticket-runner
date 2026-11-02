@@ -43,6 +43,7 @@ Entry points: `ticket_runner.py` (CLI), `runner/` (engine), `tests/` (pytest), `
 - Worker implements via configured `worker.execution_skill` (defaulting to `.agents/skills/implement-ticket-runner/SKILL.md`); Worker may tick `- [ ]` to `- [x]` in `## Acceptance criteria`, while commits, ticket moves, and `docs/tickets/gotchas.md` edits stay with the Runner.
 - Pre-Dispatch HITL gate: Tickets with `**Mode:** HITL` (or `**Status:** blocked`) halt before worker dispatch, transitioning to `WAITING_FOR_USER` to prompt the operator via Discord or Terminal.
 - Worker ↔ Runner state is durable JSON: `.agent/signals/{ticket_id}_ready.json` and `.agent/questions/{ticket_id}.json`. State comes from those files, not model stdout.
+- Signal payload schemas live in the domain, the prompt renders them, and the execution skill defers to them.
 - Only the Gatekeeper passes a ticket by running configured test/build commands. Worker self-reports don't count; 3 failed attempts trip the Circuit Breaker.
 - Verification evidence stays out-of-band in `.agent/evidence/<ticket_id>/`; the Worker sees at most a 30-line / 1,000-character excerpt.
 - In human mode (`lifecycle.approval_mode: "human"`), green checks produce an Evidence Card and the commit waits for human approval.
