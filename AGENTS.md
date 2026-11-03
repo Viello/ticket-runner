@@ -47,7 +47,7 @@ Entry points: `ticket_runner.py` (CLI), `runner/` (engine), `tests/` (pytest), `
 - Only the Gatekeeper passes a ticket by running configured test/build commands. Worker self-reports don't count; 3 failed attempts trip the Circuit Breaker.
 - Verification evidence stays out-of-band in `.agent/evidence/<ticket_id>/`; the Worker sees at most a 30-line / 1,000-character excerpt.
 - In human mode (`lifecycle.approval_mode: "human"`), green checks produce an Evidence Card and the commit waits for human approval.
-- Before signaling ready, confirm the suite is not stuck per `/diagnosing-bugs` § Stuck-Test-Suite Protocol.
+- Before signaling ready, confirm the suite is not stuck per .agents/skills/diagnosing-bugs-ticket-runner/SKILL.md § Stuck-Test-Suite Protocol.
 - Token budget: warn 120k, handoff 135k, ceiling 150k. Handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff-ticket-runner/SKILL.md`.
 - Gatekeeper approval authors exactly one commit containing code, tests, gotchas, and the relocated ticket. Ticket frontmatter records `**Status:** completed` and `**Completed:** <timestamp>`; the commit SHA stays in git.
 - All automated work happens on `agent/ticket-runner`; commit locally. `.git/hooks/pre-push` blocks pushes (ADR 0005).
@@ -59,6 +59,7 @@ Entry points: `ticket_runner.py` (CLI), `runner/` (engine), `tests/` (pytest), `
 
 ## Working rules
 - Interactive only: ask the user in chat. Never emit `.agent/signals/*` or `.agent/questions/*`, and never wait for a Gatekeeper in this repo.
+- Dual-Track Skill Segregation Rule: interactive Human + AI skills (`to-tickets`, `implement`, `code-review`, `security-review`, `diagnosing-bugs`, `handoff`) never carry autonomous Runner instructions, uncommitted-diff overrides, Gatekeeper prohibitions, or `.agent/` Signal paths; autonomous Ticket Runner runs use dedicated `-ticket-runner` skills (`to-ticket-runner`, `implement-ticket-runner`, `code-review-ticket-runner`, `security-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`).
 - TDD at the agreed seam: write the failing test, run that file, implement, re-run. Don't batch untested changes.
 - Commit automatically once targeted tests and `/code-review` pass. Title: `<type>(<scope>): <Title>`; `<scope>` is the layer/subsystem (`packaging`, `domain`, `ports`, `adapters`, `git`, `doctor`, `queue`, `discord`, `ui`), never a ticket number. Body: blank line, then `- imperative change` bullets; no ticket numbers, no trailing periods.
 - Run `/security-review` before commit when the ticket says `Security: required` or the user asks.
