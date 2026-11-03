@@ -5,11 +5,17 @@ argument-hint: "<target_path> [focus of next session]"
 disable-model-invocation: true
 ---
 
+# Handoff
+
+Interactive Human + AI session handoff and context compaction.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `handoff-ticket-runner`. This skill (`handoff`) is strictly for interactive human sessions and synchronizes `STATUS.md`.
+
 Write a handoff document summarising the current conversation so a fresh agent can seamlessly continue the work.
 
 ## Destination
 
-If a target file path is provided in arguments (e.g. `.agent/checkpoints/T001/handoff.md`), save the handoff document directly to that path, creating parent directories if needed.
+If a target file path is provided in arguments (e.g. `docs/handoffs/session-handoff.md`), save the handoff document directly to that path, creating parent directories if needed.
 
 If no file path is specified, save to the OS temporary directory.
 
@@ -45,4 +51,3 @@ After writing the handoff document:
    Prompt the user:
    > "No `STATUS.md` found in this project. Would you like me to bootstrap one via `/status` to track your WIP and next steps for your return? [y/n]"
    If confirmed, invoke the `status` skill bootstrap sequence.
-

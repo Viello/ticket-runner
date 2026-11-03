@@ -22,11 +22,30 @@ STALE_QUESTION_BLOCK = """\
 ```"""
 
 
+AUTONOMOUS_SKILL_NAMES = [
+    "to-ticket-runner",
+    "implement-ticket-runner",
+    "code-review-ticket-runner",
+    "security-review-ticket-runner",
+    "diagnosing-bugs-ticket-runner",
+    "handoff-ticket-runner",
+]
+
+
 def test_canonical_execution_skill_passes_contract() -> None:
     assert LOCAL_EXECUTION_SKILL.is_file(), f"Missing {LOCAL_EXECUTION_SKILL}"
     content = LOCAL_EXECUTION_SKILL.read_text(encoding="utf-8")
     errors = validate_markdown_signal_examples(content)
     assert errors == [], f"Expected 0 signal contract errors in canonical skill, got: {errors}"
+
+
+def test_all_autonomous_skills_pass_signal_contract() -> None:
+    for skill_name in AUTONOMOUS_SKILL_NAMES:
+        skill_file = REPO_ROOT / ".agents" / "skills" / skill_name / "SKILL.md"
+        assert skill_file.is_file(), f"Missing {skill_file}"
+        content = skill_file.read_text(encoding="utf-8")
+        errors = validate_markdown_signal_examples(content)
+        assert errors == [], f"Expected 0 signal contract errors in {skill_name}, got: {errors}"
 
 
 def test_canonical_execution_skill_fails_if_stale_question_example_reintroduced() -> None:

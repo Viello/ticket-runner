@@ -5,6 +5,10 @@ description: Diagnosis loop for hard bugs and performance regressions. Use when 
 
 # Diagnosing Bugs
 
+Interactive Human + AI discipline for hard bugs and stuck test suites.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `diagnosing-bugs-ticket-runner`. This skill (`diagnosing-bugs`) is strictly for interactive human sessions and works collaboratively with the user.
+
 A discipline for hard bugs. Skip phases only when explicitly justified.
 
 When exploring the codebase, read `CONTEXT.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
@@ -193,5 +197,3 @@ If isolation did not produce a reproducible single-failure in one or two attempt
 4. **Ask**: should we apply the `/diagnosing-bugs` skill from Phase 1 against this specific isolated case? If yes, re-enter the skill with the isolated single-test loop as the feedback loop.
 
 Do not burn more retries on the full suite until the isolated case is understood. A fresh attempt against an undiagnosed suite will produce identical output and identical failure.
-
-If you are the orchestrator (Ticket Runner), emit a ready signal only after the isolated case passes or the escalation is documented. Never emit a ready signal while the test suite is still in a stuck state.

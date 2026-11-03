@@ -1,0 +1,5 @@
+interface:
+  display_name: "Code Review Ticket Runner"
+  short_description: "Autonomous code review for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false

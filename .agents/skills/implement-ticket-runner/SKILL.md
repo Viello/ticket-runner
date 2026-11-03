@@ -22,13 +22,13 @@ You are an autonomous Worker subprocess executing a single Ticket from `docs/tic
 - Run targeted tests for the modified files during development iterations.
 - Run the broader test suite once targeted tests pass.
 - Target platform is Windows/PowerShell: never pipe to Unix-only commands (`tail`, `grep`, `head`).
-- **Stuck-Test-Suite Protocol**: If tests hang or cascade, follow `/diagnosing-bugs` § Stuck-Test-Suite Protocol. Run the fastest single test file first, check for dangling subprocesses or locks, and isolate the failing seam before retrying.
+- **Stuck-Test-Suite Protocol**: If tests hang or cascade, read `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` using your file-reading tool (`read` / `read_file`) and follow the Stuck-Test-Suite Protocol. Run the fastest single test file first, check for dangling subprocesses or locks, and isolate the failing seam before retrying.
 
 ### 3. Review (Security When Required)
-Read `.agents/skills/code-review/SKILL.md` using your file-reading tool (`read` / `read_file`) before signalling readiness, then evaluate the uncommitted working-tree diff (`git diff HEAD` plus untracked files) across the active axes:
+Read `.agents/skills/code-review-ticket-runner/SKILL.md` using your file-reading tool (`read` / `read_file`) before signalling readiness, then evaluate the uncommitted working-tree diff (`git diff HEAD` plus untracked files) across the active axes:
 1. **Standards**: Code follows repository coding standards, architectural layers, and Fowler smell baselines.
 2. **Spec**: Code matches the ticket requirements in `## What to build` and `## Acceptance criteria` without scope creep.
-3. **Security (conditional)**: Run this axis only when the ticket's `Security:` field is `required`, `true`, or `yes`. Audit security by reading `.agents/skills/security-review/SKILL.md` with your file-reading tool. Do not add it merely because the change touches trust boundaries; those are review checkpoints once the axis is active (ADR 0013).
+3. **Security (conditional)**: Run this axis only when the ticket's `Security:` field is `required`, `true`, or `yes`. Audit security by reading `.agents/skills/security-review-ticket-runner/SKILL.md` with your file-reading tool. Do not add it merely because the change touches trust boundaries; those are review checkpoints once the axis is active (ADR 0013).
 
 ### 4. Severity-Gated Question Escalation
 Handle review findings by severity:
@@ -44,7 +44,7 @@ Handle review findings by severity:
 
 ### 6. Signal Readiness (Never Commit or Relocate)
 - When all targeted tests pass, broad tests pass, criteria are ticked, and reviews are clean:
-  - Confirm you have read `AGENTS.md`, `.agents/skills/code-review/SKILL.md`, and (when `Security:` is required) `.agents/skills/security-review/SKILL.md` using your file-reading tool (`read` / `read_file`) during this session.
+  - Confirm you have read `AGENTS.md`, `.agents/skills/code-review-ticket-runner/SKILL.md`, and (when `Security:` is required) `.agents/skills/security-review-ticket-runner/SKILL.md` using your file-reading tool (`read` / `read_file`) during this session.
   - You must **NEVER** run `git commit`.
   - You must **NEVER** relocate ticket files to `completed/`.
   - You must **NEVER** edit `docs/tickets/gotchas.md`.

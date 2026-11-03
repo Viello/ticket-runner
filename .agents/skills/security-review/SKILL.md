@@ -5,7 +5,11 @@ description: Reviews application code for security vulnerabilities, unsafe data 
 
 # Security Review
 
-Conduct a scoped security audit of pending changes before completing a task or emitting a ready signal.
+Interactive Human + AI security audit of pending changes across trust boundaries.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `security-review-ticket-runner`. This skill (`security-review`) is strictly for interactive human sessions and escalates blockers directly to the user in chat.
+
+Conduct a scoped security audit of pending changes before completing a task or committing.
 
 ## When to Invoke
 
@@ -36,7 +40,7 @@ When invoked, scope the review to the relevant areas:
 4. **Validate Input Handling**: Verify that untrusted inputs are validated, sanitized, and typed at the boundary before processing.
 5. **Check Security Regressions**: Ensure existing security controls, permission checks, or isolation layers are not weakened or bypassed.
 6. **Report Findings**: Document findings ordered by severity (Critical, High, Medium, Low) with location, exploit scenario, and remediation.
-7. **Remediate**: Apply concrete code fixes for security issues introduced by the current change. If remediation requires missing credentials or external architectural decisions, emit a question signal (`.agent/questions/{ticket_id}.json`) to escalate rather than guessing.
+7. **Remediate**: Apply concrete code fixes for security issues introduced by the current change. If remediation requires missing credentials or external architectural decisions, stop and ask the user in chat (or mark the ticket `**Status:** ready-for-human`) rather than guessing.
 8. **Re-verify**: Re-review modified code after applying fixes to confirm the vulnerability is closed without introducing regressions.
 
 ## Output Format

@@ -5,6 +5,10 @@ description: "Review the changes since a fixed point (commit, branch, tag, or me
 
 # Code Review
 
+Interactive Human + AI code review along Standards, Spec, and conditional Security axes.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `code-review-ticket-runner`. This skill (`code-review`) is strictly for interactive human sessions and reviews changes against a user-supplied fixed point.
+
 Review of the diff between `HEAD` and a fixed point the user supplies:
 
 - **Standards**: does the code conform to this repo's documented coding standards and Fowler smell baselines?
@@ -21,7 +25,7 @@ The issue tracker should have been provided to you. If `docs/agents/issue-tracke
 
 ### 1. Pin the fixed point
 
-Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). In autonomous Ticket Runner execution (where the Worker must not commit), review the uncommitted working-tree changes against `HEAD` (`git diff HEAD` plus untracked files from `git status --short`) without asking. In interactive sessions, if no fixed point was specified, ask for it.
+Whatever the user said is the fixed point (a commit SHA, branch name, tag, `main`, `HEAD~5`, etc.). If no fixed point was specified, ask the user for it.
 
 Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
@@ -101,9 +105,7 @@ Present the reports for the active axes under `## Standards`, `## Spec`, and, wh
 Handle findings with severity-gated escalation:
 - **`LOW` / `MEDIUM` findings**: Remediate in-pass or record in review notes. Never block or interrupt the human operator.
 - **`CRITICAL` / `HIGH` findings**: Require immediate remediation and re-testing in session.
-- **Un-remediable Blockers**: Only if remediation is genuinely blocked by a required human architectural decision, missing secrets, or policy choice:
-  - In **interactive mode**: set the ticket `**Status:** ready-for-human` and prompt the operator.
-  - In **autonomous mode** (Ticket Runner): emit `.agent/questions/<ticket_id>.json` so the Gatekeeper transitions to `WAITING_FOR_USER` and prompts the human via Discord/Terminal.
+- **Un-remediable Blockers**: Only if remediation is genuinely blocked by a required human architectural decision, missing secrets, or policy choice: set the ticket `**Status:** ready-for-human` (or inform the user in chat) and prompt the operator for guidance.
 
 End with a summary: total findings per axis, and the worst issue within each axis.
 

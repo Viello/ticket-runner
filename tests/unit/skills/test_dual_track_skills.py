@@ -1,4 +1,4 @@
-"""Unit tests validating dual-track skills catalog and local vendoring (T128)."""
+"""Unit tests validating dual-track skills catalog and local vendoring (T128, T137)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,21 @@ import re
 import yaml
 
 from runner.adapters.markdown.parser import TicketMarkdownParser
+from runner.domain.signal_contract import validate_markdown_signal_examples
 from runner.domain.ticket import TicketStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOCAL_SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
 UPSTREAM_SKILLS_DIR = Path(r"D:\Repos\agent-skills")
+
+DUAL_TRACK_PAIRS = [
+    ("to-tickets", "to-ticket-runner"),
+    ("implement", "implement-ticket-runner"),
+    ("code-review", "code-review-ticket-runner"),
+    ("security-review", "security-review-ticket-runner"),
+    ("diagnosing-bugs", "diagnosing-bugs-ticket-runner"),
+    ("handoff", "handoff-ticket-runner"),
+]
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -130,6 +140,9 @@ def test_implement_ticket_runner_skill_conforms_to_autonomous_spec() -> None:
         assert "```json" not in body
         assert "Ready Signal Protocol" in body
         assert "Question Signal Protocol" in body
+        assert "code-review-ticket-runner" in body
+        assert "security-review-ticket-runner" in body
+        assert "diagnosing-bugs-ticket-runner" in body
 
 
 def test_to_tickets_skill_conforms_to_specimen_b() -> None:
@@ -219,31 +232,145 @@ def test_smoke_fail_skill_uses_specimen_a_template() -> None:
         assert "- [ ]" in template_text
 
 
-def test_ask_matt_and_readme_document_both_tracks_and_50_skills() -> None:
+def test_ask_matt_and_readme_document_both_tracks_and_54_skills() -> None:
     # 1. Total skills count in upstream
     upstream_skills = [
         d for d in UPSTREAM_SKILLS_DIR.iterdir()
         if d.is_dir() and (d / "SKILL.md").is_file() and not d.name.startswith(".")
     ]
-    assert len(upstream_skills) == 50, f"Expected 50 skills in {UPSTREAM_SKILLS_DIR}, found {len(upstream_skills)}"
+    assert len(upstream_skills) == 54, f"Expected 54 skills in {UPSTREAM_SKILLS_DIR}, found {len(upstream_skills)}"
 
     # 2. README.md check
     readme_path = UPSTREAM_SKILLS_DIR / "README.md"
     assert readme_path.is_file()
     readme_content = readme_path.read_text(encoding="utf-8")
-    assert "**50**" in readme_content or "50 canonical skills" in readme_content
-    assert "to-ticket-runner" in readme_content
-    assert "implement-ticket-runner" in readme_content
+    assert "**54**" in readme_content or "54 canonical skills" in readme_content
+    for interactive_skill, autonomous_skill in DUAL_TRACK_PAIRS:
+        assert interactive_skill in readme_content
+        assert autonomous_skill in readme_content
 
     # 3. ask-matt checks
     for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
         ask_matt_md = base_dir / "ask-matt" / "SKILL.md"
         assert ask_matt_md.is_file()
         content = ask_matt_md.read_text(encoding="utf-8")
-        assert "to-ticket-runner" in content
-        assert "implement-ticket-runner" in content
-        assert "to-tickets" in content
-        assert "implement" in content
+        for interactive_skill, autonomous_skill in DUAL_TRACK_PAIRS:
+            assert interactive_skill in content, f"Missing {interactive_skill} in {ask_matt_md}"
+            assert autonomous_skill in content, f"Missing {autonomous_skill} in {ask_matt_md}"
+
+
+def test_six_pair_dual_track_segregation_contract() -> None:
+    for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
+        for interactive_skill, autonomous_skill in DUAL_TRACK_PAIRS:
+            # Check interactive skill
+            interactive_md = base_dir / interactive_skill / "SKILL.md"
+            assert interactive_md.is_file(), f"Missing interactive skill {interactive_md}"
+            interactive_content = interactive_md.read_text(encoding="utf-8")
+
+            assert ".agent/signals/" not in interactive_content, (
+                f"{interactive_skill} violates contract: contains .agent/signals/"
+            )
+            assert ".agent/questions/" not in interactive_content, (
+                f"{interactive_skill} violates contract: contains .agent/questions/"
+            )
+            assert ".agent/checkpoints/" not in interactive_content, (
+                f"{interactive_skill} violates contract: contains .agent/checkpoints/"
+            )
+            assert autonomous_skill in interactive_content, (
+                f"{interactive_skill} must contain a note pointing to {autonomous_skill}"
+            )
+
+            # Check autonomous counterpart
+            autonomous_dir = base_dir / autonomous_skill
+            autonomous_md = autonomous_dir / "SKILL.md"
+            autonomous_yaml = autonomous_dir / "agents" / "openai.yaml"
+
+            assert autonomous_md.is_file(), f"Missing autonomous skill {autonomous_md}"
+            assert autonomous_yaml.is_file(), f"Missing interface metadata {autonomous_yaml}"
+
+            content = autonomous_md.read_text(encoding="utf-8")
+            frontmatter, _ = _parse_frontmatter(content)
+            assert frontmatter.get("name") == autonomous_skill
+            assert frontmatter.get("disable-model-invocation") is True
+            assert len(frontmatter.get("description", "")) > 10
+
+            yaml_data = yaml.safe_load(autonomous_yaml.read_text(encoding="utf-8"))
+            assert "interface" in yaml_data
+            assert "display_name" in yaml_data["interface"]
+            assert yaml_data.get("policy", {}).get("allow_implicit_invocation") is False
+
+            # Signal contract check: no raw markdown signal example blocks
+            errors = validate_markdown_signal_examples(content)
+            assert errors == [], f"Signal contract error in {autonomous_skill}: {errors}"
+
+
+def test_code_review_ticket_runner_conforms_to_spec() -> None:
+    for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
+        skill_dir = base_dir / "code-review-ticket-runner"
+        skill_md = skill_dir / "SKILL.md"
+        assert skill_md.is_file()
+        content = skill_md.read_text(encoding="utf-8")
+
+        assert "git diff HEAD" in content
+        assert "git status --short" in content or "untracked files" in content
+        assert "Standards" in content
+        assert "Spec" in content
+        assert "Security" in content
+        assert "security-review-ticket-runner" in content
+        assert "`Security:` field is `required`, `true`, or `yes`" in content
+        assert ".agent/questions/" in content
+        assert "Question Signal Protocol" in content
+        assert "never run `git commit`" in content.lower() or "never commit" in content.lower()
+
+
+def test_security_review_ticket_runner_conforms_to_spec() -> None:
+    for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
+        skill_dir = base_dir / "security-review-ticket-runner"
+        skill_md = skill_dir / "SKILL.md"
+        assert skill_md.is_file()
+        content = skill_md.read_text(encoding="utf-8")
+
+        assert ".agent/questions/" in content
+        assert "Question Signal Protocol" in content
+        assert ".agent/signals/" not in content
+        assert "CRITICAL" in content and "HIGH" in content
+
+
+def test_diagnosing_bugs_ticket_runner_conforms_to_spec() -> None:
+    for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
+        skill_dir = base_dir / "diagnosing-bugs-ticket-runner"
+        skill_md = skill_dir / "SKILL.md"
+        assert skill_md.is_file()
+        content = skill_md.read_text(encoding="utf-8")
+
+        assert "Stuck-Test-Suite Protocol" in content
+        assert "HANG" in content
+        assert "CASCADE" in content
+        assert "ENV" in content
+        assert "FLAKY" in content
+        assert "Never emit a ready signal while the test suite is still in a stuck state" in content or (
+            "never emit" in content.lower() and "stuck state" in content.lower()
+        )
+        assert ".agent/questions/" in content
+        assert "Question Signal Protocol" in content
+
+
+def test_handoff_ticket_runner_conforms_to_spec() -> None:
+    for base_dir in [UPSTREAM_SKILLS_DIR, LOCAL_SKILLS_DIR]:
+        skill_dir = base_dir / "handoff-ticket-runner"
+        skill_md = skill_dir / "SKILL.md"
+        assert skill_md.is_file()
+        content = skill_md.read_text(encoding="utf-8")
+
+        assert ".agent/checkpoints/" in content
+        assert "Active Context" in content
+        assert "Completed Work" in content
+        assert "Pending State" in content
+        assert "Suggested Skills" in content or "Suggested `-ticket-runner` Skills" in content
+        assert "Immediate Next Steps" in content
+        assert "never run `git commit`" in content.lower() or "never commit" in content.lower()
+        assert "[y/n]" not in content
+        assert "never modify `status.md`" in content.lower() or "never edit `status.md`" in content.lower() or "without touching `status.md`" in content.lower()
 
 
 def test_publish_agent_skills_script_verifies_dual_tracks() -> None:

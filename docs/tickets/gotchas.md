@@ -581,6 +581,13 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
   2. In `.agents/skills/implement-ticket-runner/SKILL.md` (Sections 1, 3, and 6), `PromptBuilder.build_prompt`, and `render_ready_signal_protocol`, explicitly instruct the Worker to invoke its file-reading tool (`read` / `read_file`) on `AGENTS.md` and `.agents/skills/code-review/SKILL.md` before emitting `.agent/signals/<ticket_id>_ready.json`, even if their contents are preloaded in system rules. Update `.agents/skills/code-review/SKILL.md` Section 1 so autonomous Ticket Runner runs review uncommitted working-tree changes (`git diff HEAD` plus untracked files) without prompting the human.
   3. In `TicketMarkdownSerializer._metadata_region_start`, advance `idx` past blank lines after the `# T<NNN>` title line to match `TicketMarkdownParser._parse_metadata`.
 
+---
+
+## Dual-Track Skill Segregation & Headless Context Handoff
+
+- **Problem:** Sharing workflow skills (`code-review`, `security-review`, `diagnosing-bugs`, `handoff`) across interactive pair programming and headless Ticket Runner execution caused severe cross-contamination. Headless Worker rules (uncommitted diffs against HEAD without prompting, `.agent/questions/` signals, withholding ready signals on stuck suites) bled into interactive chat, while interactive instructions (`[y/n]` prompts to bootstrap `STATUS.md`, asking the user for a git comparison ref, setting frontmatter to `ready-for-human`) disrupted unattended autonomous runs.
+- **Solution:** Strictly segregate interactive and autonomous skills into dedicated pairs (`<skill>` vs `<skill>-ticket-runner`). Interactive skills contain zero references to `.agent/` runtime paths and escalate directly to the user in chat. Autonomous skills (`-ticket-runner`) carry `disable-model-invocation: true` and `agents/openai.yaml`, audit uncommitted working-tree changes without asking for refs, route blockers through `.agent/questions/<ticket_id>.json` to halt at `WAITING_FOR_USER`, and write handoff checkpoints directly to `.agent/checkpoints/<ticket_id>/handoff.md` without modifying `STATUS.md` or prompting `[y/n]`.
+
 
 
 

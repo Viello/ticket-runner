@@ -1,0 +1,5 @@
+interface:
+  display_name: "Diagnosing Bugs Ticket Runner"
+  short_description: "Autonomous bug and stuck-suite diagnosis for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false
