@@ -43,6 +43,7 @@ ENV_BULLETS_KEEP_PREFIXES: tuple[str, ...] = (
 )
 
 AGENT_BULLETS_KEEP_PREFIXES_DEFAULT: tuple[str, ...] = (
+    "`.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing",
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
     "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
@@ -50,9 +51,11 @@ AGENT_BULLETS_KEEP_PREFIXES_DEFAULT: tuple[str, ...] = (
 
 AGENT_BULLETS_KEEP_PREFIXES_ALL: tuple[str, ...] = (
     "`.agents/skills/` vendors the user's global skill catalog",
+    "`.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing",
     "`.agents/skills/handoff/SKILL.md` is load-bearing",
     "`.agents/skills/implement-ticket-runner/SKILL.md` defines",
     "`.agents/skills/implement/SKILL.md` defines",
+    "`.agents/skills/security-review-ticket-runner/SKILL.md` defines",
     "`.agents/skills/security-review/SKILL.md` defines",
 )
 
@@ -60,9 +63,11 @@ SkillsMode = Literal["default", "all"]
 
 CURATED_SKILLS: tuple[str, ...] = (
     "implement-ticket-runner",
-    "code-review",
-    "diagnosing-bugs",
-    "handoff",
+    "code-review-ticket-runner",
+    "diagnosing-bugs-ticket-runner",
+    "handoff-ticket-runner",
+    "security-review-ticket-runner",
+    "to-ticket-runner",
 )
 
 PUBLIC_SKILLS_REPO_URL: str = "https://github.com/Viello/agent-skills"
@@ -391,7 +396,7 @@ FALLBACK_CURATED_SUBSET: str = (
     "## Environment\n"
     "- Target platform is Windows/PowerShell.\n\n"
     "## Agent skills\n"
-    "- `.agents/skills/handoff/SKILL.md` is load-bearing.\n"
+    "- `.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing.\n"
     "- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline."
 )
 
@@ -405,7 +410,7 @@ Target Project operating rules for Ticket Runner autonomous queue execution.
 - Worker executes tickets via configured worker.execution_skill, performing pre-signal reviews, but never commits directly.
 - Worker<->Runner messages are durable JSON files (.agent/signals/{ticket_id}_ready.json, .agent/questions/{ticket_id}.json) - never parse model stdout for state.
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker.
-- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes .agent/checkpoints/{ticket_id}/handoff.md.
+- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes .agent/checkpoints/{ticket_id}/handoff.md via .agents/skills/handoff-ticket-runner/SKILL.md.
 - Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (Status: completed).
 - .agent/ is untracked runtime state; git-ignore it when implementing.
 - Human verification happens after green checks via a /live-qa session the human runs; the Worker drafts no scenarios and self-reports no manual verification.
@@ -415,9 +420,9 @@ Target Project operating rules for Ticket Runner autonomous queue execution.
 
 ## Agent skills
 - `.agents/skills/` vendors the user's global skill catalog; handoff, claude-handoff, to-tickets have project-specific edits.
-- `.agents/skills/handoff/SKILL.md` is load-bearing.
+- `.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing.
 - `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.
-- `.agents/skills/security-review/SKILL.md` defines the ticket-driven security review discipline.
+- `.agents/skills/security-review-ticket-runner/SKILL.md` defines the ticket-driven security review discipline.
 """
 
 
@@ -748,7 +753,7 @@ def scaffold(
     print(f"[scaffold] Verification: python ticket_runner.py --project-dir {target} doctor")
     if skills_mode == "all":
         if fallback:
-            print("[scaffold] all mode: 4 skills shipped (fallback to curated default)")
+            print(f"[scaffold] all mode: {len(CURATED_SKILLS)} skills shipped (fallback to curated default)")
         else:
             print(f"[scaffold] all mode: {len(skills_data)} skills shipped from {source_label}")
 
@@ -786,9 +791,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=("default", "all"),
         default=None,
         help=(
-            "Skill catalog mode: 'default' ships the 4 curated skills "
-            "(implement, code-review, diagnosing-bugs, handoff); 'all' ships "
-            "the full catalog from Viello/agent-skills. Overrides ticket-runner.yaml "
+            "Skill catalog mode: 'default' ships the 6 curated skills "
+            "(implement-ticket-runner, code-review-ticket-runner, diagnosing-bugs-ticket-runner, "
+            "handoff-ticket-runner, security-review-ticket-runner, to-ticket-runner); "
+            "'all' ships the full catalog from Viello/agent-skills. Overrides ticket-runner.yaml "
             "sandbox.skills; falls back to it, then to 'default'."
         ),
     )

@@ -343,3 +343,49 @@ def test_sync_agents_md_sanitizes_upstream_adrs(
     assert code_write == 0
     assert "(ADR" not in sandbox_file.read_text(encoding="utf-8")
 
+
+def test_sync_agents_md_preserves_ticket_runner_bullets(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    upstream = tmp_path / "upstream_AGENTS.md"
+    content = """# AGENTS.md
+
+## Invariants
+- Invariant 1.
+- Invariant 2.
+
+## Environment
+- Target platform is Windows/PowerShell.
+
+## Agent skills
+- `.agents/skills/` vendors the user's global skill catalog.
+- `.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing.
+- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/implement/SKILL.md` defines the interactive Human+AI worker implementation discipline.
+- `.agents/skills/security-review-ticket-runner/SKILL.md` defines the ticket-driven security review discipline.
+"""
+    upstream.write_text(content, encoding="utf-8")
+
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    sandbox_file = sandbox_dir / "AGENTS.md"
+
+    curated_content = (
+        "## Invariants\n"
+        "- Invariant 1.\n"
+        "- Invariant 2.\n\n"
+        "## Environment\n"
+        "- Target platform is Windows/PowerShell.\n\n"
+        "## Agent skills\n"
+        "- `.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing.\n"
+        "- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.\n"
+        "- `.agents/skills/implement/SKILL.md` defines the interactive Human+AI worker implementation discipline."
+    )
+    formatted = format_sandbox_agents_md(DEFAULT_PREAMBLE, "2026-10-01", curated_content)
+    sandbox_file.write_text(formatted, encoding="utf-8")
+
+    code = main([
+        "--target-dir", str(sandbox_dir),
+        "--upstream", str(upstream),
+    ])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "in sync" in captured.out.lower()

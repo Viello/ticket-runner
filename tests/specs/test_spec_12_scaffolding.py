@@ -62,7 +62,7 @@ def _seed_required_workspace_files(project_dir: Path) -> None:
     (ticket_dir / "T001-test.md").write_text(ticket_content, encoding="utf-8")
 
     skills_dir = project_dir / ".agents" / "skills"
-    for skill_name in ("implement", "implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for skill_name in ("implement", "implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         sdir = skills_dir / skill_name
         sdir.mkdir(parents=True, exist_ok=True)
         (sdir / "SKILL.md").write_text(f"# {skill_name}\nInstructions\n", encoding="utf-8")

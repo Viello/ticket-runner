@@ -232,3 +232,85 @@ def test_publish_skills_dry_run_reaches_staging_on_valid_catalog(tmp_path: pathl
     assert result["dry_run"] is True
     assert result["skills_count"] == 1
     assert "valid-skill" in result["staged_skills"]
+
+
+def _make_tarball_bytes(names: list[str]) -> bytes:
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name in names:
+            ti = tarfile.TarInfo(name=name)
+            data = b"# skill"
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+    return buf.getvalue()
+
+
+class _FakeResponse:
+    def __init__(self, data: bytes, status: int = 200) -> None:
+        self._data = data
+        self.status = status
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
+def test_verify_tarball_endpoint_passes_when_all_skills_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify verify_tarball_endpoint passes when all 6 -ticket-runner skills and implement exist."""
+    import urllib.request
+    from scripts.publish_agent_skills import verify_tarball_endpoint
+
+    all_names = [
+        "Viello-agent-skills-12345/implement/SKILL.md",
+        "Viello-agent-skills-12345/to-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/implement-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/code-review-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/security-review-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/diagnosing-bugs-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/handoff-ticket-runner/SKILL.md",
+    ]
+    tar_bytes = _make_tarball_bytes(all_names)
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req: _FakeResponse(tar_bytes))
+    count = verify_tarball_endpoint(repo="Viello/agent-skills", branch="main")
+    assert count == 7
+
+
+@pytest.mark.parametrize("missing_skill", [
+    "to-ticket-runner",
+    "implement-ticket-runner",
+    "code-review-ticket-runner",
+    "security-review-ticket-runner",
+    "diagnosing-bugs-ticket-runner",
+    "handoff-ticket-runner",
+])
+def test_verify_tarball_endpoint_fails_when_any_ticket_runner_skill_missing(
+    monkeypatch: pytest.MonkeyPatch, missing_skill: str
+) -> None:
+    """Verify verify_tarball_endpoint raises AssertionError when any -ticket-runner skill is missing."""
+    import urllib.request
+    from scripts.publish_agent_skills import verify_tarball_endpoint
+
+    all_names = [
+        "Viello-agent-skills-12345/implement/SKILL.md",
+        "Viello-agent-skills-12345/to-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/implement-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/code-review-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/security-review-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/diagnosing-bugs-ticket-runner/SKILL.md",
+        "Viello-agent-skills-12345/handoff-ticket-runner/SKILL.md",
+    ]
+    remaining = [n for n in all_names if f"/{missing_skill}/" not in n]
+    tar_bytes = _make_tarball_bytes(remaining)
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req: _FakeResponse(tar_bytes))
+    with pytest.raises(AssertionError, match=f"'{missing_skill}/SKILL.md'"):
+        verify_tarball_endpoint(repo="Viello/agent-skills", branch="main")

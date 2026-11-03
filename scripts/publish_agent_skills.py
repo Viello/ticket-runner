@@ -341,12 +341,17 @@ def verify_tarball_endpoint(repo: str, branch: str = "main") -> int:
     assert any("implement/SKILL.md" in n for n in names), (
         "Tarball does not contain canonical skill 'implement/SKILL.md'"
     )
-    assert any("implement-ticket-runner/SKILL.md" in n for n in names), (
-        "Tarball does not contain canonical skill 'implement-ticket-runner/SKILL.md'"
-    )
-    assert any("to-ticket-runner/SKILL.md" in n for n in names), (
-        "Tarball does not contain canonical skill 'to-ticket-runner/SKILL.md'"
-    )
+    for target in (
+        "to-ticket-runner/SKILL.md",
+        "implement-ticket-runner/SKILL.md",
+        "code-review-ticket-runner/SKILL.md",
+        "security-review-ticket-runner/SKILL.md",
+        "diagnosing-bugs-ticket-runner/SKILL.md",
+        "handoff-ticket-runner/SKILL.md",
+    ):
+        assert any(target in n for n in names), (
+            f"Tarball does not contain canonical skill '{target}'"
+        )
     return len(names)
 
 
