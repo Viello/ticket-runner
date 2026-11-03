@@ -1,6 +1,8 @@
 # T139: Worker Telemetry Parity and Gatekeeper / TicketProcessor `-ticket-runner` Auditing
 
-**Status:** ready-for-agent
+**Status:** completed
+**Completed:** 2026-11-03T18:18:00+00:00
+**Status note:** reviewed; worker telemetry parity and gatekeeper/ticket_processor auditing verified
 **Labels:** ready-for-agent
 **Parent:** docs/specs/19-dual-track-skill-segregation.md
 
@@ -20,8 +22,10 @@
 
 **Blocked by:** T137 (Standalone `-ticket-runner` Skills, Cleaned Interactive Skills, and Segregation Contract)
 
-- [ ] `VerificationLoop._check_ready_warnings` in `runner/application/gatekeeper.py` and `GatekeeperTicketProcessor.evaluate_ready_warnings` in `runner/application/ticket_processor.py` check `resources_accessed` for `"code-review-ticket-runner"` and (when `ticket.security_required` is true) `"security-review-ticket-runner"`, emitting soft warnings naming `.agents/skills/code-review-ticket-runner/SKILL.md` and `.agents/skills/security-review-ticket-runner/SKILL.md` when unread and emitting no skill warnings when read.
-- [ ] `build_verification_failure_prompt` in `runner/application/gatekeeper.py` prepends the directive to read and follow `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` when `attempt >= 2`.
-- [ ] Unit tests for both `OpenCodeWorker` and `AntigravityWorker` prove that file-read tool events targeting `.agents/skills/code-review-ticket-runner/SKILL.md`, `.agents/skills/security-review-ticket-runner/SKILL.md`, `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`, and `.agents/skills/handoff-ticket-runner/SKILL.md` decode the exact `<name>-ticket-runner` identifier into `resources_accessed`.
-- [ ] Targeted adapter and application tests pass; Ruff and mypy are clean on every changed file.
+- [x] `VerificationLoop._check_ready_warnings` in `runner/application/gatekeeper.py` and `GatekeeperTicketProcessor.evaluate_ready_warnings` in `runner/application/ticket_processor.py` check `resources_accessed` for `"code-review-ticket-runner"` and (when `ticket.security_required` is true) `"security-review-ticket-runner"`, emitting soft warnings naming `.agents/skills/code-review-ticket-runner/SKILL.md` and `.agents/skills/security-review-ticket-runner/SKILL.md` when unread and emitting no skill warnings when read.
+- [x] `build_verification_failure_prompt` in `runner/application/gatekeeper.py` prepends the directive to read and follow `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` when `attempt >= 2`.
+- [x] Unit tests for both `OpenCodeWorker` and `AntigravityWorker` prove that file-read tool events targeting `.agents/skills/code-review-ticket-runner/SKILL.md`, `.agents/skills/security-review-ticket-runner/SKILL.md`, `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`, and `.agents/skills/handoff-ticket-runner/SKILL.md` decode the exact `<name>-ticket-runner` identifier into `resources_accessed`.
+- [x] Targeted adapter and application tests pass; Ruff and mypy are clean on every changed file.
+
+**Verified:** 2026-11-03 — 170 targeted application and adapter tests passed, 2,190 full suite tests passed, ruff and mypy clean across all modified files.
 

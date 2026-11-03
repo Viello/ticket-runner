@@ -724,3 +724,121 @@ def test_gatekeeper_windows_shell_quoting_with_real_subprocess_runner() -> None:
     assert report.results[0].exit_code == 0
     assert report.results[0].timed_out is False
     assert "validated 0 openai.yaml files" in report.results[0].tail
+
+
+# --- Ready Warnings and Verification Failure Prompt Auditing (T139) ---
+
+
+def test_verification_loop_check_ready_warnings_ticket_runner_skills() -> None:
+    """_check_ready_warnings emits soft warnings naming -ticket-runner review skills."""
+    from unittest.mock import MagicMock
+    from runner.application.gatekeeper import VerificationLoop
+    from runner.domain.ticket import Ticket, TicketStatus
+
+    ticket_no_sec = Ticket(
+        id="T139",
+        title="Telemetry Parity",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/19-dual-track-skill-segregation.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path("docs/tickets/19/T139.md"),
+        security_required=False,
+    )
+    notices: list[str] = []
+    loop = VerificationLoop(
+        ticket=ticket_no_sec,
+        cycle_runner=MagicMock(),
+        signal_repository=MagicMock(),
+        executor=MagicMock(),
+        intervention_gateway=MagicMock(),
+        notify=notices.append,
+    )
+
+    # Empty accumulated resources -> emits warnings for code-review-ticket-runner and AGENTS.md
+    warnings = loop._check_ready_warnings()
+    expected_cr = (
+        "[T139] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. "
+        "Proceeding to verification."
+    )
+    expected_agents = (
+        "[T139] Warning: Ready signal emitted without reading 'AGENTS.md'. "
+        "Proceeding to verification."
+    )
+    assert expected_cr in warnings
+    assert expected_agents in warnings
+    assert not any("security-review" in w for w in warnings)
+    assert notices == warnings
+
+    # Now with security_required=True
+    ticket_sec = Ticket(
+        id="T139",
+        title="Telemetry Parity",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/19-dual-track-skill-segregation.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path("docs/tickets/19/T139.md"),
+        security_required=True,
+    )
+    notices.clear()
+    loop_sec = VerificationLoop(
+        ticket=ticket_sec,
+        cycle_runner=MagicMock(),
+        signal_repository=MagicMock(),
+        executor=MagicMock(),
+        intervention_gateway=MagicMock(),
+        notify=notices.append,
+    )
+    warnings_sec = loop_sec._check_ready_warnings()
+    expected_sec = (
+        "[T139] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. "
+        "Proceeding to verification."
+    )
+    assert expected_sec in warnings_sec
+    assert expected_cr in warnings_sec
+    assert expected_agents in warnings_sec
+
+    # When all -ticket-runner skills and AGENTS.md are accessed -> no warnings
+    loop_sec._accumulated_resources.update({
+        "code-review-ticket-runner",
+        "security-review-ticket-runner",
+        "AGENTS.md",
+    })
+    notices.clear()
+    assert loop_sec._check_ready_warnings() == []
+    assert notices == []
+
+
+def test_build_verification_failure_prompt_diagnosing_bugs_ticket_runner() -> None:
+    """build_verification_failure_prompt directs attempt >= 2 to diagnosing-bugs-ticket-runner."""
+    from runner.application.gatekeeper import build_verification_failure_prompt
+    from runner.domain.ticket import Ticket, TicketStatus
+
+    ticket = Ticket(
+        id="T139",
+        title="Telemetry Parity",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/19-dual-track-skill-segregation.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=Path("docs/tickets/19/T139.md"),
+    )
+
+    # Attempt 1 -> no directive
+    prompt_1 = build_verification_failure_prompt(ticket, "AssertionError: failed", attempt=1)
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" not in prompt_1
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_1
+
+    # Attempt 2 -> prepends diagnosing-bugs-ticket-runner directive
+    prompt_2 = build_verification_failure_prompt(ticket, "AssertionError: failed", attempt=2)
+    expected_directive_2 = (
+        "Gatekeeper verification failed (attempt 2). "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
+        "using your file reading tool to diagnose and isolate the root cause.\n\n"
+    )
+    assert prompt_2.startswith(expected_directive_2)
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_2

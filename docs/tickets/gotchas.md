@@ -588,6 +588,17 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Sharing workflow skills (`code-review`, `security-review`, `diagnosing-bugs`, `handoff`) across interactive pair programming and headless Ticket Runner execution caused severe cross-contamination. Headless Worker rules (uncommitted diffs against HEAD without prompting, `.agent/questions/` signals, withholding ready signals on stuck suites) bled into interactive chat, while interactive instructions (`[y/n]` prompts to bootstrap `STATUS.md`, asking the user for a git comparison ref, setting frontmatter to `ready-for-human`) disrupted unattended autonomous runs.
 - **Solution:** Strictly segregate interactive and autonomous skills into dedicated pairs (`<skill>` vs `<skill>-ticket-runner`). Interactive skills contain zero references to `.agent/` runtime paths and escalate directly to the user in chat. Autonomous skills (`-ticket-runner`) carry `disable-model-invocation: true` and `agents/openai.yaml`, audit uncommitted working-tree changes without asking for refs, route blockers through `.agent/questions/<ticket_id>.json` to halt at `WAITING_FOR_USER`, and write handoff checkpoints directly to `.agent/checkpoints/<ticket_id>/handoff.md` without modifying `STATUS.md` or prompting `[y/n]`.
 
+---
+
+## Python 3.11 F-String Escapes & Gatekeeper `-ticket-runner` Telemetry Auditing
+
+- **Problem:**
+  1. Python 3.11 forbids escape sequences (such as `\`) directly inside f-string expression interpolations `{...}`, raising an `invalid-syntax` error when constructing Windows file paths via inline `.replace("/", "\\")`.
+  2. Following dual-track skill segregation, if the Gatekeeper and TicketProcessor audit `resources_accessed` for legacy skill names (`code-review`, `security-review`) or emit directives pointing to interactive skills (`diagnosing-bugs`), autonomous Workers that faithfully read the new `-ticket-runner` skills receive false soft warnings or are directed to interactive skills containing human prompts. Furthermore, test doubles omitting `-ticket-runner` resource names trigger spurious warning logs during suite runs.
+- **Solution:**
+  1. Always perform path separator normalization (`.replace("/", "\\")`) in an intermediate local variable before interpolating into Windows path f-strings.
+  2. Update `VerificationLoop._check_ready_warnings`, `GatekeeperTicketProcessor.evaluate_ready_warnings`, and `build_verification_failure_prompt` to check `resources_accessed` for `"code-review-ticket-runner"` and `"security-review-ticket-runner"`, emit warnings naming `.agents/skills/code-review-ticket-runner/SKILL.md` and `.agents/skills/security-review-ticket-runner/SKILL.md`, and direct attempt $\ge 2$ diagnostics prompts to `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`. Ensure worker adapter tests for `OpenCodeWorker` and `AntigravityWorker` verify telemetry decoding parity across all `-ticket-runner` skills.
+
 
 
 

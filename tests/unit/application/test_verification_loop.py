@@ -168,7 +168,7 @@ def test_absent_manual_verification_backward_compatible():
         status=SingleCycleStatus.READY,
         occupancy=1000,
         session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+        resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md", "security-review-ticket-runner"}),
     )
     notified: list[str] = []
 
@@ -205,7 +205,7 @@ def test_legacy_manual_verification_produces_no_terminal_output_and_no_warnings(
         status=SingleCycleStatus.READY,
         occupancy=1000,
         session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+        resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md", "security-review-ticket-runner"}),
     )
     notified: list[str] = []
 
@@ -243,7 +243,7 @@ def test_legacy_manual_verification_does_not_inject_commit_body(sample_scenarios
         status=SingleCycleStatus.READY,
         occupancy=1000,
         session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+        resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md", "security-review-ticket-runner"}),
     )
     mock_git = MagicMock()
     mock_git.commit_ticket = AsyncMock(return_value="commit_sha_123")
@@ -335,7 +335,7 @@ def test_no_smoke_log_appended_after_pass(
         status=SingleCycleStatus.READY,
         occupancy=1000,
         session_id="ses_123",
-        resources_accessed=frozenset({"code-review", "AGENTS.md", "security-review"}),
+        resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md", "security-review-ticket-runner"}),
     )
     runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
 
@@ -495,7 +495,7 @@ def test_dispatch_baseline_permits_ticking_acceptance_criteria(tmp_path: Path) -
             status=SingleCycleStatus.READY,
             occupancy=500,
             session_id="ses_1",
-            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
         )
 
     loop = VerificationLoop(
@@ -546,7 +546,7 @@ def test_dispatch_baseline_rejects_header_mutation(tmp_path: Path) -> None:
             status=SingleCycleStatus.READY,
             occupancy=500,
             session_id="ses_1",
-            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
         )
 
     signal_repo = _StubSignalRepo(ready)
@@ -598,7 +598,7 @@ def test_dispatch_baseline_rejects_modifying_criterion_wording(tmp_path: Path) -
             status=SingleCycleStatus.READY,
             occupancy=500,
             session_id="ses_1",
-            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
         )
 
     loop = VerificationLoop(
@@ -637,7 +637,7 @@ def test_dispatch_baseline_rejects_ticket_deletion(tmp_path: Path) -> None:
             status=SingleCycleStatus.READY,
             occupancy=500,
             session_id="ses_1",
-            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
         )
 
     loop = VerificationLoop(
@@ -667,7 +667,7 @@ def test_evidence_card_populated_with_unticked_criteria(tmp_path: Path) -> None:
             status=SingleCycleStatus.READY,
             occupancy=500,
             session_id="ses_1",
-            resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+            resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
         )
 
     fake_approval = FakeApprovalGateway(decisions=[ApprovalDecision.APPROVE])
