@@ -1,6 +1,8 @@
 # T140: Doctor Pre-Flight Skills Check, Sandbox Scaffolder, and Catalog Publisher Alignment
 
-**Status:** ready-for-agent
+**Status:** completed
+**Completed:** 2026-11-03T10:35:00Z
+**Status note:** reviewed; doctor, scaffolder, agents.md prefixes, and tarball verification aligned to -ticket-runner suite
 **Labels:** ready-for-agent
 **Parent:** docs/specs/19-dual-track-skill-segregation.md
 
@@ -22,9 +24,8 @@
 
 **Blocked by:** T137 (Standalone `-ticket-runner` Skills, Cleaned Interactive Skills, and Segregation Contract)
 
-- [ ] `REQUIRED_SKILL_PATHS` in `runner/application/doctor.py` requires `.agents/skills/code-review-ticket-runner/SKILL.md`, `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`, `.agents/skills/handoff-ticket-runner/SKILL.md`, and `.agents/skills/security-review-ticket-runner/SKILL.md` alongside the configured `execution_skill` (`.agents/skills/implement-ticket-runner/SKILL.md`).
-- [ ] `CURATED_SKILLS` in `runner/tools/scaffold_sandbox.py` provisions the `-ticket-runner` autonomous skill suite (`implement-ticket-runner`, `code-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`, `security-review-ticket-runner`, `to-ticket-runner`) so a freshly scaffolded sandbox passes `Doctor.check_skills` immediately.
-- [ ] `AGENTS.md` (`## Invariants` and `## Agent skills`) and `AGENT_BULLETS_KEEP_PREFIXES_DEFAULT`, `AGENT_BULLETS_KEEP_PREFIXES_ALL`, `FALLBACK_CURATED_SUBSET`, and `DEFAULT_UPSTREAM_AGENTS_MD` in `runner/tools/scaffold_sandbox.py` are updated in lockstep so `.agents/skills/handoff-ticket-runner/SKILL.md` and the `-ticket-runner` skill bullets are preserved by `extract_curated_subset` and `scripts/sync_agents_md.py`.
-- [ ] `verify_tarball_endpoint` in `scripts/publish_agent_skills.py` verifies the presence of all six `-ticket-runner` skills (`to-ticket-runner`, `implement-ticket-runner`, `code-review-ticket-runner`, `security-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`) alongside `implement/SKILL.md`.
-- [ ] Targeted Doctor, scaffolder, `sync_agents_md`, and publisher tests pass; Ruff and mypy are clean on every changed file.
-
+- [x] `REQUIRED_SKILL_PATHS` in `runner/application/doctor.py` requires `.agents/skills/code-review-ticket-runner/SKILL.md`, `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`, `.agents/skills/handoff-ticket-runner/SKILL.md`, and `.agents/skills/security-review-ticket-runner/SKILL.md` alongside the configured `execution_skill` (`.agents/skills/implement-ticket-runner/SKILL.md`).
+- [x] `CURATED_SKILLS` in `runner/tools/scaffold_sandbox.py` provisions the `-ticket-runner` autonomous skill suite (`implement-ticket-runner`, `code-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`, `security-review-ticket-runner`, `to-ticket-runner`) so a freshly scaffolded sandbox passes `Doctor.check_skills` immediately.
+- [x] `AGENTS.md` (`## Invariants` and `## Agent skills`) and `AGENT_BULLETS_KEEP_PREFIXES_DEFAULT`, `AGENT_BULLETS_KEEP_PREFIXES_ALL`, `FALLBACK_CURATED_SUBSET`, and `DEFAULT_UPSTREAM_AGENTS_MD` in `runner/tools/scaffold_sandbox.py` are updated in lockstep so `.agents/skills/handoff-ticket-runner/SKILL.md` and the `-ticket-runner` skill bullets are preserved by `extract_curated_subset` and `scripts/sync_agents_md.py`.
+- [x] `verify_tarball_endpoint` in `scripts/publish_agent_skills.py` verifies the presence of all six `-ticket-runner` skills (`to-ticket-runner`, `implement-ticket-runner`, `code-review-ticket-runner`, `security-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`) alongside `implement/SKILL.md`.
+- [x] Targeted Doctor, scaffolder, `sync_agents_md`, and publisher tests pass; Ruff and mypy are clean on every changed file.

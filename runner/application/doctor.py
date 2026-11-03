@@ -49,8 +49,10 @@ DEFAULT_TICKETS_DIR = Path("docs/tickets")
 DEFAULT_AGENTS_MD_PATH = Path("AGENTS.md")
 DEFAULT_EXECUTION_SKILL = ".agents/skills/implement-ticket-runner/SKILL.md"
 REQUIRED_SKILL_PATHS = (
-    ".agents/skills/code-review/SKILL.md",
-    ".agents/skills/diagnosing-bugs/SKILL.md",
+    ".agents/skills/code-review-ticket-runner/SKILL.md",
+    ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md",
+    ".agents/skills/handoff-ticket-runner/SKILL.md",
+    ".agents/skills/security-review-ticket-runner/SKILL.md",
 )
 REQUIRED_DISCORD_PERMISSIONS = (
     "Send Messages",

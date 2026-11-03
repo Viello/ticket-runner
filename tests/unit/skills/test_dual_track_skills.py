@@ -376,6 +376,11 @@ def test_handoff_ticket_runner_conforms_to_spec() -> None:
 def test_publish_agent_skills_script_verifies_dual_tracks() -> None:
     script_path = REPO_ROOT / "scripts" / "publish_agent_skills.py"
     content = script_path.read_text(encoding="utf-8")
+    assert "implement/SKILL.md" in content
     assert "implement-ticket-runner/SKILL.md" in content
     assert "to-ticket-runner/SKILL.md" in content
+    assert "code-review-ticket-runner/SKILL.md" in content
+    assert "security-review-ticket-runner/SKILL.md" in content
+    assert "diagnosing-bugs-ticket-runner/SKILL.md" in content
+    assert "handoff-ticket-runner/SKILL.md" in content
     assert "openai.yaml" in content and "agents/" in content
