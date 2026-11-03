@@ -21,7 +21,7 @@ DEFAULT_INVARIANTS = """## Invariants
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker (ADR 0002).
 - All automated work happens on `agent/ticket-runner`; the Runner stages and commits, and `.git/hooks/pre-push` blocks pushes (ADR 0005). Never `git push`.
 - Commit format: Title must be `<type>(<scope>): <Title>` where `<scope>` names the architectural layer or subsystem (`packaging`, `domain`, `ports`, `adapters`, `git`, `doctor`, `queue`, `discord`, `ui`), never a ticket number. Follow with a blank line and hyphen-bulleted (`- <action>`) imperative changes without trailing periods. No ticket numbers in title or body.
-- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff/SKILL.md`.
+- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff-ticket-runner/SKILL.md`.
 - Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (`Status: completed`); never record commit SHA in ticket frontmatter (ADR 0012).
 - Source of truth: Working code, unit tests, and CLI interfaces are authoritative over markdown documentation. Specifications and tickets are ephemeral scaffolding; never modify root living documents (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) without explicit user approval.
 - `.agent/` is untracked runtime state; git-ignore it when implementing.
@@ -127,7 +127,7 @@ def _with_token_budget(invariants: str, budget: TokenBudgetConfig | None) -> str
         f"handoff {budget.handoff // 1000}k, "
         f"hard ceiling {budget.ceiling // 1000}k; "
         "handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via "
-        "`.agents/skills/handoff/SKILL.md`."
+        "`.agents/skills/handoff-ticket-runner/SKILL.md`."
     )
     if re.search(r"^- Token budget:.*$", invariants, re.MULTILINE):
         return re.sub(
@@ -190,7 +190,7 @@ def build_prompt(
     if ticket.security_required:
         security_review_line = (
             "\n   - Explicit Security Mandate: This ticket is explicitly marked `Security: required` in ticket frontmatter. "
-            "Read `.agents/skills/security-review/SKILL.md` using your file-reading tool, run the `Security` axis of the code review, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
+            "Read `.agents/skills/security-review-ticket-runner/SKILL.md` using your file-reading tool, run the `Security` axis of the code review, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
             "and document detailed security findings in `self_review_notes`."
         )
 
@@ -230,12 +230,12 @@ Full specification reference: `{resolved_spec_path}`
    - Strict Queue Immutability: The Worker is strictly forbidden from modifying any other line or section of the active ticket file (the bold-label header, `## What to build`, `## Jump-start`, criterion wording, or `## Gotchas`), editing `docs/tickets/gotchas.md` directly, or touching any other file under `docs/tickets/`. Modifying, moving, or deleting any ticket markdown file under `docs/tickets/` (other than checking off satisfied acceptance criteria in the active ticket file) is strictly prohibited. Ticket relocation, header finalization (`**Status:** completed`), gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
    - Do NOT run `git add` or `git commit`. Worker git staging and commits are strictly forbidden. Do not edit `docs/tickets/gotchas.md` directly.
 2. **Review Self-Checks & Severity-Gated Escalation**:
-   - Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool (`read` / `read_file`, even if skill summaries are preloaded) and evaluate the uncommitted working-tree changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
+   - Code Review: Read `.agents/skills/code-review-ticket-runner/SKILL.md` using your file-reading tool (`read` / `read_file`, even if skill summaries are preloaded) and evaluate the uncommitted working-tree changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
    - Severity-Gated Escalation:
      - Low and Medium findings never interrupt the human; remediate in-pass or summarize findings in `self_review_notes`.
      - Critical and High findings must be remediated in-pass before signalling readiness.
      - Only if remediation is blocked by an architectural decision or missing secret does the Worker emit `.agent/questions/{ticket.id}.json` and stop working immediately.
-3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs/SKILL.md` using your file-reading tool.
+3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` using your file-reading tool.
 4. **Live QA Verification Contract**:
    - Human verification happens after green checks via a `/live-qa` session the human runs.
    - The Worker drafts no scenarios and self-reports no manual verification.

@@ -194,7 +194,7 @@ def render_ready_signal_protocol(ticket_id: str) -> str:
         signal_path=signal_path,
         instruction=(
             "when implementation is complete and after reading `AGENTS.md` and "
-            "`.agents/skills/code-review/SKILL.md` with your file-reading tool to "
+            "`.agents/skills/code-review-ticket-runner/SKILL.md` with your file-reading tool to "
             "complete self-reviews, then stop working."
         ),
     )

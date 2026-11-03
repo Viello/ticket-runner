@@ -1,6 +1,8 @@
 # T138: Prompt Builder, Ready Signal Protocol, and Handoff Coordinator `-ticket-runner` Wiring
 
-**Status:** ready-for-agent
+**Status:** completed
+**Completed:** 2026-11-03T10:17:00Z
+**Status note:** reviewed; rewired PromptBuilder, ready Signal protocol text, and Context Handoff prompt to reference segregated -ticket-runner skills
 **Labels:** ready-for-agent
 **Parent:** docs/specs/19-dual-track-skill-segregation.md
 
@@ -21,9 +23,8 @@
 
 **Blocked by:** T137 (Standalone `-ticket-runner` Skills, Cleaned Interactive Skills, and Segregation Contract)
 
-- [ ] `render_ready_signal_protocol` in `runner/domain/signal_schema.py` instructs the Worker to emit the ready Signal after reading `AGENTS.md` and `.agents/skills/code-review-ticket-runner/SKILL.md` with its file-reading tool.
-- [ ] `PromptBuilder.build` / `build_prompt` in `runner/application/prompt_builder.py` directs the Worker to read `.agents/skills/code-review-ticket-runner/SKILL.md` for pre-signal review, `.agents/skills/security-review-ticket-runner/SKILL.md` when `ticket.security_required` is true, and `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` for non-trivial test failures or hard bugs.
-- [ ] `DEFAULT_INVARIANTS` and `_with_token_budget` in `runner/application/prompt_builder.py` reference `.agents/skills/handoff-ticket-runner/SKILL.md` for the 135k-token checkpoint handoff invariant.
-- [ ] `HANDOFF_PROMPT_TEMPLATE` and `HandoffCoordinator.build_handoff_prompt` in `runner/application/handoff_coordinator.py` instruct the Worker to execute `.agents/skills/handoff-ticket-runner/SKILL.md` and save the checkpoint directly to `.agent/checkpoints/<ticket_id>/handoff.md`.
-- [ ] Targeted domain, application, and Spec 03 tests pass; Ruff and mypy are clean on every changed file.
-
+- [x] `render_ready_signal_protocol` in `runner/domain/signal_schema.py` instructs the Worker to emit the ready Signal after reading `AGENTS.md` and `.agents/skills/code-review-ticket-runner/SKILL.md` with its file-reading tool.
+- [x] `PromptBuilder.build` / `build_prompt` in `runner/application/prompt_builder.py` directs the Worker to read `.agents/skills/code-review-ticket-runner/SKILL.md` for pre-signal review, `.agents/skills/security-review-ticket-runner/SKILL.md` when `ticket.security_required` is true, and `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` for non-trivial test failures or hard bugs.
+- [x] `DEFAULT_INVARIANTS` and `_with_token_budget` in `runner/application/prompt_builder.py` reference `.agents/skills/handoff-ticket-runner/SKILL.md` for the 135k-token checkpoint handoff invariant.
+- [x] `HANDOFF_PROMPT_TEMPLATE` and `HandoffCoordinator.build_handoff_prompt` in `runner/application/handoff_coordinator.py` instruct the Worker to execute `.agents/skills/handoff-ticket-runner/SKILL.md` and save the checkpoint directly to `.agent/checkpoints/<ticket_id>/handoff.md`.
+- [x] Targeted domain, application, and Spec 03 tests pass; Ruff and mypy are clean on every changed file.

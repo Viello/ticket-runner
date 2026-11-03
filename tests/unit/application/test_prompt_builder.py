@@ -206,7 +206,8 @@ def test_prompt_contains_diagnosing_bugs_skill_pointer() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt
 
 
 def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
@@ -226,8 +227,11 @@ def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt_no_sec
-    assert ".agents/skills/code-review/SKILL.md" in prompt_sec
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt_no_sec
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt_sec
+    assert ".agents/skills/code-review/SKILL.md" not in prompt_no_sec
+    assert ".agents/skills/code-review/SKILL.md" not in prompt_sec
+
     assert "`/code-review`" not in prompt_no_sec
     assert "`/code-review`" not in prompt_sec
 
@@ -249,7 +253,9 @@ def test_prompt_conditional_security_review_toggle() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/security-review/SKILL.md" in prompt_sec
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt_sec
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" not in prompt_no_sec
+    assert ".agents/skills/security-review/SKILL.md" not in prompt_sec
     assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
     assert "Explicit Security Mandate" in prompt_sec
     assert "Security: required" in prompt_sec
@@ -459,8 +465,11 @@ def test_prompt_review_section_file_reading_directives_and_self_review_notes() -
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt
-    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+
     assert "self_review_notes" in prompt
     assert "`/code-review`" not in prompt
     assert "`/security-review`" not in prompt
@@ -475,9 +484,10 @@ def test_prompt_debugging_guidance_explicit_read_directive() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt
     assert "read" in prompt.lower()
-    assert "consult `.agents/skills/diagnosing-bugs/SKILL.md`" not in prompt
+    assert "consult `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`" not in prompt
 
 
 def test_prompt_resilient_invariants_fallback_when_agents_md_missing_or_corrupt(tmp_path: Path) -> None:
@@ -608,8 +618,11 @@ def test_prompt_instructs_review_and_severity_gated_escalation_when_security_req
         gotchas_path=SAMPLE_GOTCHAS_PATH,
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt
-    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+
     assert "Standards" in prompt
     assert "Spec" in prompt
     assert "Security" in prompt
@@ -627,12 +640,13 @@ def test_prompt_omits_security_axis_when_not_required() -> None:
         gotchas_path=SAMPLE_GOTCHAS_PATH,
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" not in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
     assert ".agents/skills/security-review/SKILL.md" not in prompt
     assert "Standards" in prompt
     assert "Spec" in prompt
     assert "`Security` axis" not in prompt
-
 
 def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() -> None:
     ticket = _make_ticket(ticket_id="T127")
@@ -719,7 +733,23 @@ def test_implement_ticket_runner_skill_mandates_explicit_file_read_for_code_revi
 
 
 def test_ready_signal_protocol_reminds_worker_to_read_code_review_skill_and_agents_md() -> None:
-    """Ready Signal Protocol section reminds the worker to have read code-review/SKILL.md and AGENTS.md."""
+    """Ready Signal Protocol section reminds the worker to have read code-review-ticket-runner/SKILL.md and AGENTS.md."""
     protocol = render_ready_signal_protocol("T008")
-    assert ".agents/skills/code-review/SKILL.md" in protocol
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in protocol
+    assert ".agents/skills/code-review/SKILL.md" not in protocol
     assert "AGENTS.md" in protocol
+
+
+def test_default_invariants_references_handoff_ticket_runner_skill() -> None:
+    from runner.application.prompt_builder import DEFAULT_INVARIANTS
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in DEFAULT_INVARIANTS
+    assert ".agents/skills/handoff/SKILL.md" not in DEFAULT_INVARIANTS
+
+
+def test_with_token_budget_references_handoff_ticket_runner_skill() -> None:
+    from runner.domain.config import TokenBudgetConfig
+    from runner.application.prompt_builder import _with_token_budget, extract_invariants
+    budget = TokenBudgetConfig(warn=120_000, handoff=135_000, ceiling=150_000)
+    invariants = _with_token_budget(extract_invariants(), budget)
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in invariants
+    assert ".agents/skills/handoff/SKILL.md" not in invariants

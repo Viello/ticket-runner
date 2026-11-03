@@ -6,27 +6,24 @@ import os
 from pathlib import Path
 import pytest
 
-from runner.adapters.markdown.gotchas_store import GotchasStore
 from runner.adapters.markdown.spec_parser import SpecExcerpt
 from runner.application.git_operations import GitOperations
 from runner.application.handoff_coordinator import (
     CLOCK_SLACK_SECONDS,
-    ESCALATED,
     EscalationNotice,
     HandoffCoordinator,
     MAX_CONSECUTIVE_HANDOFFS,
     QUESTION_PENDING,
-    SingleCycleResult,
     SingleCycleStatus,
     WorkerRunResult,
     default_recovery_confirmation,
     is_checkpoint_fresh,
 )
 from runner.application.worker_supervisor import RunTerminationReason, WorkerSupervisor
-from runner.domain.config import TokenBudgetConfig, WorkerConfig
+from runner.domain.config import TokenBudgetConfig
 from runner.domain.exceptions import TicketFormatError
 from runner.domain.runtime_paths import RuntimePaths
-from runner.domain.signal import QuestionSignal, ReadySignal, SignalStatus
+from runner.domain.signal import QuestionSignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
 from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner, FakeProcessHandle
@@ -123,7 +120,8 @@ def test_handoff_at_135k_runs_same_session_and_resumes_session_b(tmp_path: Path)
     resume_prompt = coordinator.build_resume_prompt(ticket, checkpoint_file)
 
     assert "Context budget threshold reached (135k tokens)." in handoff_prompt
-    assert ".agents/skills/handoff/SKILL.md" in handoff_prompt
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in handoff_prompt
+    assert ".agents/skills/handoff/SKILL.md" not in handoff_prompt
     assert checkpoint_file.as_posix() in handoff_prompt
     assert "include modified files, architectural decisions, test status, and immediate next steps" in handoff_prompt.lower()
     assert handoff_prompt.strip().endswith("Then exit.")
@@ -203,7 +201,7 @@ def test_exit_0_without_ready_signal_nudges_same_session_and_succeeds(tmp_path: 
         json.dumps({"type": "step_finish", "sessionID": session_id, "part": {"tokens": {"total": 30000}}}) + "\n",
     ]
 
-    nudge_prompt = coordinator_prompt = f"You exited without writing `.agent/signals/{ticket.id}_ready.json`. Write it with your `self_review_notes`, or report the blocker, then exit."
+    nudge_prompt = f"You exited without writing `.agent/signals/{ticket.id}_ready.json`. Write it with your `self_review_notes`, or report the blocker, then exit."
 
     class _NudgeHandle(FakeProcessHandle):
         def __init__(self) -> None:
@@ -2059,4 +2057,5 @@ def test_build_handoff_prompt_uses_configured_budget(tmp_path: Path) -> None:
     prompt = coordinator.build_handoff_prompt(_make_ticket("T130"))
 
     assert "Context budget threshold reached (190k tokens)." in prompt
-    assert ".agents/skills/handoff/SKILL.md" in prompt
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/handoff/SKILL.md" not in prompt

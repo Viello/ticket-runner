@@ -110,6 +110,14 @@ def test_rendered_question_example_advertises_exactly_the_parser_fields() -> Non
 # --- Protocol renderers ---
 
 
+def test_ready_protocol_instructs_reading_code_review_ticket_runner_and_agents_md() -> None:
+    protocol = render_ready_signal_protocol("T130")
+
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in protocol
+    assert ".agents/skills/code-review/SKILL.md" not in protocol
+    assert "AGENTS.md" in protocol
+
+
 def test_ready_protocol_names_every_field_and_the_exact_status() -> None:
     protocol = render_ready_signal_protocol("T130")
 

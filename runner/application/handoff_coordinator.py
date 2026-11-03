@@ -24,6 +24,7 @@ from runner.application.worker_supervisor import (
     WorkerSupervisor,
 )
 from runner.domain.config import TokenBudgetConfig, WorkerConfig
+from runner.domain.exceptions import SignalFormatError
 from runner.domain.runtime_paths import (
     TICKET_ID_PATTERN,
     RuntimePaths,
@@ -47,7 +48,7 @@ MAX_CONSECUTIVE_HANDOFFS: int = 5
 
 HANDOFF_PROMPT_TEMPLATE: str = (
     "Context budget threshold reached ({handoff_tokens}k tokens). Execute the handoff skill at "
-    ".agents/skills/handoff/SKILL.md. Save the handoff document directly to "
+    ".agents/skills/handoff-ticket-runner/SKILL.md. Save the handoff document directly to "
     "{checkpoint_path}. Include modified files, architectural decisions, test "
     "status, and immediate next steps. Then exit."
 )
