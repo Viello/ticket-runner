@@ -595,7 +595,7 @@ def build_verification_failure_prompt(
     if attempt >= 2:
         directive = (
             f"Gatekeeper verification failed (attempt {attempt}). "
-            "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+            "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
             "using your file reading tool to diagnose and isolate the root cause.\n\n"
         )
         return f"{directive}{prompt}"
@@ -1038,17 +1038,17 @@ class VerificationLoop:
     def _check_ready_warnings(self) -> list[str]:
         """Emit soft warnings if required review skills or AGENTS.md were not accessed."""
         warnings: list[str] = []
-        if "code-review" not in self._accumulated_resources:
+        if "code-review-ticket-runner" not in self._accumulated_resources:
             warnings.append(
-                f"[{self._ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
         if "AGENTS.md" not in self._accumulated_resources:
             warnings.append(
                 f"[{self._ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
             )
-        if self._ticket.security_required and "security-review" not in self._accumulated_resources:
+        if self._ticket.security_required and "security-review-ticket-runner" not in self._accumulated_resources:
             warnings.append(
-                f"[{self._ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
 
         for warning in warnings:

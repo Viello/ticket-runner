@@ -502,6 +502,54 @@ def test_extract_resource_access_from_step_update_tool_info() -> None:
     assert resources == frozenset({"security-review", "AGENTS.md"})
 
 
+def test_extract_resource_access_ticket_runner_skills() -> None:
+    """Read tool events for -ticket-runner skills decode into exact <name>-ticket-runner identifiers."""
+    worker = AntigravityWorker()
+    skills = [
+        ("code-review-ticket-runner", ".agents/skills/code-review-ticket-runner/SKILL.md"),
+        ("security-review-ticket-runner", ".agents/skills/security-review-ticket-runner/SKILL.md"),
+        ("diagnosing-bugs-ticket-runner", ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md"),
+        ("handoff-ticket-runner", ".agents/skills/handoff-ticket-runner/SKILL.md"),
+    ]
+    for skill_name, skill_path in skills:
+        payload = {
+            "event": "step_update",
+            "step_update": {
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {
+                    "name": "view_file",
+                    "parameters": {
+                        "AbsolutePath": skill_path,
+                    },
+                },
+            },
+        }
+        event = decode_event(json.dumps(payload))
+        assert event is not None
+        assert extract_resource_access(event=event) == frozenset({skill_name})
+
+        # Windows backslash path via worker method
+        win_rel = skill_path.replace("/", "\\")
+        win_path = f"D:\\Projects\\{win_rel}"
+        win_payload = {
+            "event": "step_update",
+            "step_update": {
+                "step_type": "tool",
+                "tool_name": "view_file",
+                "tool_info": {
+                    "name": "view_file",
+                    "parameters": {
+                        "path": win_path,
+                    },
+                },
+            },
+        }
+        win_event = decode_event(json.dumps(win_payload))
+        assert win_event is not None
+        assert worker.extract_resource_access(event=win_event) == frozenset({skill_name})
+
+
 def test_extract_resource_access_nested_parameters() -> None:
     payload = {
         "event": "step_update",

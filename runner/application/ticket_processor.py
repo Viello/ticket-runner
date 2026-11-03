@@ -185,17 +185,17 @@ class GatekeeperTicketProcessor:
     ) -> list[str]:
         """Evaluate resource access compliance upon receiving a ready signal and emit soft warnings."""
         warnings: list[str] = []
-        if "code-review" not in resources_accessed:
+        if "code-review-ticket-runner" not in resources_accessed:
             warnings.append(
-                f"[{ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+                f"[{ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
         if "AGENTS.md" not in resources_accessed:
             warnings.append(
                 f"[{ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
             )
-        if ticket.security_required and "security-review" not in resources_accessed:
+        if ticket.security_required and "security-review-ticket-runner" not in resources_accessed:
             warnings.append(
-                f"[{ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+                f"[{ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
 
         for warning in warnings:

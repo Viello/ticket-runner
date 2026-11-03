@@ -785,7 +785,7 @@ def test_ready_signal_soft_warnings_emitted_when_code_review_and_agents_md_missi
 
     # Check both warnings emitted via notify
     expected_cr = (
-        "[T046] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. "
+        "[T046] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. "
         "Proceeding to verification."
     )
     expected_agents = (
@@ -831,7 +831,7 @@ def test_ready_signal_security_required_missing_security_review_emits_warning(
             WorkerRunResult(
                 status=SingleCycleStatus.READY,
                 session_id="ses_1",
-                resources_accessed=frozenset({"implement", "code-review", "AGENTS.md"}),
+                resources_accessed=frozenset({"implement", "code-review-ticket-runner", "AGENTS.md"}),
             )
         ],
         on_call=_on_call,
@@ -853,7 +853,7 @@ def test_ready_signal_security_required_missing_security_review_emits_warning(
     assert outcome.is_approved is True
 
     expected_sec = (
-        "[T046] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. "
+        "[T046] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. "
         "Proceeding to verification."
     )
     assert expected_sec in notices
@@ -895,9 +895,9 @@ def test_ready_signal_with_all_required_resources_emits_no_soft_warnings(
                 session_id="ses_1",
                 resources_accessed=frozenset({
                     "implement",
-                    "code-review",
+                    "code-review-ticket-runner",
                     "AGENTS.md",
-                    "security-review",
+                    "security-review-ticket-runner",
                 }),
             )
         ],
@@ -1036,7 +1036,7 @@ def test_attempt_1_failure_resume_prompt_has_no_diagnostic_skill_directive(
     assert "Gatekeeper verification failed for ticket T046." in resume_prompt
     assert "FAILED test_unit.py - KeyError: 'foo'" in resume_prompt
     # Must NOT have diagnosing-bugs directive
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in resume_prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" not in resume_prompt
 
 
 def test_attempt_2_plus_failure_resume_prompt_prepends_diagnosing_bugs_directive(
@@ -1094,13 +1094,13 @@ def test_attempt_2_plus_failure_resume_prompt_prepends_diagnosing_bugs_directive
 
     # Cycle 2 resume prompt (after attempt 1 failure) does NOT have directive
     prompt_cycle_2 = cycle_runner.calls[1]["prompt"]
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_cycle_2
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" not in prompt_cycle_2
 
     # Cycle 3 resume prompt (after attempt 2 failure) PREPENDS directive
     prompt_cycle_3 = cycle_runner.calls[2]["prompt"]
     expected_prefix = (
         "Gatekeeper verification failed (attempt 2). "
-        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
         "using your file reading tool to diagnose and isolate the root cause.\n\n"
     )
     assert prompt_cycle_3.startswith(expected_prefix)
@@ -1115,14 +1115,14 @@ def test_build_verification_failure_prompt_formatting_by_attempt() -> None:
     # Attempt 1 (default)
     prompt_1 = build_verification_failure_prompt(ticket, diagnostics)
     assert "Gatekeeper verification failed for ticket T046." in prompt_1
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt_1
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" not in prompt_1
     assert "AssertionError: expected True, got False" in prompt_1
 
     # Attempt 2
     prompt_2 = build_verification_failure_prompt(ticket, diagnostics, attempt=2)
     expected_prefix_2 = (
         "Gatekeeper verification failed (attempt 2). "
-        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
         "using your file reading tool to diagnose and isolate the root cause.\n\n"
     )
     assert prompt_2.startswith(expected_prefix_2)
@@ -1132,7 +1132,7 @@ def test_build_verification_failure_prompt_formatting_by_attempt() -> None:
     prompt_3 = build_verification_failure_prompt(ticket, diagnostics, attempt=3)
     expected_prefix_3 = (
         "Gatekeeper verification failed (attempt 3). "
-        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+        "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
         "using your file reading tool to diagnose and isolate the root cause.\n\n"
     )
     assert prompt_3.startswith(expected_prefix_3)
@@ -1168,7 +1168,7 @@ def test_multi_cycle_resource_accumulation(tmp_path: Path) -> None:
             WorkerRunResult(
                 status=SingleCycleStatus.READY,
                 session_id="ses_accum",
-                resources_accessed=frozenset({"code-review"}),
+                resources_accessed=frozenset({"code-review-ticket-runner"}),
             ),
             WorkerRunResult(
                 status=SingleCycleStatus.READY,
@@ -1238,7 +1238,7 @@ def test_ticket_processor_outcome_includes_manual_verification(tmp_path: Path) -
             WorkerRunResult(
                 status=SingleCycleStatus.READY,
                 session_id="ses_mv",
-                resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+                resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
             ),
         ],
         on_call=_on_call,
@@ -1366,7 +1366,7 @@ def test_discord_full_ticket_lifecycle(tmp_path: Path) -> None:
             WorkerRunResult(
                 status=SingleCycleStatus.READY,
                 session_id="ses_lifecycle",
-                resources_accessed=frozenset({"code-review", "AGENTS.md"}),
+                resources_accessed=frozenset({"code-review-ticket-runner", "AGENTS.md"}),
             ),
         ],
         on_call=_on_call,
