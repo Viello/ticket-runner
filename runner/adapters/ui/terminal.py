@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
+from runner.domain.config import TokenBudgetConfig
 from runner.domain.ring_buffer import RingBuffer
 from runner.domain.state import RunnerState
 from runner.ports.terminal_display import TerminalDisplay
@@ -31,15 +32,17 @@ HOTKEY_LEGENDS: Mapping[str, str] = {
 def calculate_token_bar(
     current: int,
     ceiling: int = DEFAULT_CEILING,
+    warn: int = WARNING_THRESHOLD,
+    handoff: int = HANDOFF_THRESHOLD,
 ) -> tuple[str, str, int]:
     """Calculate token bar markup, plain bar text, and rounded percentage.
 
     Rules (Spec 06 §Token Bar Format):
     - 10 characters wide: fill '█', empty '░'
-    - Percentage: round(current / 150_000 * 100), clamped to [0, 100]
+    - Percentage: round(current / ceiling * 100), clamped to [0, 100]
     - Blocks 1–8: green (when current >= that tenth)
-    - Block 9: yellow (when current >= 120,000)
-    - Block 10: red (when current >= 135,000)
+    - Block 9: yellow (when current >= warn)
+    - Block 10: red (when current >= handoff)
 
     Returns:
         tuple of (bar_markup, bar_plain, percentage)
@@ -52,11 +55,11 @@ def calculate_token_bar(
     green_empty = "░" * (8 - green_count)
     green_markup = f"[green]{green_filled}[/green]{green_empty}" if green_count > 0 else green_empty
 
-    b9_filled = safe_current >= WARNING_THRESHOLD
+    b9_filled = safe_current >= warn
     b9_markup = "[yellow]█[/yellow]" if b9_filled else "░"
     b9_plain = "█" if b9_filled else "░"
 
-    b10_filled = safe_current >= HANDOFF_THRESHOLD
+    b10_filled = safe_current >= handoff
     b10_markup = "[red]█[/red]" if b10_filled else "░"
     b10_plain = "█" if b10_filled else "░"
 
@@ -65,7 +68,7 @@ def calculate_token_bar(
     return bar_markup, bar_plain, pct
 
 
-def build_warning_panel() -> Panel:
+def build_warning_panel(handoff_k: int = HANDOFF_THRESHOLD // 1000) -> Panel:
     """Construct frozen TUI session warning panel matching Spec 06 verbatim."""
     lines = [
         Text.from_markup("[bold yellow]⚠  OpenCode TUI open — Runner is paused & blind[/bold yellow]"),
@@ -73,7 +76,7 @@ def build_warning_panel() -> Panel:
             "[dim white]   Execution is paused: no Gatekeeper, no Circuit Breaker, no token tracking.[/dim white]"
         ),
         Text.from_markup(
-            "[dim white]   Tokens consumed in TUI are NOT tracked against the 135k handoff budget.[/dim white]"
+            f"[dim white]   Tokens consumed in TUI are NOT tracked against the {handoff_k}k handoff budget.[/dim white]"
         ),
         Text.from_markup(
             "[dim white]   Work done in TUI bypasses the Gatekeeper and Signal protocol.[/dim white]"
@@ -100,9 +103,11 @@ class RichTerminalDisplay(TerminalDisplay):
         console: Console | None = None,
         ring_buffer: RingBuffer | None = None,
         max_entries: int = DEFAULT_TELEMETRY_CAPACITY,
+        token_budget: TokenBudgetConfig | None = None,
     ) -> None:
         self._console = console or Console()
         self._ring_buffer = ring_buffer or RingBuffer(max_entries=max_entries)
+        self._token_budget = token_budget or TokenBudgetConfig()
         self._current_state: RunnerState | None = None
         self._queue_remaining: int = 0
         self._legend_state: str = "normal"
@@ -209,8 +214,16 @@ class RichTerminalDisplay(TerminalDisplay):
         row1 = f"ticket  {ticket_id} · status  {status_val} · attempt  {attempts} / 3"
 
         # Row 2
-        bar_markup, _, pct = calculate_token_bar(current_tokens)
-        row2 = f"tokens  [{bar_markup}] {current_tokens:,} / {DEFAULT_CEILING:,} ({pct}%)"
+        bar_markup, _, pct = calculate_token_bar(
+            current_tokens,
+            ceiling=self._token_budget.ceiling,
+            warn=self._token_budget.warn,
+            handoff=self._token_budget.handoff,
+        )
+        row2 = (
+            f"tokens  [{bar_markup}] {current_tokens:,} / "
+            f"{self._token_budget.ceiling:,} ({pct}%)"
+        )
 
         # Row 3
         row3 = f"presence  {presence_mode} · session  {session_id}"
@@ -281,7 +294,7 @@ class RichTerminalDisplay(TerminalDisplay):
         """Construct the split Layout container."""
         layout = Layout()
         if self._show_warning or (self._current_state is not None and self._current_state.tui_open):
-            layout.update(build_warning_panel())
+            layout.update(build_warning_panel(self._token_budget.handoff // 1000))
         else:
             layout.split_column(
                 Layout(self._build_top_panel(), name="header", size=8),
@@ -293,7 +306,7 @@ class RichTerminalDisplay(TerminalDisplay):
         """Update the existing layout in place with fresh panel content."""
         if self._show_warning or (self._current_state is not None and self._current_state.tui_open):
             self._layout.split()
-            self._layout.update(build_warning_panel())
+            self._layout.update(build_warning_panel(self._token_budget.handoff // 1000))
         else:
             if self._layout.get("header") is not None and self._layout.get("body") is not None:
                 self._layout["header"].update(self._build_top_panel())

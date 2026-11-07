@@ -44,6 +44,7 @@ EXIT_CODE_CONTRACT = """Exit codes:
   0    Clean termination (queue drained under terminate policy, or standby exited via stop)
   1    Runtime error
   2    Operator abort (UserAbortError)
+  3    Human intervention requested (queue stopped; ticket left pending)
   130  Graceful SIGINT (single or forced second press)
 """
 
@@ -393,6 +394,7 @@ async def run_start(
     terminal_display = None
     ui_event_sink = None
     tui_coord: TuiCoordinator | None = tui_coordinator
+    discord_client_for_run = None
     if container_instance is not None:
         orchestrator = container_instance.orchestrator
         if supervisor is None:
@@ -406,6 +408,7 @@ async def run_start(
             presence_coordinator = getattr(container_instance, "presence_coordinator", None)
         if tui_coord is None:
             tui_coord = getattr(container_instance, "tui_coordinator", None)
+        discord_client_for_run = getattr(container_instance, "discord_client", None)
     elif orchestrator_instance is not None:
         orchestrator = orchestrator_instance
         if supervisor is None:
@@ -417,6 +420,7 @@ async def run_start(
         ui_event_sink = getattr(orchestrator, "ui_event_sink", None)
         if tui_coord is None:
             tui_coord = getattr(orchestrator, "tui_coordinator", None)
+        discord_client_for_run = getattr(orchestrator, "discord_client", None)
     else:
         if model_id is not None:
             valid_model_ids = [m.id for m in config.model.models]
@@ -456,6 +460,7 @@ async def run_start(
         container = build_container(
             config=config,
             project_dir=resolved_project_dir,
+            local_only=local_only,
             clock=clock,
             model_id=model_id,
             state_store=effective_state_store,
@@ -474,6 +479,7 @@ async def run_start(
             presence_coordinator = getattr(container, "presence_coordinator", None)
         if tui_coord is None:
             tui_coord = getattr(container, "tui_coordinator", None)
+        discord_client_for_run = getattr(container, "discord_client", None)
 
     idle_esc_min = getattr(getattr(config, "presence", None), "idle_escalation_minutes", 3)
     resolved_presence = presence_coordinator or PresenceCoordinator(
@@ -544,6 +550,50 @@ async def run_start(
     if active_display is not None and hasattr(active_display, "start"):
         active_display.start()
 
+    discord_start_task: asyncio.Task[None] | None = None
+    if discord_client_for_run is not None and not local_only:
+        def _redact(text: str) -> str:
+            token_env = getattr(getattr(config, "discord", None), "token_env", "")
+            token_val = os.environ.get(token_env, "").strip() if token_env else ""
+            if token_val and token_val in text:
+                return text.replace(token_val, "[REDACTED]")
+            return text
+
+        discord_start_task = asyncio.create_task(discord_client_for_run.start())
+        ready_task = asyncio.create_task(discord_client_for_run.ready_event.wait())
+        done, pending = await asyncio.wait(
+            [discord_start_task, ready_task],
+            return_when=asyncio.FIRST_COMPLETED,
+            timeout=30.0,
+        )
+        ready_error = getattr(discord_client_for_run, "ready_error", None)
+        start_exc = (
+            discord_start_task.exception()
+            if discord_start_task in done and not discord_start_task.cancelled()
+            else None
+        )
+        if ready_task in done and ready_error is None:
+            print("[Discord] Connected and slash commands synced.")
+        else:
+            reason = "connection timed out"
+            if start_exc is not None:
+                reason = str(start_exc)
+            if ready_error is not None:
+                reason = str(ready_error)
+            print(
+                f"[Discord] Enabled but not connected ({_redact(reason)}). "
+                "Continuing without Discord; run `doctor --live` to diagnose."
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+    elif config.discord.enabled and not local_only and discord_client_for_run is None:
+        print(
+            "[Discord] Enabled in config but not wired; "
+            "check DISCORD_BOT_TOKEN and run `doctor --live`."
+        )
+
     draining = False
     try:
         if crash_recovery is not None:
@@ -607,6 +657,20 @@ async def run_start(
         await poller.stop()
         if active_display is not None and hasattr(active_display, "stop"):
             active_display.stop()
+        if discord_client_for_run is not None:
+            try:
+                await asyncio.wait_for(discord_client_for_run.close(), timeout=2.0)
+            except (asyncio.TimeoutError, TimeoutError):
+                pass
+            except Exception:
+                pass
+        if discord_start_task is not None:
+            if not discord_start_task.done():
+                discord_start_task.cancel()
+            try:
+                await discord_start_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if old_sigint is not None:
             try:
                 signal.signal(signal.SIGINT, old_sigint)

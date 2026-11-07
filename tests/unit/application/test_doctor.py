@@ -14,20 +14,20 @@ from runner.application.doctor import (
     CHECK_MODEL,
     CHECK_OPENCODE,
     CHECK_QUEUE,
+    CHECK_SIGNAL_CONTRACT,
     CHECK_SKILLS,
     CHECK_TARGET_GIT_REPO,
     CHECK_TERMINAL_HOST,
     CHECK_VERIFICATION_COMMANDS,
     CHECK_WORKER_BINARY,
-    CANDIDATE_TERMINAL_HOSTS,
     CheckResult,
     Doctor,
     DoctorReport,
+    REQUIRED_SKILL_PATHS,
 )
 from runner.adapters.ui.terminal_prompts import TerminalHostPrompt
 from runner.domain.config import ModelConfig, RunnerConfig, UIConfig
-from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError
-from runner.ports.command_runner import CommandResult
+from runner.domain.exceptions import CommandNotFoundError, GitError
 from tests.fakes.fake_command_runner import FakeCommandRunner
 
 
@@ -635,7 +635,8 @@ async def test_run_executes_all_when_halt_disabled(tmp_path: Path) -> None:
 
     assert report.passed is False
     # All 11 checks executed
-    assert len(report.checks) == 11
+    # All 12 checks executed
+    assert len(report.checks) == 12
 
 
 
@@ -780,11 +781,27 @@ async def test_check_agents_md_custom_path(tmp_path: Path) -> None:
     assert result.name == CHECK_AGENTS_MD
 
 
+def test_doctor_required_skill_paths_constant() -> None:
+    """Verify REQUIRED_SKILL_PATHS requires the four -ticket-runner review, handoff, and security skills."""
+    assert REQUIRED_SKILL_PATHS == (
+        ".agents/skills/code-review-ticket-runner/SKILL.md",
+        ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md",
+        ".agents/skills/handoff-ticket-runner/SKILL.md",
+        ".agents/skills/security-review-ticket-runner/SKILL.md",
+    )
+
+
 @pytest.mark.anyio
 async def test_check_skills_passes_when_all_skills_present(tmp_path: Path) -> None:
     """Verify check_skills passes when execution skill and required review skills exist."""
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for name in (
+        "implement-ticket-runner",
+        "code-review-ticket-runner",
+        "diagnosing-bugs-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+    ):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -794,7 +811,7 @@ async def test_check_skills_passes_when_all_skills_present(tmp_path: Path) -> No
 
     assert result.passed is True
     assert result.name == CHECK_SKILLS
-    assert "required skill files verified" in result.message
+    assert "All 5 required skill files verified on disk." in result.message
     assert result.remediation is None
 
 
@@ -808,16 +825,23 @@ async def test_check_skills_fails_when_all_skills_missing(tmp_path: Path) -> Non
     assert result.name == CHECK_SKILLS
     assert result.remediation is not None
     assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.remediation
-    assert ".agents/skills/code-review/SKILL.md" in result.remediation
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in result.remediation
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in result.remediation
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in result.remediation
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in result.remediation
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in result.remediation
 
 
 @pytest.mark.anyio
 async def test_check_skills_fails_naming_specifically_missing_skills(tmp_path: Path) -> None:
     """Verify check_skills failure specifically names only the absent skill files."""
     skills_dir = tmp_path / ".agents" / "skills"
-    # Create implement-ticket-runner and code-review, but omit diagnosing-bugs
-    for name in ("implement-ticket-runner", "code-review"):
+    # Create all skills except diagnosing-bugs-ticket-runner
+    for name in (
+        "implement-ticket-runner",
+        "code-review-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+    ):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -828,16 +852,23 @@ async def test_check_skills_fails_naming_specifically_missing_skills(tmp_path: P
     assert result.passed is False
     assert result.name == CHECK_SKILLS
     assert result.remediation is not None
-    assert "diagnosing-bugs/SKILL.md" in result.remediation
-    assert "code-review/SKILL.md" not in result.remediation
+    assert "diagnosing-bugs-ticket-runner/SKILL.md" in result.remediation
+    assert "code-review-ticket-runner/SKILL.md" not in result.remediation
     assert "implement-ticket-runner/SKILL.md" not in result.remediation
+    assert "handoff-ticket-runner/SKILL.md" not in result.remediation
+    assert "security-review-ticket-runner/SKILL.md" not in result.remediation
 
 
 @pytest.mark.anyio
 async def test_check_skills_respects_custom_configured_execution_skill(tmp_path: Path) -> None:
     """Verify check_skills checks custom configured worker.execution_skill."""
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("code-review", "diagnosing-bugs"):
+    for name in (
+        "code-review-ticket-runner",
+        "diagnosing-bugs-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+    ):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -853,8 +884,176 @@ async def test_check_skills_respects_custom_configured_execution_skill(tmp_path:
     assert result.name == CHECK_SKILLS
     assert result.remediation is not None
     assert custom_skill in result.remediation
-    assert "code-review" not in result.remediation
-    assert "diagnosing-bugs" not in result.remediation
+    assert "code-review-ticket-runner" not in result.remediation
+    assert "diagnosing-bugs-ticket-runner" not in result.remediation
+    assert "handoff-ticket-runner" not in result.remediation
+    assert "security-review-ticket-runner" not in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_passes_when_skill_has_no_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract passes when execution skill has no embedded JSON blocks."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text("# Skill with no examples\nJust plain instructions.\n", encoding="utf-8")
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is True
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert "signal contract verified" in result.message
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_passes_when_skill_has_valid_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract passes when execution skill has valid ready signal examples."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(
+        "# Valid Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "status": "ready_for_verification",\n'
+        '  "modified_files": ["foo.py"],\n'
+        '  "self_review_notes": "Implemented and verified.",\n'
+        '  "new_gotchas": [],\n'
+        '  "timestamp": "<ISO-8601-UTC>",\n'
+        '  "scope": "implementation"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is True
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert result.remediation is None
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_fails_when_skill_has_stale_examples(tmp_path: Path) -> None:
+    """Verify check_signal_contract fails when execution skill has a stale signal example."""
+    skill_file = tmp_path / ".agents" / "skills" / "implement-ticket-runner" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(
+        "# Stale Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What should we do?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path)
+    result = await doctor.check_signal_contract()
+
+    assert result.passed is False
+    assert result.name == CHECK_SIGNAL_CONTRACT
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.message
+    assert "missing required field 'type'" in result.message
+    assert result.remediation is not None
+    assert ".agents/skills/implement-ticket-runner/SKILL.md" in result.remediation
+    assert "missing required field 'type'" in result.remediation
+    assert "ticket-runner skills sync" in result.remediation
+    file_pos = result.remediation.index(".agents/skills/implement-ticket-runner/SKILL.md")
+    rule_pos = result.remediation.index("missing required field 'type'")
+    sync_pos = result.remediation.index("ticket-runner skills sync")
+    assert file_pos < sync_pos
+    assert rule_pos < sync_pos
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_respects_custom_configured_execution_skill(tmp_path: Path) -> None:
+    """Verify check_signal_contract resolves custom worker.execution_skill."""
+    custom_path = tmp_path / "custom" / "my_skill.md"
+    custom_path.parent.mkdir(parents=True, exist_ok=True)
+    custom_path.write_text(
+        "# Custom Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "question": "What is this?",\n'
+        '  "timestamp": "<ISO-8601-UTC>"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+    config = _make_config(execution_skill="custom/my_skill.md")
+
+    doctor = Doctor(cwd=tmp_path, config_loader=FakeConfigLoader(config=config))
+    await doctor.check_config()
+
+    result = await doctor.check_signal_contract()
+    assert result.passed is False
+    assert "custom/my_skill.md" in result.message
+    assert result.remediation is not None
+    assert "custom/my_skill.md" in result.remediation
+
+
+@pytest.mark.anyio
+async def test_check_signal_contract_respects_explicit_execution_skill_path(tmp_path: Path) -> None:
+    """Verify check_signal_contract resolves explicit execution_skill_path parameter."""
+    explicit_path = tmp_path / "explicit" / "SKILL.md"
+    explicit_path.parent.mkdir(parents=True, exist_ok=True)
+    explicit_path.write_text(
+        "# Explicit Skill\n\n```json\n"
+        "{\n"
+        '  "ticket_id": "<ticket_id>",\n'
+        '  "status": "ready_for_verification",\n'
+        '  "modified_files": ["bar.py"],\n'
+        '  "self_review_notes": "All checks green.",\n'
+        '  "new_gotchas": [],\n'
+        '  "timestamp": "<ISO-8601-UTC>",\n'
+        '  "scope": "implementation"\n'
+        "}\n```\n",
+        encoding="utf-8",
+    )
+
+    doctor = Doctor(cwd=tmp_path, execution_skill_path="explicit/SKILL.md")
+    result = await doctor.check_signal_contract()
+    assert result.passed is True
+    assert "explicit/SKILL.md" in result.message
+
+
+@pytest.mark.anyio
+async def test_doctor_run_includes_signal_contract_after_skills(tmp_path: Path) -> None:
+    """Verify Doctor.run() executes CHECK_SIGNAL_CONTRACT immediately after CHECK_SKILLS."""
+    runner = FakeCommandRunner()
+    runner.register("opencode --version", exit_code=0, stdout="opencode 1.0\n")
+    git_ops = FakeGitOperations(clean=True, branch="agent/ticket-runner")
+
+    tickets_dir = tmp_path / "docs" / "tickets" / "01-spec"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "T001.md").write_text("# T001\nStatus: pending\n", encoding="utf-8")
+
+    (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
+
+    skills_dir = tmp_path / ".agents" / "skills"
+    for name in ("implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
+        skill_file = skills_dir / name / "SKILL.md"
+        skill_file.parent.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
+
+    config = _make_config()
+
+    doctor = Doctor(
+        command_runner=runner,
+        git_operations=git_ops,  # type: ignore[arg-type]
+        cwd=tmp_path,
+        tickets_dir=tmp_path / "docs" / "tickets",
+        config_loader=FakeConfigLoader(config=config),
+        hook_installer=FakeHookInstaller,  # type: ignore[arg-type]
+    )
+
+    report = await doctor.run(local_only=True, halt_on_failure=False)
+    check_names = [c.name for c in report.checks]
+    assert CHECK_SKILLS in check_names
+    assert CHECK_SIGNAL_CONTRACT in check_names
+    skills_idx = check_names.index(CHECK_SKILLS)
+    contract_idx = check_names.index(CHECK_SIGNAL_CONTRACT)
+    assert contract_idx == skills_idx + 1
 
 
 @pytest.mark.anyio
@@ -871,7 +1070,7 @@ async def test_doctor_run_includes_agents_md_and_skills_checks(tmp_path: Path) -
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -907,7 +1106,7 @@ async def test_doctor_run_order_includes_model_after_config(tmp_path: Path) -> N
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -945,7 +1144,7 @@ async def test_doctor_run_order_includes_terminal_host_after_model(tmp_path: Pat
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")
@@ -1436,7 +1635,7 @@ async def test_doctor_run_passes_live_true_to_check_discord(tmp_path: Path) -> N
     (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n", encoding="utf-8")
 
     skills_dir = tmp_path / ".agents" / "skills"
-    for name in ("implement-ticket-runner", "code-review", "diagnosing-bugs"):
+    for name in ("implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill {name}\n", encoding="utf-8")

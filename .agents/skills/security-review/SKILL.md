@@ -1,15 +1,21 @@
 ---
 name: security-review
-description: Reviews application code for security vulnerabilities, unsafe data handling, secret exposure, and risky defaults before commit, ready-signal, or release.
+description: Reviews application code for security vulnerabilities, unsafe data handling, secret exposure, and risky defaults when a ticket or user explicitly requests a security review.
 ---
 
 # Security Review
 
-Conduct a scoped security audit of pending changes before completing a task or emitting a ready signal.
+Interactive Human + AI security audit of pending changes across trust boundaries.
+
+> **Note**: For autonomous execution by Ticket Runner (`ticket_runner.py`), use `security-review-ticket-runner`. This skill (`security-review`) is strictly for interactive human sessions and escalates blockers directly to the user in chat.
+
+Conduct a scoped security audit of pending changes before completing a task or committing.
 
 ## When to Invoke
 
-Invoke this skill when explicitly flagged by ticket requirements/frontmatter (`Security: required`), by user request, or when changes introduce or modify security-sensitive behavior:
+Invoke this skill only when the ticket frontmatter marks security as required (the `Security:` field is `required`, `true`, or `yes`, with or without bold markup) or by direct user request. Do not invoke it merely because a change touches subprocesses, filesystem paths, network calls, parsers, or other trust boundaries; those are review checkpoints once the skill is active (ADR 0013).
+
+When invoked, scope the review to the relevant areas:
 
 - **Authentication & Access Control**: permissions, roles, access checks, or authorization boundaries.
 - **External Integrations & Network**: API endpoints, webhooks, HTTP requests, or external services.
@@ -24,7 +30,7 @@ Invoke this skill when explicitly flagged by ticket requirements/frontmatter (`S
 - **Dependencies & Build Scripts**: new package dependencies, build scripts, or deployment manifests.
 - **Logging & Telemetry**: log statements, error handlers, or tracebacks that could leak sensitive runtime state.
 - **Trust Boundaries**: any seam exposing internal functionality to another system, user, or service.
-- **General Vulnerability Risk**: any change where a security defect or exploit could reasonably be introduced.
+- **General Vulnerability Risk**: any in-scope change where a security defect or exploit could reasonably be introduced.
 
 ## Review & Remediation Process
 
@@ -34,7 +40,7 @@ Invoke this skill when explicitly flagged by ticket requirements/frontmatter (`S
 4. **Validate Input Handling**: Verify that untrusted inputs are validated, sanitized, and typed at the boundary before processing.
 5. **Check Security Regressions**: Ensure existing security controls, permission checks, or isolation layers are not weakened or bypassed.
 6. **Report Findings**: Document findings ordered by severity (Critical, High, Medium, Low) with location, exploit scenario, and remediation.
-7. **Remediate**: Apply concrete code fixes for security issues introduced by the current change. If remediation requires missing credentials or external architectural decisions, emit a question signal (`.agent/questions/{ticket_id}.json`) to escalate rather than guessing.
+7. **Remediate**: Apply concrete code fixes for security issues introduced by the current change. If remediation requires missing credentials or external architectural decisions, stop and ask the user in chat (or mark the ticket `**Status:** ready-for-human`) rather than guessing.
 8. **Re-verify**: Re-review modified code after applying fixes to confirm the vulnerability is closed without introducing regressions.
 
 ## Output Format

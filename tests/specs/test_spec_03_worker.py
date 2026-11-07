@@ -8,7 +8,7 @@ and real temporary filesystems under ``tmp_dir``:
   US 03: Prompt points at the configured execution skill discipline (TDD, frequent tests)
   US 04: Prompt forbids Worker git commits and requires ``.agent/signals/{ticket_id}_ready.json``
   US 05: Pre-signal ``/code-review`` and conditional ``/security-review`` with ``self_review_notes``
-  US 06: ``.agents/skills/diagnosing-bugs/SKILL.md`` is reachable on disk for hard failures
+  US 06: ``.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`` is reachable on disk for hard failures
   US 07: Real-time JSON stream parsing of token usage, tool invocations, and textual progress
   US 08: Exactly one WARN notice when occupancy crosses 120,000 tokens
   US 09: Automated handoff instruction dispatched to the active session at 135,000 tokens
@@ -216,7 +216,7 @@ class _ArtifactWritingHandle(FakeProcessHandle):
 def _expected_handoff_prompt(checkpoint_path: Path) -> str:
     return (
         "Context budget threshold reached (135k tokens). Execute the handoff skill at "
-        ".agents/skills/handoff/SKILL.md. Save the handoff document directly to "
+        ".agents/skills/handoff-ticket-runner/SKILL.md. Save the handoff document directly to "
         f"{checkpoint_path.as_posix()}. Include modified files, architectural decisions, "
         "test status, and immediate next steps. Then exit."
     )
@@ -331,12 +331,13 @@ def test_spec_03_us_02_to_us_06_initial_prompt_contract(
     # US 05: review self-checks and self_review_notes
     assert "/code-review" in prompt
     assert "/security-review" not in prompt
+    assert "`Security` axis" not in prompt
     assert "self_review_notes" in prompt
 
     # US 06: diagnosing-bugs pointer available on disk
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in prompt
     repo_root = Path(__file__).resolve().parents[2]
-    assert (repo_root / ".agents" / "skills" / "diagnosing-bugs" / "SKILL.md").is_file()
+    assert (repo_root / ".agents" / "skills" / "diagnosing-bugs-ticket-runner" / "SKILL.md").is_file()
 
 
 def test_spec_03_us_05_conditional_security_review_when_flagged(

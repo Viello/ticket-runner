@@ -1,0 +1,5 @@
+interface:
+  display_name: "Handoff Ticket Runner"
+  short_description: "Autonomous context handoff checkpoint writer for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false

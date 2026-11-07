@@ -234,6 +234,58 @@ def test_cli_start_aborted_by_operator_exits_with_code_2(
     assert pending_ticket.status == TicketStatus.PENDING
 
 
+def test_cli_start_intervention_requested_exits_with_code_3_without_abort_message(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    dummy_config = _make_dummy_config(queue_completion="terminate")
+    fake_doc = FakeDoctorPassing(config=dummy_config)
+    monkeypatch.setattr(ticket_runner, "Doctor", lambda *args, **kwargs: fake_doc)
+
+    pending_ticket = Ticket(
+        id="T001",
+        title="Pending Ticket",
+        status=TicketStatus.PENDING,
+        spec_path="docs/specs/test.md",
+        requirements=("R1",),
+        acceptance_criteria=("C1",),
+        gotchas=(),
+        path=Path("docs/tickets/test/T001-pending.md"),
+    )
+    ticket_repo = FakeTicketRepository([pending_ticket])
+    fake_container = build_container(
+        dummy_config,
+        ticket_store=ticket_repo,
+        lock=QueueFileLock(lock_path=tmp_path / ".queue.lock"),
+        processor=lambda t: asyncio.sleep(
+            0.001, result=TicketOutcome.intervention_requested(details="Run /diagnosing-bugs")
+        ),
+    )
+    monkeypatch.setattr(ticket_runner, "build_container", lambda *args, **kwargs: fake_container)
+
+    code = ticket_runner.main(["start", "--local-only"])
+
+    assert code == 3
+    captured = capsys.readouterr()
+    assert "Human intervention requested" in captured.out
+    assert "/diagnosing-bugs" in captured.out
+    assert "Aborted" not in captured.out
+    assert "Aborted" not in captured.err
+    assert pending_ticket.status == TicketStatus.PENDING
+
+
+def test_cli_exit_code_contract_documents_intervention_code_3(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = ticket_runner.main([])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "3    Human intervention requested" in captured.out
+    assert "3" in ticket_runner.EXIT_CODE_CONTRACT
+    assert "Human intervention requested" in ticket_runner.EXIT_CODE_CONTRACT
+
+
 def test_cli_start_empty_queue_terminates_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1105,6 +1157,100 @@ def test_run_start_starts_and_stops_terminal_display(tmp_path: Path) -> None:
     assert code == 0
     assert started is True
     assert stopped is True
+
+
+def test_run_start_starts_and_closes_discord_client(tmp_path: Path) -> None:
+    """run_start connects the container's Discord client before the queue and closes it after."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient()
+    lifecycle_ran = False
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal lifecycle_ran
+            lifecycle_ran = True
+            assert fake_client.started is True
+            assert fake_client.closed is False
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert lifecycle_ran is True
+    assert fake_client.started is True
+    assert fake_client.closed is True
+
+
+def test_run_start_local_only_does_not_start_discord(tmp_path: Path) -> None:
+    """--local-only keeps the Discord client disconnected even when one is wired."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient()
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            local_only=True,
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert fake_client.started is False
+
+
+def test_run_start_continues_when_discord_fails_to_connect(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A Discord connection error must not block the queue lifecycle."""
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake_client = FakeDiscordClient(ready=False, ready_error=RuntimeError("gateway boom"))
+    lifecycle_ran = False
+
+    class FakeOrchestrator:
+        async def run_lifecycle(self, *args: Any, **kwargs: Any) -> int:
+            nonlocal lifecycle_ran
+            lifecycle_ran = True
+            return 0
+
+    class ContainerDouble:
+        orchestrator: Any = FakeOrchestrator()
+        discord_client: Any = fake_client
+
+    code = asyncio.run(
+        ticket_runner.run_start(
+            config_path=tmp_path / "config.yaml",
+            doctor_instance=FakeDoctorPassing(),
+            container_instance=ContainerDouble(),
+        )
+    )
+
+    assert code == 0
+    assert lifecycle_ran is True
+    assert fake_client.closed is True
+    captured = capsys.readouterr()
+    assert "[Discord] Enabled but not connected" in captured.out
 
 
 # ==============================================================================

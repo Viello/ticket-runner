@@ -7,6 +7,11 @@ import re
 from typing import Any
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
+from runner.domain.config import TokenBudgetConfig
+from runner.domain.signal_schema import (
+    render_question_signal_protocol,
+    render_ready_signal_protocol,
+)
 from runner.domain.ticket import Ticket
 
 DEFAULT_INVARIANTS = """## Invariants
@@ -16,7 +21,7 @@ DEFAULT_INVARIANTS = """## Invariants
 - Only the Runner's Gatekeeper passes a ticket, by running configured test/build commands; Worker self-reports don't count; 3 failed attempts trip the circuit breaker (ADR 0002).
 - All automated work happens on `agent/ticket-runner`; the Runner stages and commits, and `.git/hooks/pre-push` blocks pushes (ADR 0005). Never `git push`.
 - Commit format: Title must be `<type>(<scope>): <Title>` where `<scope>` names the architectural layer or subsystem (`packaging`, `domain`, `ports`, `adapters`, `git`, `doctor`, `queue`, `discord`, `ui`), never a ticket number. Follow with a blank line and hyphen-bulleted (`- <action>`) imperative changes without trailing periods. No ticket numbers in title or body.
-- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff/SKILL.md`.
+- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff-ticket-runner/SKILL.md`.
 - Single commit per ticket: Gatekeeper approval authors exactly one commit combining code, tests, newly logged gotchas, and the relocated ticket file (`Status: completed`); never record commit SHA in ticket frontmatter (ADR 0012).
 - Source of truth: Working code, unit tests, and CLI interfaces are authoritative over markdown documentation. Specifications and tickets are ephemeral scaffolding; never modify root living documents (`AGENTS.md`, `ARCHITECTURE.md`, `CONTEXT.md`) without explicit user approval.
 - `.agent/` is untracked runtime state; git-ignore it when implementing.
@@ -113,6 +118,24 @@ def _format_global_gotchas(gotchas_path: str | Path = "docs/tickets/gotchas.md")
     )
 
 
+def _with_token_budget(invariants: str, budget: TokenBudgetConfig | None) -> str:
+    """Rewrite the token-budget invariant line to match the active configuration."""
+    if budget is None:
+        return invariants
+    line = (
+        f"- Token budget: warn {budget.warn // 1000}k, "
+        f"handoff {budget.handoff // 1000}k, "
+        f"hard ceiling {budget.ceiling // 1000}k; "
+        "handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via "
+        "`.agents/skills/handoff-ticket-runner/SKILL.md`."
+    )
+    if re.search(r"^- Token budget:.*$", invariants, re.MULTILINE):
+        return re.sub(
+            r"^- Token budget:.*$", line, invariants, count=1, flags=re.MULTILINE
+        )
+    return f"{invariants.rstrip()}\n{line}"
+
+
 def build_prompt(
     ticket: Ticket,
     spec_excerpt: SpecExcerpt | str,
@@ -122,6 +145,7 @@ def build_prompt(
     spec_path: str | None = None,
     global_gotchas: str | None = None,
     agents_path: str | Path = "AGENTS.md",
+    token_budget: TokenBudgetConfig | None = None,
 ) -> str:
     """Render a pure scoped prompt for an OpenCode Worker session.
 
@@ -133,6 +157,7 @@ def build_prompt(
         spec_path: Optional explicit path to the spec file; inferred if omitted.
         global_gotchas: Optional legacy alias for gotchas_path.
         agents_path: Path to AGENTS.md for inlining repository invariants.
+        token_budget: Active token budget used to rewrite the budget invariant line.
 
     Returns:
         Rendered prompt string containing all operational rules and scoped context.
@@ -157,20 +182,22 @@ def build_prompt(
     effective_gotchas = global_gotchas if global_gotchas is not None else gotchas_path
     formatted_global_gotchas = _format_global_gotchas(effective_gotchas)
 
-    invariants_text = extract_invariants(agents_path)
+    invariants_text = _with_token_budget(extract_invariants(agents_path), token_budget)
+    ready_protocol = render_ready_signal_protocol(ticket.id)
+    question_protocol = render_question_signal_protocol(ticket.id)
 
     security_review_line = ""
     if ticket.security_required:
         security_review_line = (
             "\n   - Explicit Security Mandate: This ticket is explicitly marked `Security: required` in ticket frontmatter. "
-            "Read `.agents/skills/security-review/SKILL.md` using your file-reading tool, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
+            "Read `.agents/skills/security-review-ticket-runner/SKILL.md` using your file-reading tool, run the `Security` axis of the code review, perform an exhaustive security audit of trust boundaries, subprocess invocations, and input sanitization, "
             "and document detailed security findings in `self_review_notes`."
         )
 
     prompt = f"""# Ticket Task: {ticket.id} — {ticket.title}
 
 ## Execution Skill & Discipline
-Before writing or modifying any code, use your file-reading tool (e.g. `read`) to first read and adhere to `{skill_path}`, and then read `AGENTS.md` to ground your work in project-wide architectural constraints. Apply the core implementation discipline:
+Before writing or modifying any code, use your file-reading tool (e.g. `read` / `read_file`) to first read and adhere to `{skill_path}`, and then read `AGENTS.md` to ground your work in project-wide architectural constraints (call your file-reading tool on both files even if they appear preloaded in system rules, because Gatekeeper audits session tool telemetry). Apply the core implementation discipline:
 - Test-Driven Development (TDD) at pre-agreed seams.
 - Fast Feedback Loop: Run targeted single test files matching modified modules (e.g. `python -m pytest tests/unit/application/test_foo.py -x`). Do NOT run the full test suite repeatedly during development loops.
 - Windows Shell Environment: Subcommands run under Windows PowerShell. Never pipe test output to Unix-only utilities (`tail`, `grep`, `head`) as they do not exist on Windows.
@@ -203,35 +230,19 @@ Full specification reference: `{resolved_spec_path}`
    - Strict Queue Immutability: The Worker is strictly forbidden from modifying any other line or section of the active ticket file (the bold-label header, `## What to build`, `## Jump-start`, criterion wording, or `## Gotchas`), editing `docs/tickets/gotchas.md` directly, or touching any other file under `docs/tickets/`. Modifying, moving, or deleting any ticket markdown file under `docs/tickets/` (other than checking off satisfied acceptance criteria in the active ticket file) is strictly prohibited. Ticket relocation, header finalization (`**Status:** completed`), gotchas recording, git staging, and atomic commits are managed exclusively by the Gatekeeper upon independent verification.
    - Do NOT run `git add` or `git commit`. Worker git staging and commits are strictly forbidden. Do not edit `docs/tickets/gotchas.md` directly.
 2. **Review Self-Checks & Severity-Gated Escalation**:
-   - 3-Axis Code Review: Read `.agents/skills/code-review/SKILL.md` using your file-reading tool and evaluate changes across three axes: `Standards`, `Spec`, and `Security`. Summarize verification findings in `self_review_notes`.{security_review_line}
+   - Code Review: Read `.agents/skills/code-review-ticket-runner/SKILL.md` using your file-reading tool (`read` / `read_file`, even if skill summaries are preloaded) and evaluate the uncommitted working-tree changes across the `Standards` and `Spec` axes. Summarize verification findings in `self_review_notes`.{security_review_line}
    - Severity-Gated Escalation:
      - Low and Medium findings never interrupt the human; remediate in-pass or summarize findings in `self_review_notes`.
      - Critical and High findings must be remediated in-pass before signalling readiness.
      - Only if remediation is blocked by an architectural decision or missing secret does the Worker emit `.agent/questions/{ticket.id}.json` and stop working immediately.
-3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs/SKILL.md` using your file-reading tool.
-4. **Ready Signal Protocol**: When implementation and self-reviews are complete, emit the ready signal by writing `.agent/signals/{ticket.id}_ready.json`.
-   The ready Signal JSON payload must follow this exact schema:
-   - `ticket_id`: "{ticket.id}" (must match this active ticket)
-   - `status`: "ready_for_verification"
-   - `modified_files`: array of strings containing repository-relative paths modified during this ticket (e.g. `["runner/application/foo.py"]`)
-   - `self_review_notes`: string summarizing findings, verification results, and standards compliance
-   - `new_gotchas`: array of newly discovered runtime gotchas or lessons learned strings (empty array `[]` if none)
-   - `timestamp`: current ISO-8601 UTC timestamp string
-   - `scope`: optional lowercase architectural layer token (e.g. "application", "domain", "adapters"; omit or null to use the default queue scope; never use a ticket number)
-   **Live QA Verification Contract**:
+3. **Debugging Guidance**: For non-trivial test failures or hard bugs, read `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md` using your file-reading tool.
+4. **Live QA Verification Contract**:
    - Human verification happens after green checks via a `/live-qa` session the human runs.
    - The Worker drafts no scenarios and self-reports no manual verification.
-5. **Question Protocol (Clarification / Blocked)**:
-   If blocked, requirements are ambiguous, or an architectural decision is required:
-   - Write a question Signal to `.agent/questions/{ticket.id}.json` and **stop working immediately**. Do not guess or continue working while blocked.
-   The question Signal JSON payload must follow this exact schema:
-   - `ticket_id`: "{ticket.id}"
-   - `question`: string describing the clarifying question
-   - `type`: "choice" or "text"
-   - `options`: array of choice strings when type is "choice", or null when type is "text"
-   - `status`: "pending"
-   - `answer`: null
-   - `created_at`: current ISO-8601 UTC timestamp string
+
+{ready_protocol}
+
+{question_protocol}
 """
     return prompt
 
@@ -261,7 +272,6 @@ class _BuildDispatcher:
                     agents_path=agents_path,
                 )
             return _class_build
-
         def _instance_build(
             ticket: Ticket,
             spec_excerpt: SpecExcerpt | str,
@@ -283,6 +293,7 @@ class _BuildDispatcher:
                 spec_path=spec_path,
                 global_gotchas=global_gotchas,
                 agents_path=agents,
+                token_budget=instance.token_budget,
             )
 
         return _instance_build
@@ -296,6 +307,7 @@ class PromptBuilder:
         execution_skill: str | Path | None = None,
         gotchas_path: str | Path | None = None,
         agents_path: str | Path | None = None,
+        token_budget: TokenBudgetConfig | None = None,
     ) -> None:
         self.default_execution_skill = (
             Path(execution_skill).as_posix() if execution_skill is not None else None
@@ -306,6 +318,7 @@ class PromptBuilder:
         self.default_agents_path = (
             Path(agents_path).as_posix() if agents_path is not None else "AGENTS.md"
         )
+        self.token_budget = token_budget
 
     build = _BuildDispatcher()
     build_prompt = staticmethod(build_prompt)

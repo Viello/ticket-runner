@@ -13,6 +13,7 @@ class DiscordPyGateway:
 
     def __init__(self, client: discord.Client) -> None:
         self._client = client
+        self._last_resolved_from_parent: bool = False
 
     async def _resolve_channel(self, channel_or_thread_id: str) -> Any:
         try:
@@ -43,6 +44,7 @@ class DiscordPyGateway:
 
     async def _resolve_message(self, channel: Any, message_id: str) -> Any:
         try:
+            self._last_resolved_from_parent = False
             msg_id_int = int(message_id)
         except (ValueError, TypeError) as exc:
             raise DiscordGatewayError(f"Invalid message ID: {message_id!r}") from exc
@@ -57,6 +59,7 @@ class DiscordPyGateway:
                         and channel.parent is not None
                         and hasattr(channel.parent, "fetch_message")
                     ):
+                        self._last_resolved_from_parent = True
                         return await channel.parent.fetch_message(msg_id_int)
                     raise
             if hasattr(channel, "get_partial_message"):
@@ -139,6 +142,8 @@ class DiscordPyGateway:
         channel = await self._resolve_channel(channel_or_thread_id)
         message = await self._resolve_message(channel, message_id)
         try:
+            if self._last_resolved_from_parent:
+                return
             await message.pin()
         except discord.DiscordException as exc:
             raise DiscordGatewayError(f"Failed to pin message {message_id}: {exc}") from exc

@@ -20,14 +20,20 @@ from runner.domain.config import (
 )
 
 
-def _make_config(default_reasoning: str = "", ui: UIConfig | None = None) -> RunnerConfig:
+def _make_config(
+    default_reasoning: str = "",
+    ui: UIConfig | None = None,
+    discord: DiscordConfig | None = None,
+    presence: PresenceConfig | None = None,
+    tokens: TokenBudgetConfig | None = None,
+) -> RunnerConfig:
     return RunnerConfig(
         project=ProjectConfig(name="test", branch="agent/ticket-runner", base_branch="main"),
         worker=WorkerConfig(execution_skill=".agents/skills/implement/SKILL.md"),
         verification=VerificationConfig(test_cmd="pytest"),
-        tokens=TokenBudgetConfig(),
-        presence=PresenceConfig(),
-        discord=DiscordConfig(enabled=False),
+        tokens=tokens or TokenBudgetConfig(),
+        presence=presence or PresenceConfig(),
+        discord=discord or DiscordConfig(enabled=False),
         lifecycle=LifecycleConfig(),
         git=GitConfig(),
         model=ModelConfig(default_reasoning=default_reasoning),
@@ -328,3 +334,57 @@ def test_default_config_execution_skill_resolves_to_implement_ticket_runner() ->
 
     cfg = _default_config()
     assert cfg.worker.execution_skill == ".agents/skills/implement-ticket-runner/SKILL.md"
+
+
+def _discord_enabled_config() -> RunnerConfig:
+    return _make_config(
+        discord=DiscordConfig(enabled=True, channel_id="123", guild_id="456")
+    )
+
+
+def test_build_container_wires_discord_stack_when_enabled(tmp_path: Path) -> None:
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake = FakeDiscordClient()
+    container = build_container(
+        config=_discord_enabled_config(), cwd=tmp_path, discord_client=fake
+    )
+
+    assert container.discord_client is fake
+    assert container.discord_logger is not None
+    assert container.discord_thread_manager is not None
+    assert container.processor.is_discord_enabled is True
+    assert container.orchestrator.discord_thread_manager is container.discord_thread_manager
+
+
+def test_build_container_skips_discord_when_local_only(tmp_path: Path) -> None:
+    from tests.fakes.fake_discord_client import FakeDiscordClient
+
+    fake = FakeDiscordClient()
+    container = build_container(
+        config=_discord_enabled_config(),
+        cwd=tmp_path,
+        local_only=True,
+        discord_client=fake,
+    )
+
+    assert container.discord_client is None
+    assert container.discord_logger is None
+    assert container.discord_thread_manager is None
+    assert container.processor.is_discord_enabled is False
+
+
+def test_build_container_skips_discord_when_disabled(tmp_path: Path) -> None:
+    container = build_container(config=_make_config(), cwd=tmp_path)
+
+    assert container.discord_client is None
+    assert container.discord_logger is None
+    assert container.discord_thread_manager is None
+    assert container.processor.is_discord_enabled is False
+
+
+def test_build_container_honors_presence_default_mode(tmp_path: Path) -> None:
+    config = _make_config(presence=PresenceConfig(default_mode="away"))
+    container = build_container(config=config, cwd=tmp_path)
+
+    assert container.state_coordinator.get_or_create_state().presence_mode == "away"

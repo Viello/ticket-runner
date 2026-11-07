@@ -385,5 +385,6 @@ def test_client_init_with_coordinators(
         state_store=mock_store,
         presence_coordinator=mock_presence,
         state_coordinator=mock_state,
+        notify_user_id=sample_discord_config.notify_user_id,
     )
 

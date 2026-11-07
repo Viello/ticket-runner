@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+import logging
 import time
 from typing import Any, Protocol, runtime_checkable
 
@@ -29,6 +30,9 @@ STANDBY_BANNER = (
     "[Queue] All tickets processed. Standing by watching docs/tickets/ for new tickets "
     "(standby, Ctrl+C to exit)."
 )
+INTERVENTION_NEXT_STEP = "Run /diagnosing-bugs, then restart the Runner when ready."
+
+logger = logging.getLogger(__name__)
 
 
 class TicketOutcomeStatus(str, Enum):
@@ -392,7 +396,12 @@ class QueueOrchestrator:
         approved = sum(1 for o in self._lifecycle_outcomes if o.is_approved)
         skipped = sum(1 for o in self._lifecycle_outcomes if o.is_skipped)
         aborted = sum(1 for o in self._lifecycle_outcomes if o.is_aborted)
+        awaiting = sum(1 for o in self._lifecycle_outcomes if o.is_intervention_requested)
         total = len(self._lifecycle_outcomes)
+
+        counts = f"{approved} approved, {skipped} skipped, {aborted} aborted"
+        if awaiting > 0:
+            counts = f"{counts}, {awaiting} awaiting intervention"
 
         commit_shas = [o.commit_sha[:7] for o in self._lifecycle_outcomes if o.commit_sha]
         commits_str = ", ".join(commit_shas) if commit_shas else "none"
@@ -413,8 +422,7 @@ class QueueOrchestrator:
 
         printer("[Queue] --- Completion Summary ---")
         printer(
-            f"[Queue] Tickets processed: {total} "
-            f"({approved} approved, {skipped} skipped, {aborted} aborted)"
+            f"[Queue] Tickets processed: {total} ({counts})"
         )
         printer(f"[Queue] Commits authored: {commits_str}")
         printer(f"[Queue] Working branch: {branch}")
@@ -670,6 +678,15 @@ class QueueOrchestrator:
             )
             raise UserAbortError(msg)
 
+        elif outcome.is_intervention_requested:
+            self._last_outcome = outcome
+            if self._state_coordinator is not None:
+                self._state_coordinator.transition_to_waiting_for_user()
+            self._is_paused = True
+            self.release_lock()
+            self._emit_intervention_message(ticket.id)
+            return outcome
+
         else:
             raise ValueError(f"Unsupported ticket outcome status: {outcome.status}")
 
@@ -693,7 +710,40 @@ class QueueOrchestrator:
             if outcome is None:
                 break
             outcomes.append(outcome)
+            if outcome.is_intervention_requested:
+                break
         return outcomes
+
+    @staticmethod
+    def _format_intervention_message(ticket_desc: str = "") -> str:
+        """Render the queue-stopped notice for a ticket description suffix."""
+        return (
+            f"Human intervention requested{ticket_desc}. "
+            f"Queue stopped; ticket left pending. {INTERVENTION_NEXT_STEP}"
+        )
+
+    def _emit_intervention_message(self, ticket_id: str) -> None:
+        """Announce that the queue stopped for human intervention."""
+        message = self._format_intervention_message(f" for ticket '{ticket_id}'")
+        if self._ui_event_sink is not None:
+            try:
+                self._ui_event_sink.emit("runner", message)
+            except Exception:
+                pass
+        logger.info(message)
+
+    async def _stop_for_intervention(
+        self,
+        printer: Callable[[str], None],
+        clock: Callable[[], float],
+    ) -> int:
+        """Print the intervention notice and completion summary, returning exit code 3."""
+        pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
+        ticket_desc = f" for ticket '{pending.id}'" if pending is not None else ""
+        printer(f"[Queue] {self._format_intervention_message(ticket_desc)}")
+        self.release_lock()
+        await self.print_completion_summary(printer=printer, clock=clock)
+        return 3
 
     async def _handle_clean_slate(
         self,
@@ -755,7 +805,8 @@ class QueueOrchestrator:
             total_tokens: Optional total tokens consumed override for tests.
 
         Returns:
-            Exit status code (0 clean terminate/stop, 1 runtime error, 2 abort, 130 SIGINT).
+            Exit status code (0 clean terminate/stop, 1 runtime error, 2 abort,
+            3 human intervention requested, 130 SIGINT).
 
         Raises:
             RuntimeError: If pending tickets exist or arrive without a configured processor.
@@ -819,6 +870,8 @@ class QueueOrchestrator:
                     if outcome is None:
                         break
                     self._lifecycle_outcomes.append(outcome)
+                    if outcome.is_intervention_requested:
+                        return await self._stop_for_intervention(printer, active_clock)
 
             pending = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
             if pending is not None and (stop_event is not None and stop_event.is_set()):
@@ -919,6 +972,8 @@ class QueueOrchestrator:
                         if outcome is None:
                             break
                         self._lifecycle_outcomes.append(outcome)
+                        if outcome.is_intervention_requested:
+                            return await self._stop_for_intervention(printer, active_clock)
 
                     remaining = self._ticket_store.select_next_pending(spec_slug=self._spec_slug)
                     if remaining is None:

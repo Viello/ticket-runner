@@ -70,6 +70,7 @@ ticket-runner/
 │   │   ├── ticket.py                 # Ticket (mode, status_note, jump_start, checked_criteria), TicketStatus
 │   │   ├── state.py                  # RunnerState, StateStatus, crash recovery state
 │   │   ├── signal.py                 # ReadySignal, QuestionSignal, SignalStatus, verification models
+│   │   ├── signal_schema.py          # SignalFieldSpec, ready/question field inventory and renderers
 │   │   ├── status_event.py           # Domain events for queue and worker state changes
 │   │   ├── telemetry.py              # WorkerEvent, TokenUsage, ToolCall, WorkerMessage
 │   │   ├── config.py                 # Frozen domain config (merges global config + project overlay)

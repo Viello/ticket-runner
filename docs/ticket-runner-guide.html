@@ -1,0 +1,2162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Interactive single-file walkthrough of the Ticket Runner orchestrator: end-to-end sample scenario across four tickets, execution traces, state files, signals, handoff payloads, and Mermaid diagrams.">
+<title>Ticket Runner — End-to-End Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Ticket Runner Guide — design tokens (ui-ux-pro-max: Slate/OLED dark)
+   Palette: bg #0F172A · surface #1E293B · accent #22C55E
+   Type: IBM Plex Sans (body) / JetBrains Mono (code)
+   ============================================================ */
+:root{
+  --bg:#0F172A;
+  --bg-soft:#121A2F;
+  --card:#1B2336;
+  --card-2:#1E293B;
+  --muted:#272F42;
+  --border:rgba(71,85,105,.55);
+  --border-strong:rgba(100,116,139,.7);
+  --fg:#F8FAFC;
+  --fg-dim:#CBD5E1;
+  --fg-muted:#94A3B8;
+  --accent:#22C55E;
+  --accent-soft:rgba(34,197,94,.12);
+  --accent-bright:#4ADE80;
+  --blue:#60A5FA;
+  --sky:#7DD3FC;
+  --cyan:#67E8F9;
+  --violet:#C4B5FD;
+  --amber:#FCD34D;
+  --red:#F87171;
+  --orange:#FDBA74;
+  --ring:#60A5FA;
+  --mono:"JetBrains Mono",ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+  --nav-h:56px;
+  --radius:12px;
+  --radius-sm:8px;
+  --shadow:0 10px 30px rgba(2,6,23,.55);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-padding-top:calc(var(--nav-h) + 18px)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font-family:var(--sans);font-size:15.5px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(80rem 40rem at 85% -12%,rgba(30,64,175,.14),transparent 60%),radial-gradient(64rem 34rem at -10% 8%,rgba(16,185,129,.07),transparent 60%);
+}
+a{color:var(--sky);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+.skip{position:absolute;left:-9999px;top:0;background:var(--card-2);color:var(--fg);padding:.6rem 1rem;border:1px solid var(--border-strong);border-radius:0 0 var(--radius-sm) 0;z-index:100}
+.skip:focus{left:0}
+html{cursor:default}
+button{cursor:pointer}
+
+/* ---------- top navigation ---------- */
+.topnav{
+  position:sticky;top:0;z-index:60;height:var(--nav-h);
+  display:flex;align-items:center;gap:.75rem;
+  padding:0 clamp(.9rem,3vw,1.6rem);
+  background:rgba(15,23,42,.86);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.topnav .brand{display:flex;align-items:center;gap:.55rem;font-weight:700;letter-spacing:.01em;white-space:nowrap}
+.topnav .brand .flag{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#14532d,#166534);display:grid;place-items:center;border:1px solid rgba(34,197,94,.5);color:var(--accent-bright);flex:none}
+.topnav nav{display:flex;gap:.15rem;overflow-x:auto;scrollbar-width:none;margin-left:.25rem}
+.topnav nav::-webkit-scrollbar{display:none}
+.topnav nav a{padding:.42rem .7rem;border-radius:999px;color:var(--fg-muted);font-size:.86rem;white-space:nowrap;transition:color .15s ease,background .15s ease}
+.topnav nav a:hover{color:var(--fg);text-decoration:none;background:rgba(51,65,85,.45)}
+.topnav nav a.active{color:var(--fg);background:rgba(34,197,94,.14);box-shadow:inset 0 0 0 1px rgba(34,197,94,.35)}
+.topnav .nav-spacer{flex:1}
+.topnav .ver{font-family:var(--mono);font-size:.72rem;color:var(--fg-muted);border:1px solid var(--border);padding:.18rem .5rem;border-radius:999px;white-space:nowrap}
+@media(max-width:719px){.topnav .ver{display:none}}
+
+/* ---------- layout ---------- */
+main{max-width:1120px;margin:0 auto;padding:0 clamp(.9rem,3vw,1.6rem) 5rem}
+section{margin-top:4.2rem}
+h2.sec{display:flex;align-items:center;gap:.7rem;font-size:clamp(1.35rem,2.6vw,1.75rem);margin:0 0 .4rem;letter-spacing:-.01em}
+h2.sec .no{font-family:var(--mono);font-size:.85rem;color:var(--accent-bright);border:1px solid rgba(34,197,94,.4);background:var(--accent-soft);border-radius:8px;padding:.18rem .55rem;line-height:1.35;flex:none}
+p.lead{color:var(--fg-dim);max-width:76ch;margin:.2rem 0 1.2rem}
+h3{font-size:1.08rem;margin:1.6rem 0 .55rem;color:var(--fg)}
+h4{font-size:.95rem;margin:1.1rem 0 .4rem;color:var(--fg-dim)}
+code.k{font-family:var(--mono);font-size:.86em;background:var(--muted);border:1px solid var(--border);border-radius:5px;padding:.08em .38em;color:var(--fg);white-space:nowrap}
+hr.div{border:none;border-top:1px solid var(--border);margin:2.6rem 0}
+
+/* ---------- hero ---------- */
+.hero{padding:3.4rem 0 1.2rem;border-bottom:1px solid var(--border);margin-bottom:0}
+.hero h1{font-size:clamp(1.9rem,4.6vw,2.7rem);line-height:1.15;margin:.2rem 0 .5rem;letter-spacing:-.02em}
+.hero h1 .grow{background:linear-gradient(90deg,var(--accent-bright),var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p.sub{color:var(--fg-dim);max-width:80ch;margin:0 0 1.1rem;font-size:1.02rem}
+.chiprow{display:flex;flex-wrap:wrap;gap:.45rem;margin:0 0 1.2rem}
+.chip{font-family:var(--mono);font-size:.72rem;color:var(--fg-dim);border:1px solid var(--border);background:var(--card);border-radius:999px;padding:.26rem .6rem;display:inline-flex;align-items:center;gap:.4rem}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--fg-muted);flex:none}
+.chip.ok .dot{background:var(--accent)}
+.chip.blue .dot{background:var(--blue)}
+.chip.violet .dot{background:var(--violet)}
+.runbox{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;max-width:820px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;background:#0B1222;margin:1rem 0}
+.runbox .prompt{font-family:var(--mono);font-size:.83rem;color:var(--accent-bright);display:grid;place-items:center;padding:0 .7rem;background:rgba(34,197,94,.08);border-right:1px solid var(--border)}
+.runbox code{font-family:var(--mono);font-size:.83rem;color:var(--fg-dim);padding:.72rem .9rem;flex:1 1 240px;overflow-x:auto;white-space:nowrap}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.65rem;margin-top:1.2rem}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.7rem .85rem}
+.stat .v{font-family:var(--mono);font-size:1.05rem;font-weight:700}
+.stat .l{font-size:.74rem;color:var(--fg-muted);margin-top:.1rem}
+
+/* ---------- cards / concept grid ---------- */
+.grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:.8rem;margin:1rem 0}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.95rem 1rem;transition:border-color .2s ease,transform .2s ease}
+.card:hover{border-color:var(--border-strong)}
+.card h5{margin:.1rem 0 .35rem;font-size:.9rem;display:flex;align-items:center;gap:.45rem}
+.card p{margin:0;font-size:.83rem;color:var(--fg-muted)}
+.card .t-kw{font-family:var(--mono);font-size:.68rem;color:var(--accent-bright);background:var(--accent-soft);border-radius:5px;padding:.1rem .4rem;display:inline-block;margin-bottom:.4rem}
+
+/* ---------- callouts ---------- */
+.note{display:flex;gap:.75rem;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:var(--radius-sm);padding:.85rem 1rem;margin:1rem 0;font-size:.88rem;color:var(--fg-dim)}
+.note .i{flex:none;margin-top:.12rem;color:var(--blue)}
+.note.warn{border-left-color:var(--amber)}.note.warn .i{color:var(--amber)}
+.note.danger{border-left-color:var(--red)}.note.danger .i{color:var(--red)}
+.note.okn{border-left-color:var(--accent)}.note.okn .i{color:var(--accent-bright)}
+.note b{color:var(--fg)}
+.note code{color:var(--sky)}
+
+/* ---------- code windows ---------- */
+.codewin{border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;background:#0B1222;margin:.7rem 0;box-shadow:var(--shadow)}
+.codewin .bar{display:flex;align-items:center;gap:.5rem;background:var(--card-2);border-bottom:1px solid var(--border);padding:.4rem .4rem .4rem .75rem}
+.codewin .bar .lang{font-family:var(--mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-muted)}
+.codewin .bar .file{font-family:var(--mono);font-size:.72rem;color:var(--sky)}
+.codewin .bar .sp{flex:1}
+.codewin pre{margin:0;padding:.85rem 1rem;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.6;color:var(--fg-dim);tab-size:4}
+.codewin pre code{background:none;padding:0}
+.copybtn{display:inline-flex;align-items:center;gap:.35rem;font-family:var(--mono);font-size:.68rem;color:var(--fg-muted);background:var(--muted);border:1px solid var(--border);border-radius:6px;padding:.3rem .55rem;transition:color .15s,border-color .15s,bg .15s}
+.copybtn:hover{color:var(--fg);border-color:var(--border-strong)}
+.copybtn .i{width:13px;height:13px}
+
+/* console syntax tinting */
+.bash .t-p{color:var(--accent-bright);font-weight:600}
+.g{color:var(--accent-bright)}.r{color:var(--red)}.y{color:var(--amber)}.b{color:var(--sky)}.v{color:var(--violet)}.c{color:var(--cyan)}.d{color:var(--fg-muted)}.w{color:var(--fg);font-weight:600}
+.tag{font-weight:700}
+.tag.tk{color:var(--cyan)}.tag.tg{color:var(--violet)}.tag.tt{color:var(--amber)}.tag.ts{color:var(--sky)}.tag.tr{color:var(--orange)}
+.chg{display:block;background:rgba(34,197,94,.13);box-shadow:inset 2px 0 0 var(--accent)}
+.rm{display:block;background:rgba(248,113,113,.14);box-shadow:inset 2px 0 0 var(--red)}
+.pos{color:var(--green,#4ADE80);font-weight:700}
+/* JSON & markdown accents */
+.jkey{color:var(--sky)}
+.jstr{color:#A7F3D0}
+.jerr{color:var(--red)}
+.jnum{color:var(--amber)}
+.mkey{color:var(--fg);font-weight:700}
+.msec{color:var(--cyan);font-weight:700}
+.mval{color:var(--fg-dim)}
+.mtick{color:var(--accent-bright)}
+.mfil{color:var(--red);font-weight:700}
+
+/* ---------- badges ---------- */
+.badge{display:inline-flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.68rem;font-weight:700;letter-spacing:.05em;border-radius:999px;padding:.24rem .62rem;border:1px solid transparent;white-space:nowrap}
+.badge .i{width:12px;height:12px}
+.badge.completed{color:var(--accent-bright);background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.45)}
+.badge.retrying{color:var(--amber);background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.4)}
+.badge.blocked{color:var(--red);background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.45)}
+.badge.skipped{color:var(--fg-muted);background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.4)}
+.badge.working{color:var(--sky);background:rgba(125,211,252,.1);border-color:rgba(125,211,252,.4)}
+.badge.gatekeeper{color:var(--violet);background:rgba(196,181,253,.1);border-color:rgba(196,181,253,.4)}
+.badge.waiting{color:var(--orange);background:rgba(253,186,116,.1);border-color:rgba(253,186,116,.45)}
+.badge.pending{color:var(--fg-dim);background:rgba(148,163,184,.08);border-color:var(--border)}
+.badge.handoffx{color:var(--cyan);background:rgba(103,232,249,.09);border-color:rgba(103,232,249,.38)}
+.badge.failedx{color:var(--red);background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.4)}
+.pulse{animation:bpulse 2.2s ease-in-out infinite}
+@keyframes bpulse{0%,100%{opacity:1}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+
+/* ---------- ticket cards & accordions ---------- */
+.ticket{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin:1rem 0;overflow:hidden;box-shadow:var(--shadow)}
+.ticket>summary{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;padding:.8rem 1rem;cursor:pointer;background:linear-gradient(180deg,rgba(30,41,59,.5),transparent);list-style:none;user-select:none}
+.ticket>summary::-webkit-details-marker{display:none}
+.ticket>summary .t-id{font-family:var(--mono);font-weight:700;color:var(--cyan);font-size:.9rem}
+.ticket>summary .t-title{font-weight:600;font-size:.92rem}
+.ticket>summary .t-meta{margin-left:auto;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.ticket>summary .chev{color:var(--fg-muted);transition:transform .25s ease;flex:none}
+details[open]>summary .chev{transform:rotate(180deg)}
+.ticket .t-body{padding:0 1rem 1.1rem}
+.step{border:1px solid var(--border);border-radius:var(--radius-sm);margin:.8rem 0;background:var(--bg-soft);overflow:hidden}
+.step>summary{display:flex;align-items:center;gap:.6rem;padding:.62rem .9rem;cursor:pointer;list-style:none}
+.step>summary::-webkit-details-marker{display:none}
+.step>summary:hover{background:rgba(51,65,85,.28)}
+.step[open]>summary{border-bottom:1px solid var(--border);background:rgba(30,41,59,.38)}
+.step>summary .s-no{font-family:var(--mono);font-size:.7rem;color:var(--bg);background:var(--sky);border-radius:5px;padding:.12rem .42rem;font-weight:700;flex:none}
+.step>summary .s-title{font-size:.88rem;font-weight:600;color:var(--fg);flex:1}
+.step>summary .s-badges{display:flex;gap:.35rem;flex-wrap:wrap}
+.step>summary .chev{width:15px;height:15px;color:var(--fg-muted);transition:transform .25s ease}
+.step .s-body{padding:.85rem .9rem 1rem}
+.s-prose{font-size:.86rem;color:var(--fg-dim);max-width:82ch;margin:.15rem 0 .5rem}
+.s-prose code{color:var(--sky)}
+
+/* merge step number variants */
+.step>summary .s-no.orange{background:var(--orange)}
+.step>summary .s-no.green{background:var(--accent-bright)}
+.step>summary .s-no.violet{background:var(--violet)}
+.step>summary .s-no.amber{background:var(--amber)}
+.step>summary .s-no.red{background:var(--red);color:#0F172A}
+
+/* ---------- 3-pane comparison ---------- */
+.panes{display:grid;grid-template-columns:1.08fr .98fr 1.06fr;gap:.7rem;margin-top:.4rem}
+@media(max-width:1000px){.panes{grid-template-columns:1fr}}
+@media(max-width:560px){.panes{grid-template-columns:1fr}}
+.pane{border:1px solid var(--border);border-radius:var(--radius-sm);background:#0B1222;min-width:0;display:flex;flex-direction:column}
+.pane .p-h{display:flex;align-items:center;gap:.5rem;padding:.45rem .7rem;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:.68rem;letter-spacing:.05em;text-transform:uppercase;color:var(--fg-muted)}
+.pane .p-h .p-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.pane.terminal .p-dot{background:var(--accent)}
+.pane.files .p-dot{background:var(--blue)}
+.pane.signals .p-dot{background:var(--violet)}
+.pane pre{margin:0;padding:.7rem .8rem;overflow-x:auto;font-family:var(--mono);font-size:.73rem;line-height:1.58;color:var(--fg-dim)}
+
+/* ---------- dependency / module tables ---------- */
+.dt{width:100%;border-collapse:collapse;font-size:.84rem;margin:.8rem 0}
+.dt caption{caption-side:top;text-align:left;font-family:var(--mono);font-size:.72rem;color:var(--fg-muted);padding:.2rem 0 .45rem;letter-spacing:.05em;text-transform:uppercase}
+.dt th{font-family:var(--mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-muted);text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--border-strong)}
+.dt td{padding:.55rem .6rem;border-bottom:1px solid var(--border);color:var(--fg-dim);vertical-align:top}
+.dt tr:last-child td{border-bottom:none}
+.dt td:first-child{color:var(--fg);font-weight:600;white-space:nowrap}
+.dt code{font-family:var(--mono);font-size:.8rem;color:var(--sky)}
+
+/* ---------- ticket rail ---------- */
+.rail{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:1.1rem 0 1.4rem}
+.rail a{display:flex;align-items:center;gap:.45rem;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:.4rem .8rem;font-family:var(--mono);font-size:.74rem;color:var(--fg-dim);transition:border-color .15s,color .15s}
+.rail a:hover{text-decoration:none;border-color:var(--border-strong);color:var(--fg)}
+.rail a.r-done{border-color:rgba(34,197,94,.5);color:var(--accent-bright)}
+.rail a.r-warn{border-color:rgba(251,191,36,.5);color:var(--amber)}
+.rail a.r-hold{border-color:rgba(248,113,113,.55);color:var(--red)}
+.rail .sep{width:26px;height:1px;background:var(--border-strong);flex:none}
+
+/* ---------- diagrams ---------- */
+.diagram-frame{border:1px solid var(--border-strong);border-radius:var(--radius);background:#0B1222;overflow:hidden;box-shadow:var(--shadow);margin:1.1rem 0}
+.diagram-frame .d-bar{display:flex;align-items:center;gap:.55rem;padding:.55rem .8rem;border-bottom:1px solid var(--border);background:var(--card-2)}
+.diagram-frame .d-bar .d-title{font-size:.84rem;font-weight:600;color:var(--fg)}
+.diagram-frame .d-bar .d-sub{font-family:var(--mono);font-size:.7rem;color:var(--fg-muted)}
+.diagram-frame .d-bar .sp{flex:1}
+.dbtn{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--muted);color:var(--fg-dim);transition:color .15s,border-color .15s}
+.dbtn:hover{color:var(--fg);border-color:var(--border-strong)}
+.dbtn .i{width:16px;height:16px}
+.diagram-view{position:relative;overflow:auto;padding:1rem .6rem;background:linear-gradient(rgba(51,65,85,.16) 1px,transparent 1px),linear-gradient(90deg,rgba(51,65,85,.16) 1px,transparent 1px);background-size:26px 26px;min-height:260px;touch-action:none}
+.diagram-view.undragged{touch-action:auto}
+.diagram-stage{transform-origin:0 0;width:max-content;min-width:100%;cursor:grab}
+.diagram-stage.dragging{cursor:grabbing}
+.diagram-stage svg{max-width:none !important;height:auto;transition:transform .18s ease}
+@media (prefers-reduced-motion:reduce){.diagram-stage svg{transition:none}}
+.mermaid{display:flex;justify-content:center;font-family:var(--mono)}
+.mermaid-fallback{white-space:pre;overflow:auto;font-family:var(--mono);font-size:.76rem;color:var(--amber);background:#0B1222;padding:1rem}
+.mermaid-error{font-family:var(--mono);font-size:.74rem;color:var(--red)}
+.d-hint{font-family:var(--mono);font-size:.68rem;color:var(--fg-muted);padding:0 .8rem .55rem}
+
+/* ---------- evidence card ---------- */
+.ecard{border:1px dashed rgba(103,232,249,.5);background:rgba(103,232,249,.05);border-radius:var(--radius-sm);padding:.9rem 1rem;margin:.8rem 0;max-width:860px}
+.ecard .e-t{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--cyan);margin-bottom:.5rem;display:flex;gap:.5rem;align-items:center}
+.ecard dl{display:grid;grid-template-columns:170px 1fr;gap:.3rem .8rem;margin:0;font-size:.83rem}
+.ecard dt{color:var(--fg-muted)}
+.ecard dd{margin:0;color:var(--fg-dim)}
+.ecard dd code{font-family:var(--mono);color:var(--sky)}
+
+/* ---------- reference lists ---------- */
+.tree{columns:1}
+.tree li{margin:.15rem 0}
+ul.refs{margin:.4rem 0 .4rem 1.1rem;padding:0}
+ul.refs li{margin:.3rem 0;font-size:.87rem;color:var(--fg-dim)}
+footer{border-top:1px solid var(--border);margin-top:4rem;padding:1.6rem 0 .4rem;color:var(--fg-muted);font-size:.8rem}
+footer .mono{font-family:var(--mono)}
+kbd{font-family:var(--mono);font-size:.78em;border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:5px;padding:.05em .4em;background:var(--muted);color:var(--fg-dim)}
+.readout{font-family:var(--mono);font-size:.68rem;color:var(--fg-muted)}
+@media print{.topnav,.dbtn,.copybtn,.d-hint{display:none}.diagram-view{overflow:visible}body{background:#fff}}
+</style>
+</head>
+<body>
+<a class="skip" href="#overview">Skip to content</a>
+
+<!-- SVG sprite (Lucide-style 24x24 stroke icons — vector only, no emoji) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <g id="i-def" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></g>
+    <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3 8-10V5l-8-3-8 3v7c0 7 8 10 8 10z"/><polyline points="9 12 11 14 15.5 9.5"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+    <symbol id="i-commit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="12" x2="7" y2="12"/><line x1="17" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="3.5"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="5.7" y1="5.7" x2="18.3" y2="18.3"/></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8.5 12.5 11 15 15.5 9.5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.4" fill="currentColor"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M3 15v4a2 2 0 0 0 2 2h4"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6.5a2 2 0 0 0-4 0V11m0-1.5V4a2 2 0 0 0-4 0v5.5M10 9V6a2 2 0 0 0-4 0v9a8 8 0 0 0 8 8h1a8 8 0 0 0 8-8v-1.5a2 2 0 0 0-4 0"/></symbol>
+  </defs>
+</svg>
+
+<header class="topnav">
+  <span class="brand"><span class="flag"><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-play"/></svg></span>Ticket Runner</span>
+  <nav aria-label="Page sections">
+    <a href="#overview">Overview</a>
+    <a href="#architecture">System map</a>
+    <a href="#scenario">Scenario</a>
+    <a href="#trace">Execution trace</a>
+    <a href="#reference">Reference</a>
+  </nav>
+  <span class="nav-spacer"></span>
+  <span class="ver">v-showcase · opencode + antigravity</span>
+</header>
+
+<main id="top">
+
+<!-- ================================================== HERO -->
+<div class="hero">
+  <div class="chiprow">
+    <span class="chip blue"><span class="dot"></span>external Python orchestrator</span>
+    <span class="chip ok"><span class="dot"></span>OpenCode CLI adapter</span>
+    <span class="chip ok"><span class="dot"></span>Antigravity CLI (agy) adapter</span>
+    <span class="chip violet"><span class="dot"></span>Gatekeeper + Circuit Breaker</span>
+    <span class="chip"><span class="dot"></span>durable signal files, never stdout</span>
+  </div>
+  <h1>How the <span class="grow">Ticket Runner</span> drives a queue of AI coding agents — end to end.</h1>
+  <p class="sub">
+    A single-page walkthrough of the real orchestration loop: a sequential queue of 4 tickets, two equal CLI agent adapters
+    (<code class="k">opencode run</code> and <code class="k">agy -p</code>), the Gatekeeper's independent verification gate, retry with
+    bounded failure triage, Context Handoffs at the token ceiling, and human-in-the-loop escalation when everything that can go
+    wrong, does. Every log line, JSON document, prompt payload, and diagram below traces <strong>one concrete story</strong>.
+  </p>
+  <div class="runbox">
+    <span class="prompt">$</span>
+    <code id="runcmd">py -3 D:\Projects\ticket_runner.py --project-dir D:\Repos\inventory-service start</code>
+  </div>
+  <div class="statgrid">
+    <div class="stat"><div class="v">4</div><div class="l">tickets in one sequential queue</div></div>
+    <div class="stat"><div class="v">2</div><div class="l">agent adapters (AgentWorker port)</div></div>
+    <div class="stat"><div class="v">3</div><div class="l">verification attempts before the Circuit Breaker</div></div>
+    <div class="stat"><div class="v">120k/135k/150k</div><div class="l">token warn / handoff / ceiling budget</div></div>
+    <div class="stat"><div class="v">1</div><div class="l">Gatekeeper-authored commit per ticket</div></div>
+  </div>
+</div>
+
+<!-- ================================================== 1. OVERVIEW -->
+<section id="overview">
+  <h2 class="sec"><span class="no">01</span> What Ticket Runner is</h2>
+  <p class="lead">
+    Ticket Runner is an <strong>external Python process</strong> — it never lives inside your codebase. You point it at a
+    <strong>Target Project</strong> with <code class="k">--project-dir</code>; it scans <code class="k">docs/tickets/&lt;spec-slug&gt;/</code>,
+    picks pending tickets in order, and supervises an AI coding agent subprocess that implements each one inside the
+    Target's git working tree. The Runner alone decides when the work is done: the <strong>Gatekeeper</strong> runs the
+    project's own test/build commands, and only a green gate — never the agent's self-report — moves a ticket to
+    <code class="k">completed</code>.
+  </p>
+
+  <div class="grid-cards">
+    <div class="card"><span class="t-kw">The Runner</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-terminal"/></svg> Orchestrator process</h5><p>Drives the queue, supervises worker sessions, runs the Gatekeeper, interacts via Rich TUI (nearby) or a Discord bot (away). Clean Architecture: domain ← ports ← application ← adapters.</p></div>
+    <div class="card"><span class="t-kw">The Worker</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-zap"/></svg> Agent subprocess</h5><p>OpenCode or Antigravity CLI invoked headlessly per ticket. It edits the Target Project, but never commits, never edits the queue files, never pushes — and its self-reports carry no status authority.</p></div>
+    <div class="card"><span class="t-kw">Worker Session</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-clock"/></svg> ses_… / conversation_id</h5><p>One OpenCode <code>ses_…</code> session (or Antigravity <code>conversation_id</code> UUID) bound to one ticket, spanning one or more <em>Session Runs</em> across Context Handoffs. Sessions are resumed — not rebuilt.</p></div>
+    <div class="card"><span class="t-kw">Gatekeeper</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-shield"/></svg> Independent verifier</h5><p>Runs <code>build_cmd</code> then <code>test_cmd</code> from the Target's <code>ticket-runner.yaml</code> and enforces the dispatch baseline: only checkbox ticks may change in the ticket file between dispatch and signal.</p></div>
+    <div class="card"><span class="t-kw">Signal</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-radio"/></svg> Durable file IPC</h5><p>Worker → Runner messages are strict JSON files: <code>.agent/signals/{ticket_id}_ready.json</code> and <code>.agent/questions/{ticket_id}.json</code>. Model stdout is <em>never</em> parsed for state.</p></div>
+    <div class="card"><span class="t-kw">Context Handoff</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-arrow"/></svg> Token-budget compaction</h5><p>At 135k tokens the supervisor ends the Session Run, asks the Worker to write a 5-section checkpoint to <code>.agent/checkpoints/{ticket_id}/handoff.md</code>, then resumes with a fresh session reading it.</p></div>
+    <div class="card"><span class="t-kw">Circuit Breaker</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-ban"/></svg> Escalation halt</h5><p>3 failed Verification Attempts (worker run + signal validation + gate) trip the breaker: state becomes <code>CIRCUIT_BREAKER_TRIPPED</code>, the queue halts, and a human must untangle it.</p></div>
+    <div class="card"><span class="t-kw">Evidence Card</span><h5><svg class="i" width="15" height="15" aria-hidden="true"><use href="#i-check"/></svg> Human sign-off artifact</h5><p>In human mode, green checks pause before commit and present an Evidence Card (test status, harness status, bounded evidence paths, unticked criteria) via terminal prompt or Discord <code>/approve</code>.</p></div>
+  </div>
+
+  <div class="note okn">
+    <svg class="i" width="16" height="16" aria-hidden="true"><use href="#i-shield"/></svg>
+    <div><b>Fidelity note.</b> Every identifier in this guide is real: command flags (<code class="k">--variant</code> vs <code class="k">--effort</code>, <code class="k">--session ses_…</code> vs <code class="k">--conversation uuid</code>), state file schemas (<code class="k">runner/domain/state.py</code>, <code class="k">runner/domain/signal.py</code>), module names (<code class="k">QueueOrchestrator</code>, <code class="k">WorkerSupervisor</code>, <code class="k">EvidenceTriage</code>), and the ticket document format (Specimen A bold-label headers — <code class="k">**Mode:**</code>, <code class="k">**Status:**</code>, <code class="k">**Blocked by:**</code> — with <code class="k">- [ ]</code> acceptance criteria). Ticket IDs follow the enforced pattern <code class="k">^T\d{3,}$</code> — <code>T001</code>, not <code class="k">T-001</code>. Timestamps and hashes are simulated.</div>
+  </div>
+</section>
+
+<!-- ================================================== 2. ARCHITECTURE -->
+<section id="architecture">
+  <h2 class="sec"><span class="no">02</span> System map &amp; orchestration loop</h2>
+  <p class="lead">
+    The Runner is wired at the Composition Root (<code class="k">runner/container.py</code>): adapters are chosen once
+    per session — <code class="k">worker.provider: "opencode" | "antigravity"</code> selects the <code class="k">AgentWorker</code>
+    implementation — then every subsystem talks to <em>ports</em>, never to concrete CLIs. The Mermaid figure below is the
+    one diagram to map all other sections onto.
+  </p>
+
+  <figure class="diagram-frame" data-pane="arch">
+    <div class="d-bar">
+      <span class="d-title">System architecture &amp; orchestration loop</span>
+      <span class="d-sub">flowchart · render ⌗ mermaid@11</span>
+      <span class="sp"></span>
+      <button class="dbtn" data-act="out" type="button" aria-label="Zoom out diagram"><svg class="i" aria-hidden="true"><use href="#i-minus"/></svg></button>
+      <button class="dbtn" data-act="in" type="button" aria-label="Zoom in diagram"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg></button>
+      <button class="dbtn" data-act="fit" type="button" aria-label="Reset diagram zoom"><svg class="i" aria-hidden="true"><use href="#i-max"/></svg></button>
+    </div>
+    <div class="diagram-view undragged">
+      <div class="diagram-stage"><pre class="mermaid">
+flowchart TD
+  OP(["Operator<br/>nearby TUI / away Discord"]) -->|"py -3 ticket_runner.py start"| DOC["Doctor pre-flight<br/>runner/application/doctor.py"]
+  DOC -->|"11 checks green"| MS["Model Selection<br/>Spec 07 precedence - persists to state.json"]
+  MS --> ORCH["QueueOrchestrator<br/>runner/application/queue_orchestrator.py"]
+  ORCH -->|".queue.lock + scan"| QUEUE[("Ticket Queue<br/>docs/tickets/spec-slug/")]
+  ORCH --> GK1["Gatekeeper<br/>Pre-Dispatch HITL gate - Mode HITL or Status blocked"]
+  GK1 -->|"AFK + unblocked"| BASE["Dispatch Baseline<br/>snapshot of ticket file on disk"]
+  BASE --> PB["PromptBuilder<br/>spec excerpt + AGENTS.md invariants + gotchas"]
+  PB --> SUP["WorkerSupervisor<br/>token budget + stall timeouts + ring buffer"]
+  SUP --> PORT["AgentWorker port<br/>runner/ports/agent_worker.py"]
+  subgraph ADAPTERS["Equal AgentWorker adapters - runner/adapters/"]
+    direction LR
+    OC["OpenCodeWorker<br/>opencode run --format json<br/>--session ses_... -m model --variant high"]
+    AGY["AntigravityWorker<br/>agy -p prompt --output-format stream-json<br/>--conversation uuid --effort high"]
+  end
+  PORT -->|"build_run_command"| ADAPTERS
+  OC --> SUB[("ai subprocess<br/>never a daemon")]
+  AGY --> SUB
+  SUB -->|"WorkerEvent JSONL<br/>step_start / tool_use / step_finish"| SUP
+  SUB -->|"edits files"| TREE{{"Target Project working tree<br/>branch agent/ticket-runner"}}
+  TREE -->|"git status dirty + worker done"| SIG[("SignalRepository<br/>agent/signals + agent/questions")]
+  SIG -->|"ready signal = ticks only"| GK2["Gatekeeper verification<br/>build_cmd then test_cmd<br/>timeout 300s + silence window"]
+  GK2 -->|"exit 0"| EV[[".agent/evidence/ticket_id/<br/>summary.json + harness.log"]]
+  EV --> CARD["EvidenceCard<br/>test status - unticked criteria"]
+  CARD -->|"AFK auto / HITL human gate"| GIT["GitOperations<br/>one conventional commit + relocate ticket"]
+  GIT -->|"next pending ticket"| QUEUE
+  GK2 -->|"exit != 0"| TRIAGE["EvidenceTriage<br/>30 lines / 1000 chars bounded excerpt"]
+  TRIAGE -->|"failure-context re-prompt"| SUP
+  TRIAGE -->|"3rd failed attempt"| CB["Circuit Breaker<br/>CIRCUIT_BREAKER_TRIPPED"]
+  CB --> WAIT["WAITING_FOR_USER<br/>stash dirty tree - status blocked - diagnostics"]
+  SUP -.->|"135k tokens"| CH["Context Handoff<br/>.agent/checkpoints/ticket_id/handoff.md"]
+  CH -.->|"fresh session resume"| OC
+    </pre></div>
+    </div>
+    <figcaption class="d-hint" style="display:block">Scroll the frame horizontally, drag to pan, or use the zoom buttons. Subprocess arrows show the command shape each adapter actually builds; dotted edges are the token-budget pathway.</figcaption>
+  </figure>
+
+  <h3>Module map (condensed from <code class="k">ARCHITECTURE.md</code>)</h3>
+  <pre class="codewin bash" aria-label="Repository layout tree"><div class="bar"><span class="lang">runner/</span><span class="file">Clean Architecture layers</span><span class="sp"></span></div><code><span class="d">├── ticket_runner.py</span>            <span class="d"># CLI: init · start · doctor · skills sync · bot · notify · pause · status</span>
+<span class="d">├── runner/container.py</span>         <span class="d"># Composition Root — the only place adapters are named</span>
+<span class="d">├── runner/domain/</span>              <span class="d"># pure: ticket.py · state.py · signal.py · evidence.py · telemetry.py · runtime_paths.py</span>
+<span class="d">├── runner/ports/</span>               <span class="d"># agent_worker · command_runner · ticket_repository · state_store · signal_repository</span>
+<span class="d">│                              # discord_gateway/ logger · intervention · approval_gateway · terminal_display</span>
+<span class="d">├── runner/application/</span>         <span class="ts"># interactors — orchestration lives here</span>
+<span class="d">│   ├── queue_orchestrator.py</span>   <span class="d"># sequential ticket loop (standby vs terminate lifecycle)</span>
+<span class="d">│   ├── worker_supervisor.py</span>    <span class="d"># spawns/streams/terminates Session Runs via AgentWorker port</span>
+<span class="d">│   ├── handoff_coordinator.py</span>  <span class="d"># 120k warn → 135k handoff → 150k ceiling; max 5 consecutive handoffs</span>
+<span class="d">│   ├── gatekeeper.py</span>           <span class="d"># HITL gate, dispatch baseline, test/build verification, Circuit Breaker</span>
+<span class="d">│   ├── evidence_triage.py</span>      <span class="d"># bounded failure excerpts (≤30 lines / 1,000 chars) → summary.json</span>
+<span class="d">│   ├── state_coordinator.py</span>    <span class="d"># atomic .agent/state.json writes</span>
+<span class="d">│   ├── git_operations.py</span>       <span class="d"># branch isolation, one conventional commit per ticket</span>
+<span class="d">│   └── prompt_builder.py</span>       <span class="d"># canonical prompt payload builder (shown in §4)</span>
+<span class="d">└── runner/adapters/</span>           <span class="d"># opencode/ · antigravity/ · cli/ · git/ · markdown/ · filesystem/ · discord/ · ui/</span></code></pre>
+
+  <div class="note warn">
+    <svg class="i" width="16" height="16" aria-hidden="true"><use href="#i-alert"/></svg>
+    <div><b>Adapter switching in current builds.</b> <code class="k">worker.provider</code> is bound <em>per session</em> by the overlay config — the worker factory is decided once in <code class="k">runner/container.py</code>. A queue that names a different agent between tickets (as our scenario does) is served by restarting the Runner with the matching provider: the queue is idle between tickets, Doctor re-validates the new CLI, and <code class="k">selected_model</code>/state simply persists. Both adapters implement the identical <code class="k">AgentWorker</code> protocol, so workflow shape, signals, and gates never change — only the normalized flags do (<code class="k">--variant</code> ↔ <code class="k">--effort</code>, <code class="k">--session ses_…</code> ↔ <code class="k">--conversation uuid</code>).</div>
+  </div>
+</section>
+
+<!-- ================================================== 3. SCENARIO -->
+<section id="scenario">
+  <h2 class="sec"><span class="no">03</span> Scenario setup — the starting state</h2>
+  <p class="lead">
+    Target Project: <code class="k">D:\Repos\inventory-service</code> — a small Python 3.11 FastAPI service for stock and
+    reservations, with a SQLite repository. The Runner scaffolding has already been created by
+    <code class="k">ticket_runner.py init</code>: the overlay config, the <code class="k">.agent/</code> runtime directory,
+    a synced <code class="k">.agents/skills/implement-ticket-runner/SKILL.md</code>, and one spec decomposed into four tickets.
+  </p>
+
+  <pre class="codewin" aria-label="Project overlay configuration"><div class="bar"><span class="file">&lt;project-dir&gt;/ticket-runner.yaml</span><span class="lang">project overlay</span><span class="sp"></span></div><code><span class="mkey">project:</span>
+  <span class="jkey">name:</span> <span class="jstr">"inventory-service"</span>
+  <span class="jkey">branch:</span> <span class="jstr">"agent/ticket-runner"</span>        <span class="d"># all automated work happens here</span>
+  <span class="jkey">base_branch:</span> <span class="jstr">"main"</span>
+
+<span class="mkey">worker:</span>
+  <span class="jkey">provider:</span> <span class="jstr">"opencode"</span>                  <span class="d"># session-scoped; the queue story flips this per ticket (§2 note)</span>
+  <span class="jkey">execution_skill:</span> <span class="jstr">".agents/skills/implement-ticket-runner/SKILL.md"</span>
+
+<span class="mkey">model:</span>
+  <span class="jkey">default_reasoning:</span> <span class="jstr">"high"</span>
+  <span class="jkey">models:</span>
+    - <span class="jkey">id:</span> <span class="jstr">"deepseek/deepseek-chat"</span>     <span class="d"># opencode -m deepseek/deepseek-chat</span>
+    - <span class="jkey">id:</span> <span class="jstr">"gemini-3-pro"</span>              <span class="d"># agy --model gemini-3-pro</span>
+
+<span class="mkey">verification:</span>
+  <span class="jkey">test_cmd:</span> <span class="jstr">"python -m pytest"</span>
+  <span class="jkey">build_cmd:</span> <span class="jstr">""</span>
+  <span class="jkey">max_attempts:</span> <span class="jnum">3</span>                     <span class="d"># Verification Attempts before the Circuit Breaker trips</span>
+  <span class="jkey">timeout_seconds:</span> <span class="jnum">300</span>
+  <span class="jkey">silence_window_seconds:</span> <span class="jnum">60</span>
+  <span class="jkey">bug_escalation_at:</span> <span class="jnum">1</span>                <span class="d"># escalate structured diagnostics from attempt 1</span>
+
+<span class="mkey">tokens:</span>   <span class="jkey">warn:</span> <span class="jnum">120000</span>   <span class="jkey">handoff:</span> <span class="jnum">135000</span>   <span class="jkey">ceiling:</span> <span class="jnum">150000</span>
+<span class="mkey">presence:</span> <span class="jkey">default_mode:</span> <span class="jstr">"nearby"</span>   <span class="jkey">idle_escalation_minutes:</span> <span class="jnum">3</span>
+<span class="mkey">discord:</span>  <span class="jkey">enabled:</span> <span class="deny"><span class="b">true</span></span>   <span class="jkey">token_env:</span> <span class="jstr">"DISCORD_BOT_TOKEN"</span>   <span class="jkey">channel_id:</span> <span class="jstr">"1421019348121475104"</span>
+<span class="mkey">lifecycle:</span> <span class="jkey">queue_completion:</span> <span class="jstr">"terminate"</span>   <span class="jkey">clean_slate:</span> <span class="jstr">"interactive"</span>
+<span class="mkey">git:</span>      <span class="jkey">auto_push:</span> <span class="r">false</span>   <span class="jkey">commit_prefix:</span> <span class="jstr">"feat"</span>   <span class="jkey">enforce_pre_push_hook:</span> <span class="b">true</span></code></pre>
+
+  <h3>The queue: <code class="k">docs/tickets/14-inventory-service-epic/</code></h3>
+  <p class="lead" style="margin-bottom:.6rem">
+    Four ticket files in canonical <code class="k">to-ticket-runner</code> format (bold-label headers + five
+    <code class="k">##</code> sections). Ticket ids match the enforced pattern <code class="k">^T\d{3,}$</code>. The
+    <code class="k">**Blocked by:**</code> header is the dependency edge the Runner evaluates at pickup.
+  </p>
+
+  <table class="dt">
+    <caption>Dependency graph at t=0</caption>
+    <thead><tr><th>Ticket</th><th>Title</th><th>Agent (session provider)</th><th>Blocked by</th><th>Mode / Reasoning</th><th>Expected story</th></tr></thead>
+    <tbody>
+      <tr><td>T001</td><td>Inventory item schema &amp; SQLite repository</td><td>OpenCode CLI · <code>deepseek/deepseek-chat</code></td><td>None</td><td>AFK · medium</td><td>Happy path: implement → handoff at 135k → ready → green gate → commit</td></tr>
+      <tr><td>T002</td><td>Reserve stock endpoint</td><td>Antigravity CLI · <code>gemini-3-pro</code></td><td>T001</td><td>AFK · high</td><td>Gate fails on attempt 1 → triaged re-dispatch → green on attempt 2</td></tr>
+      <tr><td>T003</td><td>Partial return semantics for reservations</td><td>OpenCode CLI · <code>deepseek/deepseek-chat</code></td><td>T002</td><td>AFK · high</td><td>2 gate failures + an ambiguity refusal → Circuit Breaker trips → queue halts</td></tr>
+      <tr><td>T004</td><td>Stock dashboard page</td><td>OpenCode CLI · <code>deepseek/deepseek-chat</code></td><td>T003</td><td>AFK · low</td><td>Upstream blocked → held/skipped for the pass → resumes after T003 is fixed</td></tr>
+    </tbody>
+  </table>
+
+  <details class="ticket" id="tq1">
+    <summary>
+      <span class="t-id">T001</span><span class="t-title">Inventory item schema and SQLite repository</span>
+      <span class="t-meta"><span class="badge pending"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>PENDING</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+      <pre class="codewin" aria-label="Ticket file T001"><div class="bar"><span class="file">docs/tickets/14-inventory-service-epic/T001-inventory-item-repository.md</span><span class="lang">Specimen A</span><span class="sp"></span></div><code><span class="msec"># T001: Inventory Item Schema and SQLite Repository</span>
+
+<span class="mkey">**Mode:**</span> <span class="mval">AFK</span>
+<span class="mkey">**Status:**</span> <span class="mval">pending</span>
+<span class="mkey">**Spec:**</span> <span class="mval">docs/specs/14-inventory-service-epic.md</span>
+<span class="mkey">**Blocked by:**</span> <span class="mval">None</span>
+<span class="mkey">**Security:**</span> <span class="mval">required (trust boundaries: SQL parameter binding)</span>
+<span class="mkey">**Reasoning:**</span> <span class="mval">medium</span>
+
+<span class="msec">## What to build</span>
+Introduce the persistence core for the inventory service:
+- <span class="mval">src/inventory/domain/models.py — InventoryItem value model (item_id, sku, name, quantity, location)</span>
+- <span class="mval">src/inventory/repo.py — InventoryRepository on SQLite (data/inventory.db), parameterized SQL only</span>
+- <span class="mval">tests/unit/test_repo.py — construction invariants + round-trip coverage</span>
+
+<span class="msec">## Jump-start</span>
+<span class="d">(orientation starts here — follow the code where it leads)</span>
+- <span class="mkey">**Files/areas to touch:**</span> <span class="mval">the three paths above; do not touch src/inventory/api.py yet</span>
+- <span class="mkey">**Seams:**</span> <span class="mval">InventoryRepository.add() / InventoryRepository.get()</span>
+- <span class="mkey">**Existing-code anchors:**</span> <span class="mval">src/inventory/config.py (DatabaseSettings)</span>
+- <span class="mkey">**Assigned agent:**</span> <span class="mval">OpenCode CLI (session provider opencode)</span>
+- <span class="mkey">**Verify:**</span> <span class="mval">python -m pytest tests/unit/test_repo.py -x</span>
+
+<span class="msec">## Acceptance criteria</span>
+- [<span class="mtick"> </span>] <span class="mval">InventoryItem rejects negative quantities at construction</span>
+- [<span class="mtick"> </span>] <span class="mval">Repository reads/writes rows via parameterized SQL only (no f-string interpolation)</span>
+- [<span class="mtick"> </span>] <span class="mval">python -m pytest tests/unit/test_repo.py exits 0</span>
+- [<span class="mtick"> </span>] <span class="mval">No other file sections change (Worker may only tick checkboxes here)</span>
+
+<span class="msec">## Gotchas</span>
+- <span class="mval">Windows-first checkout; never pipe test output to Unix-only utilities</span>
+- <span class="mval">.agent/ is untracked runtime state; the project .gitignore already covers it</span></code></pre>
+    </div>
+  </details>
+
+  <details class="ticket" id="tq2">
+    <summary>
+      <span class="t-id">T002</span><span class="t-title">Reserve stock endpoint</span>
+      <span class="t-meta"><span class="badge pending"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>PENDING</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+      <pre class="codewin" aria-label="Ticket file T002"><div class="bar"><span class="file">docs/tickets/14-inventory-service-epic/T002-reserve-stock-endpoint.md</span><span class="lang">Specimen A</span><span class="sp"></span></div><code><span class="msec"># T002: Reserve Stock Endpoint</span>
+
+<span class="mkey">**Mode:**</span> <span class="mval">AFK</span>
+<span class="mkey">**Status:**</span> <span class="mval">pending</span>
+<span class="mkey">**Spec:**</span> <span class="mval">docs/specs/14-inventory-service-epic.md</span>
+<span class="mkey">**Blocked by:**</span> <span class="mval">T001</span>
+<span class="mkey">**Security:**</span> <span class="mval">required (trust boundaries: request validation, concurrent stock mutation)</span>
+<span class="mkey">**Reasoning:**</span> <span class="mval">high</span>
+
+<span class="msec">## What to build</span>
+- <span class="mval">src/inventory/services.py — ReservationsService.reserve() creating a reservation row and decrementing stock atomically</span>
+- <span class="mval">src/inventory/api.py — POST /v1/reservations accepting {item_id, qty}</span>
+- <span class="mval">tests/integration/test_reservations.py</span>
+- <span class="mval">Reuse InventoryRepository from T001 — repository schema is an existing-code anchor, not a free pass to rewrite it</span>
+
+<span class="msec">## Jump-start</span>
+<span class="d">(orientation starts here — follow the code where it leads)</span>
+- <span class="mkey">**Seams:**</span> <span class="mval">ReservationsService.reserve() shares the SQLite connect helper with the repository</span>
+- <span class="mkey">**Existing-code anchors:**</span> <span class="mval">T001 commit a1c9f30; app factory in src/inventory/api.py</span>
+- <span class="mkey">**Assigned agent:**</span> <span class="mval">Antigravity CLI (session provider antigravity - operator restarts Runner with agy model)</span>
+- <span class="mkey">**Verify:**</span> <span class="mval">python -m pytest tests/integration/test_reservations.py -x</span>
+
+<span class="msec">## Acceptance criteria</span>
+- [<span class="mtick"> </span>] <span class="mval">POST /v1/reservations returns 201 with reservation id on success</span>
+- [<span class="mtick"> </span>] <span class="mval">Insufficient stock returns 409 and leaves stock untouched (no partial write)</span>
+- [<span class="mtick"> </span>] <span class="mval">Reservation insert and stock decrement commit in one transaction</span>
+- [<span class="mtick"> </span>] <span class="mval">Concurrent double reserve of the last unit yields exactly one 201 and one 409</span>
+- [<span class="mtick"> </span>] <span class="mval">python -m pytest tests/integration/test_reservations.py exits 0</span>
+
+<span class="msec">## Gotchas</span>
+- <span class="mval">Reservation rows must be idempotent-safe against a UNIQUE conflict on the copy id</span></code></pre>
+    </div>
+  </details>
+
+  <details class="ticket" id="tq3">
+    <summary>
+      <span class="t-id">T003</span><span class="t-title">Partial return semantics for reservations</span>
+      <span class="t-meta"><span class="badge pending"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>PENDING</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+      <pre class="codewin" aria-label="Ticket file T003"><div class="bar"><span class="file">docs/tickets/14-inventory-service-epic/T003-partial-returns-race.md</span><span class="lang">Specimen A</span><span class="sp"></span></div><code><span class="msec"># T003: Partial Return Semantics for Reservations</span>
+
+<span class="mkey">**Mode:**</span> <span class="mval">AFK</span>
+<span class="mkey">**Status:**</span> <span class="mval">pending</span>
+<span class="mkey">**Spec:**</span> <span class="mval">docs/specs/14-inventory-service-epic.md</span>
+<span class="mkey">**Blocked by:**</span> <span class="mval">T002</span>
+<span class="mkey">**Security:**</span> <span class="mval">not-required</span>
+<span class="mkey">**Reasoning:**</span> <span class="mval">high</span>
+
+<span class="msec">## What to build</span>
+- <span class="mval">src/inventory/services.py — ReservationsService.release(reservation_id, qty) handling partial releases</span>
+- <span class="mval">src/inventory/api.py — POST /v1/reservations/{id}/release</span>
+- <span class="mval">tests/integration/test_partial_release.py</span>
+
+<span class="msec">## Jump-start</span>
+<span class="d">(orientation starts here — follow the code where it leads)</span>
+- <span class="mkey">**Seams:**</span> <span class="mval">release path reuses the transaction helper introduced by T002</span>
+- <span class="mkey">**Assigned agent:**</span> <span class="mval">OpenCode CLI (session provider opencode)</span>
+- <span class="mkey">**Verify:**</span> <span class="mval">python -m pytest tests/integration/test_partial_release.py -x</span>
+
+<span class="msec">## Acceptance criteria</span>
+- [<span class="mtick"> </span>] <span class="mval">Releasing part of a reservation restores only the released quantity to stock</span>
+- [<span class="mtick"> </span>] <span class="mval">Restored units land in exactly one destination per the documented domain rule (see Gotchas)</span>
+- [<span class="mtick"> </span>] <span class="mval">No double-release: cumulative restored quantity never exceeds the reservation total</span>
+- [<span class="mtick"> </span>] <span class="mval">python -m pytest tests/integration/test_partial_release.py exits 0</span>
+
+<span class="msec">## Gotchas</span>
+- <span class="mval"> Damaged bins exist (spec section 3.2) but partial pickups are undefined there — this is the known open question for this ticket</span></code></pre>
+    </div>
+  </details>
+
+  <details class="ticket" id="tq4">
+    <summary>
+      <span class="t-id">T004</span><span class="t-title">Stock dashboard page</span>
+      <span class="t-meta"><span class="badge pending"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>PENDING</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+      <pre class="codewin" aria-label="Ticket file T004"><div class="bar"><span class="file">docs/tickets/14-inventory-service-epic/T004-stock-dashboard-page.md</span><span class="lang">Specimen A</span><span class="sp"></span></div><code><span class="msec"># T004: Stock Dashboard Page</span>
+
+<span class="mkey">**Mode:**</span> <span class="mval">AFK</span>
+<span class="mkey">**Status:**</span> <span class="mval">pending</span>
+<span class="mkey">**Spec:**</span> <span class="mval">docs/specs/14-inventory-service-epic.md</span>
+<span class="mkey">**Blocked by:**</span> <span class="mval">T003</span>
+<span class="mkey">**Security:**</span> <span class="mval">not-required</span>
+<span class="mkey">**Reasoning:**</span> <span class="mval">low</span>
+
+<span class="msec">## What to build</span>
+- <span class="mval">src/inventory/dashboard.py — server-rendered stock dashboard listing items with live reservation counts</span>
+- <span class="mval">Wire route GET /dashboard in src/inventory/api.py</span>
+- <span class="mval">tests/integration/test_dashboard.py</span>
+
+<span class="msec">## Jump-start</span>
+<span class="d">(orientation starts here — follow the code where it leads)</span>
+- <span class="mkey">**Seams:**</span> <span class="mval">templates/dashboard.html.j2; reuse the inventory.summary() query</span>
+- <span class="mkey">**Assigned agent:**</span> <span class="mval">OpenCode CLI (session provider opencode)</span>
+- <span class="mkey">**Verify:**</span> <span class="mval">python -m pytest tests/integration/test_dashboard.py -x</span>
+
+<span class="msec">## Acceptance criteria</span>
+- [<span class="mtick"> </span>] <span class="mval">GET /dashboard returns 200 with an item table including per-item reservation counts</span>
+- [<span class="mtick"> </span>] <span class="mval">Rows reflect T003 release semantics (released units are counted back into available)</span>
+- [<span class="mtick"> </span>] <span class="mval">python -m pytest tests/integration/test_dashboard.py exits 0</span>
+
+<span class="msec">## Gotchas</span>
+- <span class="mval">Dashboard must not ship raw SQL; go through the repository</span></code></pre>
+    </div>
+  </details>
+</section>
+
+<!-- ================================================== 4. EXECUTION TRACE -->
+<section id="trace">
+  <h2 class="sec"><span class="no">04</span> Execution trace — the “everything” run</h2>
+  <p class="lead">
+    One chronological pass through the scenario, 3万-foot to street-level: simulated Runner terminals, exact
+    <code class="k">.agent/</code> state mutations, the subprocess argv that each adapter builds, durable signals, and the
+    prompt payloads between them. Expand the steps; each step shows the three channels side by side —
+    <strong>Orchestrator terminal</strong>, <strong>queue &amp; state files</strong>, and <strong>signals &amp; payloads</strong>.
+  </p>
+
+  <div class="rail" aria-label="Ticket timeline">
+    <a href="#p0">Phase 0 · startup</a><span class="sep" aria-hidden="true"></span>
+    <a href="#rt1" class="r-done">T001 · happy path</a><span class="sep" aria-hidden="true"></span>
+    <a href="#rt2" class="r-warn">T002 · retry loop</a><span class="sep" aria-hidden="true"></span>
+    <a href="#rt3" class="r-hold">T003 · blocker &amp; halt</a><span class="sep" aria-hidden="true"></span>
+    <a href="#rt4" class="r-done">T004 · downstream hold → done</a>
+  </div>
+
+  <p style="margin:.2rem 0 1rem">
+    <button class="copybtn" type="button" id="expand-all"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg><span>Expand all steps</span></button>
+    <button class="copybtn" type="button" id="collapse-all"><svg class="i" aria-hidden="true"><use href="#i-minus"/></svg><span>Collapse all steps</span></button>
+  </p>
+
+  <!-- ================= PHASE 0 ================= -->
+  <details class="ticket" open id="p0">
+    <summary>
+      <span class="t-id">Phase 0</span><span class="t-title">Startup, doctor, model selection, queue scan</span>
+      <span class="t-meta"><span class="badge gatekeeper"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>GATEKEEPER</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+
+      <details class="step" open>
+        <summary><span class="s-no">0.1</span><span class="s-title">Crash recovery re-plays state, then the Doctor pre-flights the environment</span>
+          <span class="s-badges"><span class="badge gatekeeper">doctor 11/11</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">Runner boots, readers <code class="k">.agent/state.json</code> (crash recovery: no orphaned WORKING ticket found — this is the first run), then the Doctor proves the floor: CLI binaries present, working tree pure on <code class="k">agent/ticket-runner</code>, hooks installed, config syntax valid, queue parseable.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">14:02:07</span> <span class="tag ts">[Runner]</span> Project: <span class="b">D:\Repos\inventory-service</span>  branch: <span class="b">agent/ticket-runner</span>  presence: <span class="v">nearby</span>
+<span class="d">14:02:08</span> <span class="tag ts">[CrashRecovery]</span> <span class="d">.agent/state.json not found → clean first run, nothing to resume</span>
+<span class="d">14:02:08</span> <span class="tag tg">[Doctor]</span> <span class="w">Verifying environment...</span>
+  <span class="pos">✓</span> Python 3.11 interpreter available (<span class="b">py -3</span>)
+  <span class="pos">✓</span> OpenCode CLI binary on PATH (opencode <span class="b">1.4.2</span>)
+  <span class="pos">✓</span> Antigravity CLI binary on PATH (agy <span class="b">1.2.16</span>)   <span class="d">← both adapters validated, even though provider is opencode</span>
+  <span class="pos">✓</span> Git reachable (git 2.47.1) — repo at D:\Repos\inventory-service
+  <span class="pos">✓</span> Git working tree pure — zero modified/untracked files
+  <span class="pos">✓</span> Current branch is agent/ticket-runner (stems from main)
+  <span class="pos">✓</span> .git/hooks/pre-push guardrail installed (blocks pushes, ADR 0005)
+  <span class="pos">✓</span> Config two-tier merge OK (~\.ticket-runner/config.yaml + ticket-runner.yaml)
+  <span class="pos">✓</span> .agent/ runtime directories present (state.json, signals, questions, checkpoints, logs, evidence)
+  <span class="pos">✓</span> .agents/skills/ synced — implement-ticket-runner present
+  <span class="pos">✓</span> Queue scan OK — docs/tickets/14-inventory-service-epic/ parses cleanly (no interactive-dialect tickets)
+
+<span class="tag tg">[Doctor]</span> <span class="pos">Pre-flight verification passed.</span>  <span class="d">(clearing .queue.lock stray check: no other runner holds the queue)</span></pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json — created after startup (StateCoordinator, atomic write)</span>
+{
+  <span class="d">"active_ticket_id"</span>: <span class="l">null</span>,
+  <span class="d">"status"</span>: <span class="b">"IDLE"</span>,
+  <span class="d">"opencode_session_id"</span>: <span class="l">null</span>,
+  <span class="d">"selected_model"</span>: <span class="l">null</span>,        <span class="d">// set in step 0.2</span>
+  <span class="d">"presence_mode"</span>: <span class="b">"nearby"</span>,
+  <span class="d">"verification_attempts"</span>: <span class="y">0</span>,
+  <span class="d">"tokens"</span>: { <span class="d">"current"</span>: <span class="y">0</span>, <span class="d">"warning_sent"</span>: <span class="b">false</span> },
+  <span class="d">"branch"</span>: <span class="b">"agent/ticket-runner"</span>,
+  <span class="d">"started_at"</span>: <span class="b">"2026-10-29T14:02:07Z"</span>,
+  <span class="d">"last_checkpoint"</span>: <span class="l">null</span>,
+  <span class="d">"tui_open"</span>: <span class="b">false</span>, <span class="d">"tui_session_id"</span>: <span class="l">null</span>,
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:02:08Z"</span>
+}
+<span class="d">// 13 required fields enforced by RunnerState.from_dict</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// No Worker has run yet, so no Signal files exist:</span>
+<span class="b">.agent/signals/</span>   <span class="d">(empty — {ticket_id}_ready.json appears per completed session)</span>
+<span class="b">.agent/questions/</span> <span class="d">(empty — {ticket_id}.json appears when a Worker is blocked/ambiguous)</span>
+
+<span class="d">// What the Doctor just validated on the agent surface (per config):</span>
+<span class="v">worker.provider</span>   <span class="b">opencode</span>   →   worker factory = OpenCodeWorker
+<span class="v">model models</span>      <span class="c">2 entries</span>  →   interactive selection in step 0.2
+<span class="v">verification</span>      <span class="y">python -m pytest</span> · max_attempts <span class="y">3</span> · timeout <span class="y">300s</span>
+<span class="v">token budget</span>      <span class="y">warn 120k</span> / <span class="c">handoff 135k</span> / <span class="g">ceiling 150k</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no">0.2</span><span class="s-title">Model selection — interactive prompt (2 models configured), persisted for crash recovery</span>
+          <span class="s-badges"><span class="badge working">WAITING_FOR_USER</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">Two models are configured in the overlay, so <code class="k">ModelSelectionInteractor</code> falls to case 5: an interactive numbered prompt in Nearby mode. The choice is persisted into state so a crash-recovery resume keeps the same model. Precedence: CLI <code class="k">--model</code> flag &gt; persisted <code class="k">selected_model</code> &gt; auto-select (1 model) &gt; prompt (2+).</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[Model]</span> <span class="w">Select the model for this entire session (fixed until restart):</span>
+  <span class="y">1</span>) deepseek/deepseek-chat   <span class="d">DeepSeek Chat</span>      <span class="d">(opencode adapter)</span>
+  <span class="y">2</span>) gemini-3-pro             <span class="d">Gemini 3 Pro</span>      <span class="d">(antigravity adapter)</span>
+<span class="tag tt">[Model]</span> Choose [1-2]: <span class="g">1</span>
+<span class="tag ts">[Runner]</span> Session model locked: <span class="b">deepseek/deepseek-chat</span>
+<span class="tag ts">[Runner]</span> Reasoning variant default: <span class="v">high</span>  <span class="d">(model.default_reasoning; per-ticket Reasoning: overrides via --variant)</span></pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json — two fields change; rest preserved verbatim</span>
+{
+  <span class="d">"selected_model"</span>: <span class="b">"deepseek/deepseek-chat"</span>,
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:02:11Z"</span>,
+  <span class="d">"status"</span>: <span class="b">"IDLE"</span>,  <span class="d">"active_ticket_id"</span>: <span class="l">null</span>,  <span class="d">…</span>
+}</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// The queue itself is untouched. TicketRepository scan snapshot (in-memory):</span>
+<span class="v">T001</span> <span class="y">pending</span>   <span class="d">blocked-by: None</span>    <span class="g">→ eligible first</span>
+<span class="v">T002</span> <span class="y">pending</span>   <span class="d">blocked-by: T001</span>    <span class="r">→ held</span>
+<span class="v">T003</span> <span class="y">pending</span>   <span class="d">blocked-by: T002</span>    <span class="r">→ held</span>
+<span class="v">T004</span> <span class="y">pending</span>   <span class="d">blocked-by: T003</span>    <span class="r">→ held</span>
+<span class="d">// Dependency DAG validated acyclic; dialect guard found no Specimen B (Human+AI) files.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no">0.3</span><span class="s-title">Queue scan, lock acquisition, and the lifecycle loop enters standby-to-worker</span>
+          <span class="s-badges"><span class="badge pending">LOCKED</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose"><code class="k">QueueOrchestrator.run_lifecycle()</code> takes the <code class="k">.queue.lock</code> sentinel (Windows msvcrt file lock, non-blocking) and begins the per-ticket loop that dominates the rest of this trace.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">14:02:12</span> <span class="tag tt">[Queue]</span> Lock acquired: <span class="b">docs/tickets/14-inventory-service-epic/.queue.lock</span> <span class="d">(sentinel)</span>
+<span class="tag tt">[Queue]</span> Waiting tickets: T001 <span class="d">(T002, T003, T004 are dependency-held)</span>
+<span class="tag ts">[Runner]</span> Rich Live dashboard up — token gauge, telemetry ring, hotkeys: <span class="d">[P] pause · [O] TUI · [Q] abort</span>
+<span class="tag tt">[Queue]</span> Next: <span class="c">T001</span> — pre-dispatch gate…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="b">docs/tickets/14-inventory-service-epic/</span>
+├── <span class="w">T001-inventory-item-repository.md</span>   <span class="d">(active target — still Status: pending)</span>
+├── <span class="d">T002-reserve-stock-endpoint.md</span>
+├── <span class="d">T003-partial-returns-race.md</span>
+├── <span class="d">T004-stock-dashboard-page.md</span>
+├── <span class="d">.queue.lock</span>                          <span class="g">← created; released on orderly shutdown</span>
+└── <span class="d">gotchas.md</span>                           <span class="d">(cross-ticket knowledge log; runner-appended only)</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Pre-Dispatch HITL gate evaluates T001:</span>
+<span class="v">Mode:</span>        <span class="g">AFK</span>          <span class="d">(not HITL → no operator prompt)</span>
+<span class="v">Status:</span>      <span class="g">pending</span>      <span class="d">(not blocked → no operator prompt)</span>
+<span class="v">Blocked by:</span>  <span class="g">None</span>         <span class="d">(dependency satisfied)</span>
+<span class="d">// Gate passes → PromptBuilder builds the prompt in step T001-1.</span>
+<span class="d">// In human mode this is where green-check Evidence Cards later pause commits
+// (lifecycle.approval_mode: human). This run is AFK → auto-approve after green.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <h2 class="sec" style="margin-top:2.8rem"><span class="no">T001</span> Happy path — implement, handoff, verify, commit</h2>
+
+  <details class="ticket" open id="rt1">
+    <summary>
+      <span class="t-id">T001</span><span class="t-title">Inventory item schema and SQLite repository</span>
+      <span class="t-meta"><span class="badge working"><svg class="i" aria-hidden="true"><use href="#i-zap"/></svg>OPENCODE</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+
+      <details class="step" open>
+        <summary><span class="s-no green">1.1</span><span class="s-title">Ticket pickup, prompt assembly, and state transitions to WORKING</span>
+          <span class="s-badges"><span class="badge working">WORKING</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The Gatekeeper stamps a <strong>dispatch baseline</strong> of the ticket file (needed later to enforce the tick-only boundary), <code class="k">PromptBuilder.build_prompt()</code> composes the scoped prompt, and <code class="k">WorkerSupervisor</code> calls <code class="k">build_run_command()</code> on the OpenCode adapter. The prompt is deliberately small: spec excerpt + ticket + invariant pointers, with <code class="k">gotchas.md</code> referenced — not inlined.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">14:02:13</span> <span class="tag tg">[Gatekeeper]</span> T001 dispatch baseline captured → <span class="b">.agent/logs/T001.dispatch_baseline</span>
+<span class="tag tt">[T001]</span> <span class="w">Dependency check — Blocked by: None → eligible.</span>
+<span class="tag tt">[T001]</span> Building prompt via <span class="b">PromptBuilder</span> (spec excerpt 3.1 KB ticket ac 4 gotchas 2)
+<span class="tag tt">[T001]</span> Adapter <span class="c">OpenCodeWorker</span> → argv:
+<span class="d">        ["opencode","run","--format","json",</span>
+<span class="d">         "-m","deepseek/deepseek-chat",</span>
+<span class="d">         "--variant","medium",         ← ticket Reasoning: medium overrides default high</span>
+<span class="d">         "--auto","&lt;prompt payload (signals pane)&gt;"]</span>
+<span class="d">        cwd = D:\Repos\inventory-service · Windows Job Object for tree-kill safety</span>
+<span class="tag tt">[T001]</span> Session Run 1 streaming…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json — RunnerState.to_working()</span>
+{
+<span class="chg">  <span class="d">"status"</span>: <span class="b">"WORKING"</span>,</span>
+<span class="chg">  <span class="d">"active_ticket_id"</span>: <span class="b">"T001"</span>,</span>
+<span class="chg">  <span class="d">"opencode_session_id"</span>: null → <span class="b">"ses_a1b2c3d4e5f6"</span>,
+</span>  <span class="d">"verification_attempts"</span>: <span class="y">0</span>,
+  <span class="d">"tokens"</span>: { <span class="d">"current"</span>: <span class="y">0</span>, <span class="d">"warning_sent"</span>: <span class="b">false</span> },
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:02:13Z"</span>,  <span class="d">…</span>
+}
+
+<span class="d">// Ticket file — Runner owns header writes, the Worker never does:</span>
+<span class="mkey">**Status:**</span> <span class="mval">pending</span>
+<span class="chg"><span class="mkey">**Status:**</span> <span class="mval">in_progress</span></span>    <span class="d">// atomic in-place patch by serializer (TicketProcessor)</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// PromptBuilder.build_prompt(ticket=T001, spec_excerpt=SpecExcerpt(14-inventory-service-epic))
+// — the full payload handed to opencode (trimmed only where marked ·… the rest is real):</span>
+<span class="c"># Ticket Task: T001 — Inventory Item Schema and SQLite Repository</span>
+
+<span class="c">## Execution Skill &amp; Discipline</span>
+Before writing any code, read .agents/skills/implement-ticket-runner/SKILL.md, then AGENTS.md.
+Apply: TDD at pre-agreed seams · fast feedback (targeted test files, not the whole suite) ·
+Windows shell discipline (no Unix-only pipes) · full suite only before emitting ready.
+
+<span class="c">## Architectural Context (Spec Excerpt)</span>
+Full specification reference: docs/specs/14-inventory-service-epic.md
+<span class="d">## Problem Statement</span> — inventory reads and writes are ad-hoc SQL in route handlers…
+<span class="d">## Solution</span> — a typed InventoryItem model plus one SQLite repository exposing
+parameterized add/get/list seams that later endpoints compose.
+
+<span class="c">## Active Ticket Details</span>
+### T001 — Inventory Item Schema and SQLite Repository
+### What to build
+- src/inventory/domain/models.py — InventoryItem value model (item_id, sku, name, quantity, location)
+- src/inventory/repo.py — InventoryRepository on SQLite, parameterized SQL only
+- tests/unit/test_repo.py — invariants + round-trips
+### Jump-start
+- Files/areas to touch: the three paths above
+- Seams: InventoryRepository.add() / get()
+- Existing-code anchors: src/inventory/config.py (DatabaseSettings)
+### Acceptance criteria
+- [ ] InventoryItem rejects negative quantities at construction
+- [ ] Repository rows written/read via parameterized SQL only
+- [ ] python -m pytest tests/unit/test_repo.py exits 0
+- [ ] No other file sections change
+### Ticket Gotchas
+- Windows-first checkout; no Unix-only pipes  ·  .agent/ stays untracked
+
+<span class="c">## Global Gotchas &amp; Lessons Learned</span>
+Review all project-wide pitfalls at docs/tickets/gotchas.md before implementing.
+
+<span class="c">## Operational Guardrails &amp; Completion Protocol</span>
+<span class="d">## Invariants (extracted from AGENTS.md, sanitized):</span>
+- opencode invoked as a subprocess, never a daemon; resume with the same session id
+- Worker implements via worker.execution_skill — it may tick Acceptance criteria, nothing else
+- Worker↔Runner state is durable JSON files — never parse model stdout
+- Only the Gatekeeper passes a ticket (build/test commands); 3 failed attempts trip the Circuit Breaker
+- All automated work on agent/ticket-runner; never git push (pre-push hook blocks it)
+- Commit format: &lt;type&gt;(&lt;scope&gt;): Title with layer scoping, no ticket numbers, no trailing periods
+- Token budget: warn 120k / handoff 135k / ceiling 150k (checkpoint via .agents/skills/handoff/SKILL.md)
+- One commit per ticket by the Gatekeeper; .agent/ is untracked
+
+1. <span class="w">No Git staging, commits, or queue mutations</span> — Worker may tick - [ ] → - [x] under the
+   Acceptance criteria of the active ticket file; every other edit under docs/tickets/ is forbidden.
+2. <span class="w">Review self-checks</span> — 3-axis code review (Standards/Spec/Security) recorded in self_review_notes;
+   this ticket is Security: required → also read .agents/skills/security-review/SKILL.md.
+3. <span class="w">Debugging guidance</span> — non-trivial failures: read .agents/skills/diagnosing-bugs/SKILL.md.
+4. <span class="w">Ready signal protocol</span> — when done, write .agent/signals/T001_ready.json with the exact schema
+   (ticket_id / status ready_for_verification / modified_files / self_review_notes / new_gotchas / timestamp / scope).
+5. <span class="w">Question protocol</span> — blocked or ambiguous → .agent/questions/T003-style file and STOP; never guess.</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">1.2</span><span class="s-title">Session Run 1 — the supervised event stream (WorkerEvent decoding + resource access)</span>
+          <span class="s-badges"><span class="badge working">STREAMING</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose"><code class="k">opencode run --format json</code> emits one JSON event per line. <code class="k">WorkerSupervisor</code> decodes each into a normalized <code class="k">WorkerEvent</code> (tolerant of unknown types), tracks a fixed ring buffer, accumulates the token budget, and extracts which project skills / <code class="k">AGENTS.md</code> the worker actually read (<code class="k">extract_resource_access</code>).</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T001]</span> <span class="d">stdout JSONL →</span>
+<span class="d">{</span><span class="c">"type":"step_start"</span><span class="d">,</span><span class="b">"sessionID":"ses_a1b2c3d4e5f6"</span><span class="d">,"timestamp":176…}</span>
+<span class="d">{</span><span class="c">"type":"tool_use"</span><span class="d">,</span> <span class="b">"part":{"tool":"read","state":{"input":{"filePath":".agents/skills/implement-ticket-runner/SKILL.md"}}}</span><span class="d">}</span>
+<span class="d">{</span><span class="c">"type":"tool_use"</span><span class="d">,</span> <span class="b">"part":{"tool":"read","state":{"input":{"filePath":"AGENTS.md"}}}</span><span class="d">}</span>
+<span class="d">{</span><span class="c">"type":"text"</span><span class="d">,</span>     <span class="b">"part":{"text":"Writing TDD seams for InventoryItem first…"}</span><span class="d">}</span>
+<span class="d">{</span><span class="c">"type":"tool_use"</span><span class="d">,</span> <span class="b">"part":{"tool":"edit","state":{"input":{"filePath":"src/inventory/domain/models.py"}}}</span><span class="d">}</span>
+<span class="d">{</span><span class="c">"type":"step_finish"</span><span class="d">,</span> <span class="b">"part":{"tokens":{"input":21400,"output":6811,"reasoning":4022,
+     "cache":{"read":5300,"write":1210},"total":38742}</span><span class="d">}}</span>
+<span class="tag tt">[T001]</span> occupancy <span class="y">38,742</span> — gauge 26%  ·  ring buffer rolling (Spec 10)</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json — RecordTokens</span>
+{
+<span class="chg">  <span class="d">"tokens"</span>: { <span class="d">"current"</span>: <span class="y">38742</span>, <span class="d">"warning_sent"</span>: <span class="b">false</span> },</span>
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:03:40Z"</span>, <span class="d">…</span>
+}
+<span class="d">// .agent/logs/T001.jsonl — raw stream archived verbatim for crash forensics</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// extract_resource_access(session 1) → frozenset:</span>
+{ <span class="jstr">"implement-ticket-runner"</span>, <span class="jstr">"AGENTS.md"</span> }
+<span class="d">// → surfaced on the Status Card (Discord thread) / terminal header:</span>
+<span class="d">//   [T001] skills accessed: implement-ticket-runner ✓  AGENTS.md ✓   (parity check across adapters)</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no amber">1.3</span><span class="s-title">Token budget crossed — 120k warn, then Context Handoff at 135k writes a checkpoint</span>
+          <span class="s-badges"><span class="badge handoffx"><svg class="i" aria-hidden="true"><use href="#i-arrow"/></svg>HANDOFF</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">This is the token-budget pathway from the architecture diagram, live: occupancy crosses <strong>120k → warning</strong>, then <strong>135k → the supervisor ends the Session Run</strong> and sends the handoff prompt from <code class="k">handoff_coordinator.py</code>. The Worker compacted its own conversation into the 5-section checkpoint at <code class="k">.agent/checkpoints/T001/handoff.md</code> and exited; a brand-new session resumes by reading that file (<code class="k">RESUME_PROMPT_TEMPLATE</code>), not by replaying history. Max 5 consecutive handoffs per ticket before escalation.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">14:11:06</span> <span class="tag tt">[Tokens]</span> occupancy <span class="y">120,881</span> ≥ warn <span class="y">120k</span> → Status Card + terminal warning
+<span class="d">14:14:52</span> <span class="tag tt">[Tokens]</span> occupancy <span class="c">135,412</span> ≥ handoff <span class="c">135k</span> → terminating Session Run 1 (reason=HANDOFF)
+<span class="tag ts">[Supervisor]</span> → resume prompt (fresh session):
+<span class="d">"Context budget threshold reached (135k tokens). Execute the handoff skill at
+ .agents/skills/handoff/SKILL.md. Save the handoff document directly to
+ {{checkpoint_path}}. Include modified files, architectural decisions, test
+ status, and immediate next steps. Then exit."</span>
+<span class="tag tt">[T001]</span> worker wrote checkpoint → <span class="b">.agent/checkpoints/T001/handoff.md</span>  <span class="g">(freshness slack 2s ok)</span>
+<span class="tag tt">[T001]</span> spawning Session Run 2 →</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json</span>
+{
+<span class="chg">  <span class="d">"tokens"</span>: { <span class="d">"current"</span>: <span class="y">0</span>, <span class="d">"warning_sent"</span>: <span class="b">true</span> },   <span class="d">// reset for fresh session</span></span>
+<span class="chg">  <span class="d">"last_checkpoint"</span>: <span class="b">".agent/checkpoints/T001/handoff.md"</span>,</span>
+<span class="chg">  <span class="d">"opencode_session_id"</span>: <span class="b">"ses_a1b2c3d4e5f6"</span> → <span class="b">"ses_b8f2d0a1c349"</span>,</span>
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:15:10Z"</span>, <span class="d">…</span>
+}</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="c">// .agent/checkpoints/T001/handoff.md — handoff skill format, 5 sections, verbatim:</span>
+<span class="w"># Handoff: T001 — Inventory Item Schema and SQLite Repository</span>
+
+<span class="c">## Active Context</span>
+Ticket T001 (spec 14-inventory-service-epic). Done: models.py (InventoryItem with
+quantity invariant), repo.py (parameterized add/get/list against data/inventory.db).
+Acceptance unticked in the ticket file tick at the end — only after the full
+targeted suite passes. Next: tests/unit/test_repo.py.
+
+<span class="c">## Completed Work</span>
+- src/inventory/domain/models.py — pydantic-style validation; negative quantity raises
+- src/inventory/repo.py — connect helper reads DatabaseSettings; add/get/list seams
+
+<span class="c">## Pending State</span>
+- test_repo.py half-written; test_negative_quantity_raises passes; round-trip tests pending
+- Decision: use context-manager transactions on repo methods (leaning yes)
+
+<span class="c">## Suggested Skills</span>
+implement-ticket-runner (executing) · code-review before the ready signal
+
+<span class="c">## Immediate Next Steps</span>
+1. Finish test_repo.py round-trips; 2. run py -3 -m pytest tests/unit/test_repo.py;
+3. run Standards + Spec review (plus Security when required); 4. tick acceptance criteria; 5. write .agent/signals/T001_ready.json</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">1.4</span><span class="s-title">Session Run 2 resumes from the checkpoint and emits the ready signal</span>
+          <span class="s-badges"><span class="badge pending">READY SIGNAL</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The fresh session reads the checkpoint, inspects <code class="k">git status</code>, finishes the tests, runs the review skill, <strong>ticks the acceptance criteria</strong> (its one sanctioned queue-file write), then drops the ready signal. The file is the truth — the Runner re-reads it, no parsing of model output.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T001]</span> Session Run 2 argv: <span class="d">["opencode","run","--format","json","--session","ses_b8f2d0a1c349",</span>
+<span class="d">        "-m","deepseek/deepseek-chat","--variant","medium","--auto",
+        "Read the context handoff document at `.agent/checkpoints/T001/handoff.md`, inspect
+         `git status`, then continue working on ticket T001."]</span>
+<span class="d">{</span><span class="c">"type":"tool_use"</span><span class="d">,</span> <span class="b">"part":{"tool":"read",…,"filePath":".agent/checkpoints/T001/handoff.md"}}</span>
+<span class="d">{</span><span class="c">"type":"text"</span><span class="d">,</span> <span class="b">"part":{"text":"3-axis review clean; security review passed (parameterized SQL verified)"}}</span>
+<span class="d">{</span><span class="c">"type":"step_finish"</span><span class="d">,</span> <span class="b">"part":{"tokens":{"total":46117},…}}</span>
+<span class="tag tt">[T001]</span> <span class="pos">✓ durable signal detected</span>: <span class="b">.agent/signals/T001_ready.json</span>  <span class="d">(watcher, not stdout)</span>
+<span class="tag tg">[WorkerSupervisor]</span> Session Run complete (reason=READY) → validating signal…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// Ticket file — the ONLY queue edit the Worker is allowed to make (pre-ticks)</span>
+<span class="chg">- [x] InventoryItem rejects negative quantities at construction</span>
+<span class="chg">- [x] Repository rows written/read via parameterized SQL only (no f-string interpolation)</span>
+<span class="chg">- [x] python -m pytest tests/unit/test_repo.py exits 0</span>
+<span class="chg">- [x] No other file sections change (Worker may only tick checkboxes here)</span>
+<span class="d">// git status: 3 modified source/test files; ticket file delta vs baseline = ticks only ✓</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="c">// .agent/signals/T001_ready.json — written by the Worker, validated by the Runner</span>
+{
+  <span class="jkey">"ticket_id"</span>: <span class="jstr">"T001"</span>,
+  <span class="jkey">"status"</span>: <span class="jstr">"ready_for_verification"</span>,
+  <span class="jkey">"modified_files"</span>: [
+    <span class="jstr">"src/inventory/domain/models.py"</span>,
+    <span class="jstr">"src/inventory/repo.py"</span>,
+    <span class="jstr">"tests/unit/test_repo.py"</span>
+  ],
+  <span class="jkey">"self_review_notes"</span>: "3-axis review clean: Standards ok, Spec ok, Security ok
+    (parameterized SQL verified, no dynamic interpolation). Targeted suite 12 passed;
+    full suite 84 passed in 6.1s before signalling.",
+  <span class="jkey">"new_gotchas"</span>: [],
+  <span class="jkey">"timestamp"</span>: <span class="jstr">"2026-10-29T14:19:11Z"</span>,
+  <span class="jkey">"scope"</span>: <span class="jstr">"domain"</span>
+}</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no violet">1.5</span><span class="s-title">Gatekeeper verification — baseline check, build/test, Evidence Card</span>
+          <span class="s-badges"><span class="badge gatekeeper">GATEKEEPER</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose"><code class="k">RunnerState</code> flips to <code class="k">GATEKEEPER</code>. The baseline diff must show <em>only</em> checkbox ticks; then the configured commands run — out-of-band, evidence archived, failure excerpts never exceeding 30 lines / 1,000 chars. This run is AFK: the Evidence Card is recorded, counted, and auto-approved. In <code class="k">lifecycle.approval_mode: "human"</code>, the very same card pauses the flow for a human decision.</p>
+          <div class="ecard" aria-label="Evidence card">
+            <div class="e-t"><svg class="i" width="14" height="14" aria-hidden="true"><use href="#i-check"/></svg>Evidence Card · T001</div>
+            <dl>
+              <dt>test_status</dt><dd><code>passed — 84 passed in 6.1s</code></dd>
+              <dt>harness_status</dt><dd><code>null</code> (no Verification Harness configured for this project)</dd>
+              <dt>evidence_paths</dt><dd><code>.agent/evidence/T001/summary.json · harness.log</code></dd>
+              <dt>unticked_criteria</dt><dd><code>()</code> — all four criteria ticked by the Worker</dd>
+              <dt>decision</dt><dd><code>ApprovalDecision.APPROVE</code> — AFK mode, auto countersigned</dd>
+            </dl>
+          </div>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tg">[Gatekeeper]</span> state → <span class="v">GATEKEEPER</span> · ticket T001
+  ✓ dispatch baseline diff = Acceptance criteria ticks only
+  ✓ build_cmd empty → skip
+  ▸ test_cmd: <span class="b">python -m pytest</span> <span class="d">(timeout 300s · silence window 60s · cwd=target project)</span>
+  ✓ exit 0 — 84 passed in 6.1s
+<span class="tag tg">[Gatekeeper]</span> Evidence Card generated · decision <span class="pos">APPROVE (AFK auto)</span>
+<span class="tag tg">[Gatekeeper]</span> T001 <span class="pos">COMPLETED</span> → finalizing commit…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json</span>
+{
+<span class="chg">  <span class="d">"status"</span>: <span class="b">"GATEKEEPER"</span>,</span>   <span class="d">// …then back to IDLE after approval</span>
+  <span class="d">"verification_attempts"</span>: <span class="y">0</span>,   <span class="d">// failures increment; success never does</span>
+  <span class="d">"last_updated"</span>: <span class="b">"2026-10-29T14:19:37Z"</span>, <span class="d">…</span>
+}
+<span class="d">// .agent/evidence/T001/ — out-of-band artifacts the LLM never sees whole:</span>
+<span class="d">   summary.json   harness.log   screenshots/</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="c">// .agent/evidence/T001/summary.json — written atomically by EvidenceTriage</span>
+{
+  <span class="jkey">"exit_code"</span>: <span class="jnum">0</span>,
+  <span class="jkey">"duration"</span>: <span class="jnum">6.1</span>,
+  <span class="jkey">"failure_excerpt"</span>: <span class="jstr">""</span>,
+  <span class="jkey">"first_failing_test"</span>: <span class="l">null</span>,
+  <span class="jkey">"error_message"</span>: <span class="l">null</span>,
+  <span class="jkey">"artifacts"</span>: [<span class="jstr">"harness.log"</span>]
+}</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">1.6</span><span class="s-title">Exactly one commit — code, tests, gotchas, and the relocated ticket</span>
+          <span class="s-badges"><span class="badge completed">COMPLETED</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose"><code class="k">GitOperations</code> stages everything (<code class="k">git add -A</code> — Worker never ran <code class="k">git add</code>), writes the gotchas the Worker reported via <code class="k">new_gotchas</code> into <code class="k">docs/tickets/gotchas.md</code>, patches the ticket header to <code class="k">**Status:** completed</code> plus a <code class="k">**Completed:**</code> timestamp, relocates the file into the ticket directory's <code class="k">completed/</code> folder, and authors exactly one conventional commit on <code class="k">agent/ticket-runner</code>.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tg">[GitOps]</span> git add -A          <span class="d">(5 files: code 2 · tests 1 · gotchas.md 1 · ticket 1)</span>
+<span class="tag tg">[GitOps]</span> serializer: **Status:** completed · **Completed:** 2026-10-29T14:19:38Z
+<span class="tag tg">[GitOps]</span> relocate: T001-… → docs/tickets/14-inventory-service-epic/completed/
+<span class="tag tg">[GitOps]</span> commit →
+<span class="d">    feat(api): Add inventory item SQLite repository</span>
+<span class="d">    </span>
+<span class="d">    - Implement InventoryItem value model with quantity invariant
+    - Add parameterized InventoryRepository for SQLite
+    - Cover construction invariants and round-trips with unit tests
+    - Record T001 completion in the ticket archive</span>
+<span class="tag tg">[GitOps]</span> 1 commit authored: <span class="b">a1c9f30</span>          <span class="d">(commit SHA lives in git, never in the ticket)</span>
+<span class="tag ts">[Runner]</span> state → <span class="g">IDLE</span> · tokens reset · T001 out of the front of the queue</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">docs/tickets/14-inventory-service-epic/</span>
+├── <span class="d">T002-reserve-stock-endpoint.md</span>   <span class="d">Status: pending</span>
+├── <span class="d">T003-partial-returns-race.md</span>
+├── <span class="d">T004-stock-dashboard-page.md</span>
+├── <span class="w">completed/</span>
+│   └── <span class="c">T001-inventory-item-repository.md</span>   <span class="g">← relocated, header finalized</span>
+<span class="d"> git log --oneline -1</span>
+<span class="b">a1c9f30</span> <span class="d">feat(api): Add inventory item SQLite repository</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Signal hygiene after a green, approved run:</span>
+<span class="b">.agent/signals/T001_ready.json</span> → consumed (archived under .agent/logs/)
+<span class="b">.agent/questions/</span> → untouched — T001 never asked
+<span class="d">// Lifecycle continues: QueueOrchestrator picks T002 next … but the queue names a
+// different agent (parity note in §2): the Runner is restarted with provider antigravity.</span>
+<span class="y">^C</span> <span class="d">Operator: switching session provider for T002 → exit code 130 (graceful SIGINT)</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <h2 class="sec" style="margin-top:2.8rem"><span class="no">T002</span> Validation failure &amp; self-healing retry loop</h2>
+
+  <details class="ticket" id="rt2">
+    <summary>
+      <span class="t-id">T002</span><span class="t-title">Reserve stock endpoint</span>
+      <span class="t-meta"><span class="badge retrying pulse"><svg class="i" aria-hidden="true"><use href="#i-zap"/></svg>ANTIGRAVITY</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+
+      <details class="step">
+        <summary><span class="s-no orange">2.1</span><span class="s-title">Session 2 — provider swap to Antigravity; dependency gate proves T001 completed</span>
+          <span class="s-badges"><span class="badge completed">deps ✓</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The operator flips <code class="k">worker.provider: "antigravity"</code> in the overlay and re-runs <code class="k">start</code>. Doctor re-validates the <code class="k">agy</code> binary; model selection picks <code class="k">gemini-3-pro</code> (persisted); the queue scan finds T001 completed and T002 eligible. Nothing else in the flow changes — that's the parity promise.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">14:23:40</span> <span class="tag ts">[Runner]</span> start (session 2) — worker.provider: <span class="b">antigravity</span> <span class="d">(overlay edited for T002)</span>
+<span class="tag tg">[Doctor]</span> <span class="d">…full 11-check pass…</span>  ✓ Antigravity CLI (agy 1.2.16) — stream-json verified
+<span class="tag tt">[Queue]</span> Acquisition: .queue.lock held
+<span class="tag tg">[Gatekeeper]</span> pre-dispatch → T002: Mode AFK · Status pending · Blocked by <span class="c">T001</span>
+<span class="tag tt">[T002]</span> marker <span class="d">T001</span> status = <span class="g">completed</span> (from its relocated file) → dependency satisfied
+<span class="tag tt">[T002]</span> Adapter <span class="c">AntigravityWorker</span> · model <span class="b">gemini-3-pro</span> · effort <span class="b">high</span> <span class="d">(Reasoning: high)</span>
+<span class="tag tt">[T002]</span> Session Run 1 · attempt <span class="y">1</span> streaming…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json — to_working(T002)</span>
+{
+<span class="chg">  <span class="d">"status"</span>: <span class="b">"WORKING"</span>,  <span class="d">"active_ticket_id"</span>: <span class="b">"T002"</span>,</span>
+<span class="chg">  <span class="d">"opencode_session_id"</span>: <span class="b">"conv_9f4c1e77-0b21-4d62-bf0e-7c22a91d5410"</span> <span class="d">← agy UUID, same field</span></span>
+<span class="chg">  <span class="d">"selected_model"</span>: <span class="b">"gemini-3-pro"</span>,</span>
+  <span class="d">"verification_attempts"</span>: <span class="y">0</span>, <span class="d">"tokens": {…}</span>
+}
+<span class="d">// T002 header: **Status:** pending → in_progress (serializer, in place)</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Prompt delta vs the canonical builder (T001 §1.1 — same builder, ticket swapped):</span>
+<span class="c"># Ticket Task: T002 — Reserve Stock Endpoint</span>
+<span class="c">### Acceptance criteria</span> — 5 criteria from the T002 file (§3)…full body inlined
+<span class="c">### Jump-start</span>
+- <span class="b">Existing-code anchors: T001 commit a1c9f30</span>  <span class="d">← the cross-ticket carrier:
+  completed work enters a new ticket through git history + the repository seams,
+  not through a bloated resummed conversation. Fresh session, clean token window.</span>
+<span class="d">// (Everything else — invariants, completion protocol, signals schema — identical.)</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no orange">2.2</span><span class="s-title">Session Run 1 (attempt 1) — agy NDJSON stream and the first ready signal</span>
+          <span class="s-badges"><span class="badge working">STREAMING</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">Antigravity streams a closed 3-event vocabulary. The adapter normalizes token telemetry from <code class="k">step_update.usage</code>/<code class="k">result.usage</code> (and <em>forces</em> <code class="k">total</code> to <code class="k">None</code> on <code class="k">step_update</code>, because agy's step totals omit cached prompt + thinking — the real occupancy math adds the parts). Also note <code class="k">--print-timeout 0</code>: the Runner owns wall-clock ceilings, because a truncated agy turn can masquerade as an empty SUCCESS.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T002]</span> agy argv:
+<span class="d">["agy","-p","&lt;prompt payload&gt;","--output-format","stream-json",</span>
+<span class="d"> "--model","gemini-3-pro","--effort","high","--print-timeout","0"]</span>
+<span class="d">{</span><span class="c">"event":"init"</span><span class="d">,</span><span class="b">"conversation_id":"9f4c1e77-0b21-4d62-bf0e-7c22a91d5410"</span><span class="d">}</span>
+<span class="d">{</span><span class="c">"event":"step_update"</span><span class="d">,</span> <span class="b">"usage":{"input_tokens":31200,"output_tokens":5410,
+   "thinking_tokens":8800,"cache_read_tokens":12000,"cache_write_tokens":2200,
+   "total_tokens":36610}</span><span class="d">,  ← total surfaced but recomputed for occupancy}</span>
+<span class="d">{</span><span class="c">"event":"step_update"</span><span class="d">,</span> <span class="b">"tool_info":{"name":"edit","parameters":{"filePath":"src/inventory/services.py"}}}</span>
+<span class="d">{</span><span class="c">"event":"result"</span><span class="d">,</span> <span class="b">"status":"SUCCESS","usage":{…"total_tokens":96042}}</span>
+<span class="tag tt">[T002]</span> occupancy <span class="y">96,042</span> (gauge 64%) · attempt <span class="y">1</span> ready signal present</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/signals/T002_ready.json (attempt 1)</span>
+{
+  <span class="jkey">"ticket_id"</span>: <span class="jstr">"T002"</span>,
+  <span class="jkey">"status"</span>: <span class="jstr">"ready_for_verification"</span>,
+  <span class="jkey">"modified_files"</span>: [<span class="jstr">"src/inventory/services.py"</span>, <span class="jstr">"src/inventory/api.py"</span>,
+                    <span class="jstr">"tests/integration/test_reservations.py"</span>],
+  <span class="jkey">"self_review_notes"</span>: "reserve path implemented; conflict handling added; suite green locally.",
+  <span class="jkey">"new_gotchas"</span>: [],
+  <span class="jkey">"timestamp"</span>: <span class="jstr">"2026-10-29T14:31:02Z"</span>,
+  <span class="jkey">"scope"</span>: <span class="jstr">"api"</span>
+}
+<span class="d">// Worker ticked all 5 acceptance criteria in the ticket file (baseline diff: ticks only)</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Resource access extraction (agy structured path): step_update.tool_info.parameters →</span>
+{ <span class="jstr">"implement-ticket-runner"</span>, <span class="jstr">"code-review"</span>, <span class="jstr">"AGENTS.md"</span> }
+<span class="d">// Anomaly guard: result status SUCCESS but empty response + zero usage would be
+// surfaced as "SUCCESS result with zero token usage … treating as anomalous,
+// non-productive turn" — not on this ticket; keeping the guard visible.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no red">2.3</span><span class="s-title">Gatekeeper attempt 1 fails — exit 1, bounded triage, attempt counter 1/3</span>
+          <span class="s-badges"><span class="badge failedx">ATTEMPT 1/3</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The Worker's claim is irrelevant — the gate runs <code class="k">python -m pytest</code> and the integration suite disagrees: the concurrent double-reserve test deadlocks into a UNIQUE constraint violation, plus insufficient-stock responses leave partial writes. <code class="k">validation_attempts</code> increments only on failure. The full log is archived raw; only a bounded excerpt reaches any LLM.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tg">[Gatekeeper]</span> T002 attempt <span class="y">1</span>
+  ✓ dispatch baseline diff = ticks only
+  ▸ test_cmd: <span class="b">python -m pytest</span>
+<span class="d">  =============== FAILURES ===============</span>
+<span class="jerr">  FAILED tests/integration/test_reservations.py::test_insufficient_stock_conflict</span>
+<span class="y">  E           sqlite3.IntegrityError: UNIQUE constraint failed: reservations(copy_no)</span>
+<span class="jerr">  FAILED tests/integration/test_reservations.py::test_concurrent_double_reserve_last_unit</span>
+<span class="y">  E           assert 0 == 1  (second request got 201, stock went negative)</span>
+<span class="d">  17 failed, 61 passed in 4.9s</span>
+  <span class="r">✗ exit 1</span> <span class="d">(timeout not hit — process actually failed)</span>
+<span class="tag tr">[Triage]</span> log → .agent/logs/T002_attempt1.log · excerpt <span class="c">24 lines / 938 chars</span> (caps 30 / 1,000)
+<span class="tag tr">[Triage]</span> summary.json written · re-dispatching attempt <span class="y">2</span> with failure context (bug_escalation_at=1)</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json</span>
+{
+<span class="chg">  <span class="d">"verification_attempts"</span>: <span class="y">1</span>,</span>
+  <span class="d">"status"</span>: <span class="b">"WORKING"</span> <span class="d">(back from GATEKEEPER for the retry loop)</span>,
+  <span class="d">"opencode_session_id"</span>: <span class="b">"conv_9f4c1e77…-5410"</span>  <span class="d">// same conversation is reusable</span>
+}
+<span class="d">// .agent/evidence/T002/</span>
+<span class="d">   summary.json     harness.log    ← raw, unlimited; never sent to any LLM</span>
+<span class="d">// Ticket stays in_progress — failure is not a status, it is an attempt.</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="c">// .agent/evidence/T002/summary.json — schema from EvidenceTriage.extract</span>
+{
+  <span class="jkey">"exit_code"</span>: <span class="jnum">1</span>,
+  <span class="jkey">"duration"</span>: <span class="jnum">4.9</span>,
+  <span class="jkey">"first_failing_test"</span>: <span class="jstr">"tests/integration/test_reservations.py::test_insufficient_stock_conflict"</span>,
+  <span class="jkey">"error_message"</span>: <span class="jstr">"sqlite3.IntegrityError: UNIQUE constraint failed: reservations(copy_no)"</span>,
+  <span class="jkey">"failure_excerpt"</span>: "…24-line bounded pytest excerpt (≤30 lines / 1,000 chars)…",
+  <span class="jkey">"artifacts"</span>: [<span class="jstr">"harness.log"</span>]
+}</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no orange">2.4</span><span class="s-title">Re-dispatch with failure context — same conversation, bounded excerpt, microscopic blast radius</span>
+          <span class="s-badges"><span class="badge retrying">RE-DISPATCH</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The supervisor resumes the <em>same</em> agy conversation (no context reset — the ticket isn't doomed, the code just has bugs) with a purpose-built retry prompt whose only payload is the triaged excerpt plus fresh guardrails. This is the entire healing loop: fail → triage ≤30 lines → re-invoke with just that.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T002]</span> Re-dispatch argv (attempt 2, same conversation):
+<span class="d">["agy","-p","&lt;verification-failure prompt (signals pane)&gt;",</span>
+<span class="d"> "--output-format","stream-json",</span>
+<span class="d"> "--conversation","9f4c1e77-0b21-4d62-bf0e-7c22a91d5410",</span>
+<span class="d"> "--model","gemini-3-pro",</span>
+<span class="d"> "--effort","high","--print-timeout","0"]</span>
+<span class="tag tr">[Triage]</span> excerpt attached: 24 lines / 938 chars · instruction: fix forward, never revert T001</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// Clean-slate guarantee in a retry: the previous ticket's sanitation rules apply.
+// If the working tree were dirty beyond this ticket's own WIP, the coordinator would
+// stash it. Here the tree holds only T002 code — nothing to preserve or roll back.</span>
+<span class="d">git status --porcelain</span>
+<span class="b"> M src/inventory/services.py</span>
+<span class="b"> M src/inventory/api.py</span>
+<span class="b"> M tests/integration/test_reservations.py</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Verification-failure re-prompt (full text actually sent as NEW argv prompt):</span>
+<span class="c"># Ticket Task: T002 — Reserve Stock Endpoint (Verification Attempt 2)</span>
+
+<span class="c">## Verification Failure Context</span>
+The Gatekeeper ran: python -m pytest → exit code 1, 17 failed / 61 passed.
+<span class="d">Summary (bounded excerpt, 24 lines / 938 chars):</span>
+  FAILED tests/integration/test_reservations.py::test_insufficient_stock_conflict
+  E           sqlite3.IntegrityError: UNIQUE constraint failed: reservations(copy_no)
+  FAILED tests/integration/test_reservations.py::test_concurrent_double_reserve_last_unit
+  E           assert 0 == 1  (second request got 201, stock went negative)
+  <span class="d">…8 further failure blocks, truncated by EvidenceTriage caps…</span>
+
+<span class="c">## Rules for this attempt</span>
+- Treat ONLY this excerpt as ground truth at start; do not re-run the full suite in a loop —
+  fix at the named seam, then run: python -m pytest tests/integration/test_reservations.py -x
+- Do NOT revert or rewrite T001 code (src/inventory/repo.py, models.py) to make tests pass;
+  the failure is in reservation semantics, not in the repository seams.
+- Insufficient stock must be a guarded 409 check INSIDE one SQLite transaction, before the
+  decrement; double-reserve must conflict through a unique index and return one 201/one 409.
+- Refresh acceptance ticks if any regression; re-tick only what actually passes.
+- Then emit .agent/signals/T002_ready.json again (same schema) and exit.
+- No git add/commit. Never edit docs/tickets/ except the active ticket's checkboxes.</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">2.5</span><span class="s-title">Attempt 2 — Gatekeeper green; Evidence Card (auto-approve in AFK)</span>
+          <span class="s-badges"><span class="badge completed">ATTEMPT 2/3</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <div class="ecard" aria-label="Evidence card">
+            <div class="e-t"><svg class="i" width="14" height="14" aria-hidden="true"><use href="#i-check"/></svg>Evidence Card · T002</div>
+            <dl>
+              <dt>test_status</dt><dd><code>passed — 89 passed in 5.4s (was 17 failed on attempt 1)</code></dd>
+              <dt>harness_status</dt><dd><code>null</code></dd>
+              <dt>evidence_paths</dt><dd><code>.agent/evidence/T002/summary.json · harness.log</code></dd>
+              <dt>unticked_criteria</dt><dd><code>()</code> — 5/5 criteria ticked</dd>
+              <dt>attempts</dt><dd><code>1 failed → 2nd green; Circuit Breaker unused</code></dd>
+            </dl>
+          </div>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">{</span><span class="c">"event":"result"</span><span class="d">,</span> <span class="b">"status":"SUCCESS"</span><span class="d">,</span> <span class="b">"usage":{"total_tokens":118777}}</span>
+<span class="tag tt">[T002]</span> <span class="pos">✓ ready signal re-emitted</span>: .agent/signals/T002_ready.json
+<span class="tag tg">[Gatekeeper]</span> attempt <span class="y">2</span>: baseline diff = ticks only ✓ · pytest <span class="pos">exit 0</span> (89 passed, 5.4s)
+<span class="tag tg">[Gatekeeper]</span> Evidence Card · decision <span class="pos">APPROVE (AFK auto)</span> → commit…</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json</span>
+{ <span class="d">"verification_attempts"</span>: <span class="y">1</span>,  <span class="d">// historical count; green attempts never increment</span>
+  <span class="d">"status"</span>: <span class="b">"GATEKEEPER"</span> → <span class="g">IDLE</span>,  <span class="d">"tokens": {…}, …</span> }
+<span class="d">// .agent/evidence/T002/summary.json — attempt 2 overwritten (latest gate result):</span>
+{ <span class="jkey">"exit_code"</span>: <span class="jnum">0</span>, <span class="jkey">"duration"</span>: <span class="jnum">5.4</span>, <span class="jkey">"first_failing_test"</span>: <span class="l">null</span>,
+  <span class="jkey">"error_message"</span>: <span class="l">null</span>, <span class="jkey">"failure_excerpt"</span>: <span class="jstr">""</span>, <span class="jkey">"artifacts"</span>: [<span class="jstr">"harness.log"</span>] }</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// The fix that landed, straight from the worker's own event text (transparency):</span>
+<span class="d">"Added CREATE UNIQUE INDEX reservations_copy_uq ON reservations(item_id, copy_no);
+ reserved stock guarded inside a BEGIN IMMEDIATE transaction; conflict → 409;
+ decrement and insert committed together."</span>
+<span class="d">// In HUMAN mode (lifecycle.approval_mode: human), this exact point is where the
+// Evidence Card above is presented for /approve — commits strictly blocked.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">2.6</span><span class="s-title">Commit T002 — antigravity ticket lands, provider resets for the opencode tickets</span>
+          <span class="s-badges"><span class="badge completed">COMPLETED</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tg">[GitOps]</span> commit →
+<span class="d">    feat(api): Add atomic reserve stock endpoint</span>
+<span class="d">    </span>
+<span class="d">    - Guard insufficient stock with an in-transaction 409 check
+    - Enforce copy uniqueness to make double reservation conflict
+    - Cover concurrency and insufficient-stock flows with integration tests</span>
+<span class="tag tg">[GitOps]</span> 1 commit authored: <span class="b">77e02d1</span> · T002 → <span class="c">completed/</span>
+<span class="tag ts">[Runner]</span> state → <span class="g">IDLE</span>
+<span class="y">^C</span> <span class="d">Operator: switching provider back to opencode for T003/T004 → exit 130</span></pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">completed/</span>
+├── <span class="c">T001-inventory-item-repository.md</span>
+└── <span class="w">T002-reserve-stock-endpoint.md</span>   <span class="d">**Status:** completed · **Completed:** 14:47:12Z</span>
+<span class="d">remaining/: T003 (pending), T004 (pending)</span>
+<span class="d">git log --oneline -2</span>
+<span class="b">77e02d1</span> <span class="d">feat(api): Add atomic reserve stock endpoint</span>
+<span class="b">a1c9f30</span> <span class="d">feat(api): Add inventory item SQLite repository</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Worker-added gotcha (from new_gotchas in the ready signal) now lives in the
+// global log, at the Runner's hand — the Worker never edits it directly:</span>
+<span class="c">// docs/tickets/gotchas.md (appended by the Gatekeeper):</span>
+<span class="ms">- Reservation copy uniqueness must come from a UNIQUE INDEX, not app-level checks —
+  concurrency tests will otherwise see race windows (T002).</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <h2 class="sec" style="margin-top:2.8rem"><span class="no">T003</span> Ambiguity, max-retry failure, and the queue halt</h2>
+
+  <details class="ticket" id="rt3">
+    <summary>
+      <span class="t-id">T003</span><span class="t-title">Partial return semantics for reservations</span>
+      <span class="t-meta"><span class="badge waiting"><svg class="i" aria-hidden="true"><use href="#i-ban"/></svg>BLOCKED</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+
+      <details class="step">
+        <summary><span class="s-no">3.1</span><span class="s-title">Session 3 (opencode) — attempt 1 fails; attempt 2 fails with a different shape</span>
+          <span class="s-badges"><span class="badge failedx">2× FAILED</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tg">[Doctor]</span> session 3 · provider <span class="b">opencode</span> re-validated · model <span class="b">deepseek/deepseek-chat</span> restored from state
+<span class="tag tg">[Gatekeeper]</span> T003 pre-dispatch: Mode AFK · Blocked by T002 → <span class="g">completed</span> ✓
+<span class="tag tt">[T003]</span> attempt <span class="y">1</span>: ready signal ok → pytest <span class="r">exit 1</span>
+<span class="jerr">  FAILED test_partial_release.py::test_release_restocks_only_released_qty</span>
+<span class="y">  E           assert 2 == 1   (whole batch released instead of the partial qty)</span>
+<span class="tag tr">[Triage]</span> excerpt 18 lines / 711 chars → re-prompt
+<span class="tag tt">[T003]</span> attempt <span class="y">2</span>: ready signal ok → pytest <span class="r">exit 1</span>
+<span class="jerr">  FAILED test_partial_release.py::test_no_double_release_surfaces_to_damaged</span>
+<span class="y">  E           assert damaged == available   (release routed units to two buckets at once)</span>
+<span class="tag tr">[Triage]</span> excerpt 21 lines / 834 chars → re-prompt (attempt <span class="y">3</span> = budget's last)</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json after each gate failure</span>
+{ <span class="d">"status"</span>: <span class="b">"WORKING"</span>, <span class="d">"active_ticket_id"</span>: <span class="b">"T003"</span>,
+<span class="chg">  <span class="d">"verification_attempts"</span>: <span class="y">1</span></span><span class="d"> →</span><span class="chg"> <span class="y">2</span></span><span class="d">, "tokens": {…}, …</span> }
+<span class="d">// .agent/evidence/T003/summary.json — attempt 2 archive:</span>
+{ <span class="jkey">"exit_code"</span>: <span class="jnum">1</span>, <span class="jkey">"duration"</span>: <span class="jnum">3.8</span>,
+  <span class="jkey">"first_failing_test"</span>: <span class="jstr">"tests/integration/test_partial_release.py::test_no_double_release_surfaces_to_damaged"</span>,
+  <span class="jkey">"error_message"</span>: <span class="jstr">"assert damaged == available (release routed units to two buckets at once)"</span>,
+  <span class="jkey">"failure_excerpt"</span>: <span class="jstr">"…21-line bounded excerpt…"</span>, <span class="jkey">"artifacts"</span>: [<span class="jstr">"harness.log"</span>] }</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// Both attempts still emitted proper ready signals (schema-validated), and both
+// re-prompts carried the same structure as T002's (§2.4). But a pattern is forming:
+// attempt 1 didn't limit quantities; attempt 2 over-corrected into a DOUBLE route.
+// The worker is oscillating — because the real question is domain semantics, not code.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no red">3.2</span><span class="s-title">Attempt 3 — the Worker refuses to guess and emits an authoritative question signal</span>
+          <span class="s-badges"><span class="badge waiting">QUESTION</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">Instead of reverting again, the Worker follows the question protocol from its execution skill: requirements are ambiguous at the decision that <em>caused</em> both failures — where do released units land? It stops working (streaming ends mid-implementation) and writes <code class="k">.agent/questions/T003.json</code>. Two consequences to memorize: (1) <strong>no ready signal → the attempt is consumed</strong> (refusal consumes an attempt, ADR 0017), and (2) a question is <em>not</em> a failure mode the Gatekeeper can resolve — it is an operator surface.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">{</span><span class="c">"type":"text"</span><span class="d">,</span> <span class="b">"part":{"text":"I will not invent the plural-release routing rule; the
+ spec is truncated on the available/damaged branch. Emitting the question signal and
+ stopping work on this attempt."}}</span>
+<span class="tag tt">[T003]</span> <span class="r">no ready signal materialized</span> in .agent/signals/ →
+<span class="tag tg">[Gatekeeper]</span> ready-signal validation: <span class="r">REFUSED</span> — attempt <span class="y">3</span> consumed (ADR 0017 refusal semantics)
+<span class="d">// challenge noted: question file present, not a ready signal — this is not state confusion;</span>
+<span class="d">// the supervisor distinguishes signal kinds by FILE, never by stdout.</span></pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/state.json</span>
+{ <span class="d">"verification_attempts"</span>: <span class="y">3</span>,   <span class="d">= max_attempts</span>
+  <span class="d">"status"</span>: <span class="b">"WORKING"</span>, <span class="d">"active_ticket_id"</span>: <span class="b">"T003"</span>, … }
+<span class="b">// .agent/questions/T003.json — written by the Worker, id-gated by domain validation</span>
+{
+  <span class="jkey">"ticket_id"</span>: <span class="jstr">"T003"</span>,
+  <span class="jkey">"question"</span>: "For a partial pickup from a reservation batch, should the released
+    quantity return to `available` immediately, or route to the damaged bin until
+    inspection? stock_levels spec section 3.2 defines damaged bins but is silent on
+    partial pickups. Both readings implement `test_release_restocks_only_released_qty`.",
+  <span class="jkey">"type"</span>: <span class="jstr">"text"</span>,
+  <span class="jkey">"options"</span>: <span class="l">null</span>,
+  <span class="jkey">"status"</span>: <span class="jstr">"pending"</span>,
+  <span class="jkey">"answer"</span>: <span class="l">null</span>,
+  <span class="jkey">"created_at"</span>: <span class="jstr">"2026-10-29T15:02:41Z"</span>
+}</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// The two candidate semantics the Worker is refusing to choose between:</span>
+<span class="v">A)</span>  <span class="d">released units → available immediately; damaged bin only for inspected-out items</span>
+<span class="v">B)</span>  <span class="d">released units → damaged bin until inspection; available only after a keeper check</span>
+<span class="d">// Both satisfy the 1st and 3rd acceptance criteria; only 2nd pins the choice via the
+// undocumented "domain rule". This is precisely the class of question the Runner's
+// intervention port exists for — options: proceed-with-guidance / skip / abort.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no red">3.3</span><span class="s-title">Circuit Breaker trips — stash, blocked ticket, downstream hold, actionable diagnostics</span>
+          <span class="s-badges"><span class="badge blocked"><svg class="i" aria-hidden="true"><use href="#i-ban"/></svg>CIRCUIT_BREAKER</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">3 attempts, zero greens. The breaker trips: state becomes <code class="k">CIRCUIT_BREAKER_TRIPPED</code>, T003's header goes to <code class="k">**Status:** blocked</code>, the T004-dependent pass is marked <em>skipped/waiting</em> by the orchestrator's pass planner, and the dirty tree is stashed so the branch is clean while the ticket awaits a human. Diagnostics name files, reasons, and the exact resume command.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="r">╔══════════════════════════════════════════════════════════════════╗</span>
+<span class="r">║  CIRCUIT BREAKER — T003 exhausted verification.max_attempts = 3  ║</span>
+<span class="r">╚══════════════════════════════════════════════════════════════════╝</span>
+<span class="tag ts">[GitOps]</span> working tree dirty (3 files) → <span class="b">git stash push -u -m "ticket-runner/T003-wip"</span>
+<span class="tag ts">[Queue]</span> T003 header → <span class="r">**Status:** blocked</span> (serializer, in place)
+<span class="tag ts">[Queue]</span> T004: upstream <span class="r">T003 blocked</span> → <span class="badge skipped">SKIPPED</span> <span class="d">for this pass; re-enters queue automatically</span>
+<span class="tag ts">[Runner]</span> state → <span class="r">CIRCUIT_BREAKER_TRIPPED</span> → <span class="v">WAITING_FOR_USER</span>
+<span class="d">───────────────────────── actionable diagnostics ──────────────────────────</span>
+<span class="w">Blocker evidence:</span>
+  · .agent/questions/T003.json          <span class="d">(status: pending — the actual question)</span>
+  · .agent/evidence/T003/summary.json   <span class="d">(last gate exit code 1, attempt 2 archive)</span>
+  · .agent/logs/T003.jsonl              <span class="d">(complete worker + gate history)</span>
+  · stash@{0} ticket-runner/T003-wip    <span class="d">(uncommitted release-event listener... WIP)</span>
+<span class="w">Suggested resolution:</span>
+  1. Decide partial-pickup routing (available vs damaged-bin) as a domain rule.
+  2. Answer the question in the ticket or tick guidance; record it in new_specs/14.
+  3. Resume:  py -3 ticket_runner.py --project-dir D:\Repos\inventory-service start
+<span class="d">────────────────────────────────────────────────────────────────────────────</span>
+<span class="tag ts">[Runner]</span> queue stopped — ticket T003 remains blocked (exit code 3 → human intervention)</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// T003 ticket header (final before human assistance):</span>
+<span class="mkey">**Status:**</span> <span class="rm"><span class="mval">in_progress</span></span>
+<span class="chg"><span class="mkey">**Status:**</span> <span class="mval">blocked</span></span>
+<span class="chg"><span class="mkey">**Status note:**</span> <span class="mval">circuit breaker tripped — awaiting partial-release routing decision (T003.json pending)</span></span>
+
+<span class="d">// state.json</span>
+{
+<span class="chg">  <span class="d">"status"</span>: <span class="b">"CIRCUIT_BREAKER_TRIPPED"</span> <span class="d">→</span> <span class="v">"WAITING_FOR_USER"</span>,</span>
+  <span class="d">"active_ticket_id"</span>: <span class="b">"T003"</span>,  <span class="d">// stays pinned until unblocked</span>
+  <span class="d">"verification_attempts"</span>: <span class="y">3</span>,  <span class="d">"tokens": {…}, …</span>
+}
+<span class="d">git log --oneline -1</span>  <span class="b">branch tip = 77e02d1</span>  <span class="d">(no half-tickets ever commit)</span>
+<span class="d">git stash list</span>         <span class="b">stash@{0}</span> <span class="d">On agent/ticket-runner: ticket-runner/T003-wip</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// T004 was never dispatched — the orchestrator excluded it before the gate:</span>
+<span class="tag tg">[Gatekeeper]</span> T004 pre-dispatch check: Blocked by <span class="r">T003 (blocked)</span>
+<span class="tag ts">[Queue]</span>      dispatch decision: SKIP this pass (status_note: waiting on T003) · stays pending
+
+<span class="d">// Away-mode equivalent: the same escalation is a Discord thread card:</span>
+<span class="c">// [#ticket-t003] @operator Circuit breaker on T003 — decide partial-release routing.</span>
+<span class="c">// Evidence: .agent/evidence/T003 · exit code 3 from run — await your /answer or /approve.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no orange">3.4</span><span class="s-title">Human-in-the-loop resolution — answer the pending question, resume</span>
+          <span class="s-badges"><span class="badge waiting">operator</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <p class="s-prose">The Human Front Door: on the next <code class="k">start</code>, the Pre-Dispatch HITL gate sees <code class="k">T003 (blocked)</code> and raises <code class="k">WAITING_FOR_USER</code> <em>before any subprocess</em> — presenting the pending question and scope options (proceed with guidance / skip / abort). The operator answers; the answer lands in the question file, unblocks the ticket, and the WIP stash is popped so the next attempt resumes from real T003 work, not from zero.</p>
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="d">15:44:02</span> <span class="tag ts">[Runner]</span> start — crash recovery replays state (attempts 3, T003 WORKING-as-blocked)
+<span class="d">15:44:03</span> <span class="tag tg">[Gatekeeper]</span> T003 pre-dispatch HITL gate → entering <span class="v">WAITING_FOR_USER</span>
+<span class="v">┌ Pending operator prompt ────────────────────────────────────────────┐</span>
+<span class="v">│</span> Ticket T003 is <span class="r">blocked</span>. Pending question in .agent/questions/T003.json:<span class="v">│</span>
+<span class="v">│</span>   "For a partial pickup from a reservation batch, should the released<span class="v">│</span>
+<span class="v">│</span>    quantity return to `available` immediately, or route to the damaged<span class="v">│</span>
+<span class="v">│</span>    bin until inspection?"<span class="v">│</span>
+<span class="v">│</span> Options: [p]roceed with guidance  [s]kip ticket  [a]bort run         <span class="v">│</span>
+<span class="v">└─────────────────────────────────────────────────────────────────────┘</span>
+<span class="tag ts">[Operator]</span> &gt; p
+<span class="tag ts">[Operator]</span> Answer: <span class="b">"Released units return to `available` immediately. Damaged bins apply
+     only after a failed inspection event, filed by a keeper — never from the release
+     path itself. Record this as the T003 domain rule in gotchas."</span>
+<span class="tag tg">[Gatekeeper]</span> guidance captured → question file ANSWERED · ticket unblocked (in_progress) · resume attempt
+<span class="tag ts">[GitOps]</span> stash pop stash@{0} → working tree restored for T003 continuation</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// .agent/questions/T003.json — after the operator answers</span>
+{
+  <span class="jkey">"ticket_id"</span>: <span class="jstr">"T003"</span>,
+  <span class="jkey">"question"</span>: <span class="jstr">"For a partial pickup … until inspection?" (unchanged)</span>,
+  <span class="jkey">"type"</span>: <span class="jstr">"text"</span>, <span class="jkey">"options"</span>: <span class="l">null</span>,
+  <span class="d">"status"</span>: <span class="jstr">"pending"</span> → <span class="b">"answered"</span>,
+  <span class="d">"answer"</span>: <span class="l">null</span> → <span class="jstr">"Released units return to `available` immediately. Damaged bins apply only after a failed inspection event, filed by a keeper — never from the release path itself."</span>,
+  <span class="jkey">"created_at"</span>: <span class="jstr">"2026-10-29T15:02:41Z"</span>
+}
+<span class="d">// state.json: attempts reset for the new working round (human cleared the breaker):</span>
+{ <span class="d">"verification_attempts"</span>: <span class="y">0</span>,  <span class="d">"status"</span>: <span class="b">"WORKING"</span> … }</pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// The answer is not lost — it is injected verbatim into the resumed attempt prompt:</span>
+<span class="c">## Operational Decision (from operator, priority over assumptions)</span>
+Released units return to `available` immediately. Damaged bins apply only
+after a failed inspection event, filed by a keeper — never from the release
+path itself. Treat this as the T003 domain rule in ALL following work.
+<span class="d">// In away mode this exact frame posts as a Discord thread card with /answer, /skip, /abort tools.</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <h2 class="sec" style="margin-top:2.8rem"><span class="no">T004</span> Downstream hold resolves — drain the queue</h2>
+
+  <details class="ticket" id="rt4">
+    <summary>
+      <span class="t-id">T004</span><span class="t-title">Stock dashboard page</span>
+      <span class="t-meta"><span class="badge working"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg>OPENCODE</span><svg class="chev i" width="15" height="15" aria-hidden="true"><use href="#i-chev"/></svg></span>
+    </summary>
+    <div class="t-body">
+
+      <details class="step">
+        <summary><span class="s-no green">4.1</span><span class="s-title">T003 lands with guidance — the blocker releases, T004 re-enters the eligible set</span>
+          <span class="s-badges"><span class="badge completed">unblocked</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T003]</span> attempt <span class="y">4</span> (first of the new round) — checkpoint + learned routing rule:
+<span class="d">  release path: restore qty to available inside the SAME transaction as the partial release;</span>
+<span class="d">  no damaged-bin writes; guard against cumulative over-release via a reservations.released col.</span>
+<span class="tag tg">[Gatekeeper]</span> pytest <span class="pos">exit 0</span> (93 passed, 7.7s) · Evidence Card · <span class="pos">APPROVE (AFK auto)</span>
+<span class="tag tg">[GitOps]</span> commit →
+<span class="d">    feat(api): Add partial reservation release to stock</span>
+<span class="d">    - Release partial quantities back to available stock atomically
+    - Guard cumulative releases against double-restore overflows
+    - Exercise partial release and double-release paths with integration tests</span>
+<span class="tag tg">[GitOps]</span> <span class="b">c3dd401</span> · T003 → <span class="c">completed/</span> (with the operator's domain rule appended to ticket Gotchas)
+<span class="tag tt">[Queue]</span> T004 dependency re-scan: T003 = <span class="g">completed</span> → eligible — <span class="badge pending">SKIPPED</span> flag cleared</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// T003 (now in completed/):</span>
+<span class="chg"><span class="mkey">**Status:**</span> <span class="mval">completed</span>   <span class="mkey">**Completed:**</span> <span class="mval">2026-10-29T16:07:31Z</span></span>
+<span class="chg">- [x] Releasing part of a reservation restores only the released quantity to stock</span>
+<span class="chg">- [x] Released units land in `available` (operator domain rule, correct criterion wording)</span>
+<span class="chg">- [x] No double-release: cumulative restored quantity never exceeds the reservation total</span>
+<span class="chg">- [x] python -m pytest tests/integration/test_partial_release.py exits 0</span>
+<span class="d">// state.json: attempt counters reset for the resumed round; token counters reset fresh for T004.</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// The unblock also wrote the operator's ruling into the global gotchas log — at the</span>
+<span class="ms">- Partial reservation pickup: released units ALWAYS return to `available` in-transaction;
+  damaged routing is post-inspection only (operator domain ruling, ticket T003).</span>
+<span class="d">// T004's prompt is now generated with the standard builder; its dependency marker proves eligibility:</span>
+<span class="tag tt">[T004]</span> pre-dispatch: Blocked by T003 → completed ✓ · Mode AFK</pre>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="s-no green">4.2</span><span class="s-title">T004 happy path — evidence, commit, queue drained, exit 0</span>
+          <span class="s-badges"><span class="badge completed">COMPLETED</span></span>
+          <svg class="chev i" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="s-body">
+          <div class="panes">
+            <section class="pane terminal" aria-label="Orchestrator terminal">
+              <header class="p-h"><span class="p-dot"></span>Orchestrator terminal</header>
+<pre><span class="tag tt">[T004]</span> Session Run 1 (attempt 1) — no retries needed; the criteria pinned everything down.
+<span class="tag tg">[Gatekeeper]</span> baseline ticks-only ✓ · pytest <span class="pos">exit 0</span> (104 passed, 8.9s incl. dashboard integration)
+<span class="tag tg">[GitOps]</span> commit →
+<span class="d">    feat(ui): Add stock dashboard page</span>
+<span class="d">    - Render item rows with per-item live reservation counts
+    - Reflect operator partial-release ruling in availability column
+    - Cover dashboard availability semantics with integration tests</span>
+<span class="tag tg">[GitOps]</span> <span class="b">1bd3a94</span> · T004 → <span class="c">completed/</span>
+<span class="tag tt">[Queue]</span> No eligible tickets remain — completion summary printed.</pre>
+            </section>
+            <section class="pane files" aria-label="Queue and state files">
+              <header class="p-h"><span class="p-dot"></span>Queue &amp; state files</header>
+<pre><span class="d">// Final state.json before the runner exits:</span>
+{ <span class="d">"active_ticket_id"</span>: <span class="l">null</span>, <span class="b">"status"</span>: <span class="g">"IDLE"</span>, <span class="d">"verification_attempts"</span>: <span class="y">0</span>,
+  <span class="d">"tokens"</span>: { <span class="d">"current"</span>: <span class="y">0</span>, <span class="d">"warning_sent"</span>: <span class="b">false</span> }, <span class="d">"last_checkpoint"</span>: <span class="l">null</span>, … }
+<span class="d">// Queue directory — everything archived:</span>
+<span class="b">completed/</span> <span class="d">T001 ✓ T002 ✓ T003 ✓ T004 ✓</span>   <span class="d">(pending/ is empty)</span>
+<span class="d">// Evidence tree:</span>
+<span class="d">.agent/evidence/</span> T001/ · T002/ · T003/ · T004/  <span class="d">← every green gate left a summary.json</span></pre>
+            </section>
+            <section class="pane signals" aria-label="Signals and payloads">
+              <header class="p-h"><span class="p-dot"></span>Signals &amp; payloads</header>
+<pre><span class="d">// git log — the whole, exactly-one-commit-per-ticket story:</span>
+<span class="b">1bd3a94</span> <span class="d">feat(ui): Add stock dashboard page</span>
+<span class="b">c3dd401</span> <span class="d">feat(api): Add partial reservation release to stock</span>
+<span class="b">77e02d1</span> <span class="d">feat(api): Add atomic reserve stock endpoint</span>
+<span class="b">a1c9f30</span> <span class="d">feat(api): Add inventory item SQLite repository</span>
+<span class="d">// Lifecycle: queue_completion: terminate → exit code 0 (clean finish; standby would keep watching).
+// clean_slate: interactive → the runner would ask before archiving the spec folder.
+// exit code contract: 0 clean · 1 runtime error · 2 operator abort · 3 human intervention (used here) · 130 SIGINT</span></pre>
+            </section>
+          </div>
+        </div>
+      </details>
+    </div>
+  </details>
+
+  <!-- sequence diagram -->
+  <h3>The same four tickets as a lifecycle sequence</h3>
+  <figure class="diagram-frame" data-pane="seq">
+    <div class="d-bar">
+      <span class="d-title">End-to-end scenario lifecycle — T001 → T004 across all parties</span>
+      <span class="d-sub">sequence · render ⌗ mermaid@11</span>
+      <span class="sp"></span>
+      <button class="dbtn" data-act="out" type="button" aria-label="Zoom out diagram"><svg class="i" aria-hidden="true"><use href="#i-minus"/></svg></button>
+      <button class="dbtn" data-act="in" type="button" aria-label="Zoom in diagram"><svg class="i" aria-hidden="true"><use href="#i-plus"/></svg></button>
+      <button class="dbtn" data-act="fit" type="button" aria-label="Reset diagram zoom"><svg class="i" aria-hidden="true"><use href="#i-max"/></svg></button>
+    </div>
+    <div class="diagram-view undragged">
+      <div class="diagram-stage"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  accTitle: End-to-end ticket lifecycle from T001 to T004
+  actor OP as Operator
+  participant RN as Runner - Orchestrator
+  participant GK as Gatekeeper
+  participant OC as OpenCode Worker - T001 T003 T004
+  participant AG as Antigravity Worker - T002
+  participant GE as Gate cmds
+  participant GIT as Git working tree
+  participant DS as Discord away
+
+  OP->>RN: start (doctor + model selection)
+  Note over RN,OP: Phase 0 - state IDLE, nearby TUI
+
+  rect rgba(34, 197, 94, 0.07)
+    Note over OC,GIT: T001 happy path incl. handoff
+    RN->>OC: session run T001 (ses_a1b2...)
+    OC-->>RN: 135k occupancy triggers handoff prompt
+    Note over OC: writes .agent/checkpoints/T001/handoff.md
+    RN->>OC: fresh session ses_b8f2 resume prompt
+    OC-->>RN: ready signal T001 (ticks only)
+    RN->>GK: baseline + build/test
+    GE-->>RN: exit 0
+    RN->>GIT: 1 commit a1c9f30 + ticket to completed/
+  end
+
+  rect rgba(251, 191, 36, 0.07)
+    Note over AG,GIT: T002 retry loop (provider antigravity)
+    OP->>RN: restart (worker.provider: antigravity)
+    RN->>AG: agy -p ... --effort high (attempt 1)
+    AG-->>RN: ready signal (code churning)
+    RN->>GE: pytest exit 1 (17 fail)
+    RN->>AG: re-dispatch with triage excerpt (<=30 lines)
+    AG-->>RN: ready signal (attempt 2)
+    RN->>GE: pytest exit 0 (89 pass)
+    RN->>GIT: 1 commit 77e02d1
+  end
+
+  rect rgba(248, 113, 113, 0.08)
+    Note over OC,GIT: T003 ambiguity and circuit breaker (provider opencode)
+    OP->>RN: restart (provider opencode)
+    RN->>OC: attempts 1 then 2 (code edits)
+    GE-->>RN: exit 1 both times (triage each)
+    OC->>RN: question signal T003 (refusal to guess)
+    Note right of RN: attempt 3 consumed - no ready signal
+    RN->>RN: CIRCUIT_BREAKER_TRIPPED
+    RN->>GIT: stash push T003 WIP
+    RN-->>DS: escalation card (away) / terminal prompt (nearby)
+    DS-->>OP: T003 blocked - T004 skipped this pass
+  end
+
+  rect rgba(196, 181, 253, 0.07)
+    Note over OP,GIT: Human resolution and drain
+    OP->>RN: start again
+    RN->>OP: HITL gate - pending question text
+    OP-->>RN: answer - released units return to available
+    RN->>OC: resumed attempt with operator guidance
+    OC-->>RN: ready signal
+    RN->>GE: pytest exit 0
+    RN->>GIT: 1 commit c3dd401 (T003 completed)
+    RN->>OC: dispatch T004 (dependency now satisfied)
+    OC-->>RN: ready signal
+    RN->>GE: pytest exit 0
+    RN->>GIT: 1 commit 1bd3a94 (T004 completed)
+    RN-->>OP: queue drained - terminate - exit 0
+  end
+    </pre></div>
+    </div>
+  </figure>
+</section>
+
+<!-- ================================================== 5. REFERENCE -->
+<section id="reference">
+  <h2 class="sec"><span class="no">05</span> Reference — the contracts the scenario assumed</h2>
+  <p class="lead">Everything the walkthrough leaned on, pinned to its source file, so the guide survives contact with the code.</p>
+
+  <h3>CLI surface (<code class="k">ticket_runner.py</code>)</h3>
+  <table class="dt">
+    <thead><tr><th>Command</th><th>Notable flags</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>start</code></td><td><code>--project-dir</code> · <code>--model</code> · <code>--local-only</code> · <code>--config</code></td><td>Doctor → model selection → crash recovery → queue lifecycle loop</td></tr>
+      <tr><td><code>doctor</code></td><td><code>--live</code> (Discord gateway checks)</td><td>Pre-flight: binaries, git purity, branch, hooks, config, queue, skills</td></tr>
+      <tr><td><code>init</code></td><td><code>--ai-prompt</code> · <code>--yes</code> · <code>--no-skills</code></td><td>Scaffold Target Project (config, dirs, skills sync) or print an LLM config prompt</td></tr>
+      <tr><td><code>skills sync</code></td><td><code>--force</code></td><td>Pull the skills catalog into <code>.agents/skills/</code> (Zip-Slip guarded)</td></tr>
+      <tr><td><code>bot</code></td><td><code>--smoke</code> | <code>--run</code></td><td>Standalone Discord verification or persistent bot loop</td></tr>
+      <tr><td><code>notify</code></td><td><code>&lt;message&gt;</code></td><td>One-shot Discord status posting</td></tr>
+      <tr><td><code>pause</code> / <code>status</code></td><td>—</td><td>Reserved lifecycle handles (upcoming specs)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Exit codes (declared in the CLI epilog)</h3>
+  <table class="dt">
+    <thead><tr><th>Code</th><th>Meaning</th><th>Seen in the story?</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>Clean termination (queue drained under terminate, or standby exit)</td><td>after T004</td></tr>
+      <tr><td><code>1</code></td><td>Runtime error</td><td>—</td></tr>
+      <tr><td><code>2</code></td><td>Operator abort (<code>UserAbortError</code>)</td><td>—</td></tr>
+      <tr><td><code>3</code></td><td>Human intervention requested (queue stopped; ticket stays pending)</td><td>after the T003 halt</td></tr>
+      <tr><td><code>130</code></td><td>Graceful SIGINT (single or forced second press)</td><td>between provider switches</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Agent adapter parity matrix</h3>
+  <table class="dt">
+    <thead><tr><th>Concern</th><th>OpenCode adapter</th><th>Antigravity adapter</th><th>Normalizer</th></tr></thead>
+    <tbody>
+      <tr><td>Command shape</td><td><code>opencode run --format json … --auto "&lt;prompt&gt;"</code></td><td><code>agy -p "&lt;prompt&gt;" --output-format stream-json …</code></td><td><code>build_run_command()</code> — argv lists, never shell strings</td></tr>
+      <tr><td>Model flag</td><td><code>-m deepseek/deepseek-chat</code></td><td><code>--model gemini-3-pro</code></td><td>session-scoped <code>selected_model</code></td></tr>
+      <tr><td>Reasoning</td><td><code>--variant &lt;low|medium|high|…&gt;</code></td><td><code>--effort &lt;low|medium|high|xhigh|max&gt;</code></td><td>ticket <code>Reasoning:</code> → config default → omitted</td></tr>
+      <tr><td>Session</td><td><code>--session ses_[A-Za-z0-9]+</code><br>(resume)</td><td><code>--conversation &lt;uuid&gt;</code> / <code>--continue</code></td><td>one state field, two wire formats</td></tr>
+      <tr><td>Stream header</td><td>7 canonical events incl. <code>step_finish</code></td><td>3-event vocabulary (<code>init</code>, <code>step_update</code>, <code>result</code>)</td><td>tolerant <code>decode_event()</code> → <code>WorkerEvent</code></td></tr>
+      <tr><td>Token telemetry</td><td><code>part.tokens</code> incl. cache</td><td><code>step_update.usage / result.usage</code>; step totals recomputed</td><td><code>TokenUsage.occupancy()</code></td></tr>
+      <tr><td>Stall guard</td><td colspan="2">—</td><td>Runner-side wall clock + agy <code>--print-timeout 0</code> (empty-SUCCESS anomaly detector)</td></tr>
+    </tbody>
+  </table>
+  <p class="readout">Source: runner/adapters/opencode/opencode_worker.py · runner/adapters/antigravity/antigravity_worker.py · runner/ports/agent_worker.py</p>
+
+  <h3><code class="k">.agent/</code> runtime layout</h3>
+  <pre class="codewin" aria-label="Runtime state directory tree"><div class="bar"><span class="file">&lt;project-dir&gt;/.agent/</span><span class="lang">untracked · git-ignored</span><span class="sp"></span></div><code>├── <span class="b">state.json</span>                 <span class="d"># atomic runner state (13 fields) — crash recovery source of truth</span>
+├── <span class="b">signals/</span>                    <span class="d"># Worker → Runner: {ticket_id}_ready.json</span>
+├── <span class="b">questions/</span>                  <span class="d"># Worker → Operator: {ticket_id}.json (question signal)</span>
+├── <span class="b">checkpoints/</span>
+│   └── <span class="b">T001/handoff.md</span>        <span class="d"># 5-section Context Handoff artifacts</span>
+├── <span class="b">logs/</span>                       <span class="d"># raw worker streams + full gate logs (never sent to any LLM)</span>
+├── <span class="b">evidence/</span>
+│   └── <span class="b">T002/</span>                  <span class="d"># summary.json · harness.log · screenshots/ (out-of-band)</span>
+├── <span class="b">archive/</span>                    <span class="d"># clean-slate destination (ADR 0012)</span>
+└── <span class="b">live-qa_log_&lt;spec-slug&gt;.md</span>  <span class="d"># human-driven /live-qa verdicts, decoupled from gates</span></code></pre>
+
+  <h3>Ready signal vs question signal — exact schemas</h3>
+  <div class="panes" style="margin:.7rem 0">
+    <section class="pane files" aria-label="Ready signal schema"><header class="p-h"><span class="p-dot"></span>.agent/signals/{ticket_id}_ready.json</header>
+<pre>{ <span class="jkey">"ticket_id"</span>: <span class="jstr">"T004"</span>,          <span class="d">// must match the active ticket</span>
+  <span class="jkey">"status"</span>: <span class="jstr">"ready_for_verification"</span>,  <span class="d">// the ONLY allowed value here</span>
+  <span class="jkey">"modified_files"</span>: [<span class="jstr">…paths…</span>],
+  <span class="jkey">"self_review_notes"</span>: <span class="jstr">"Standards + Spec review summary (+security notes if Security: required)"</span>,
+  <span class="jkey">"new_gotchas"</span>: [<span class="jstr">…strings, may be []</span>],
+  <span class="jkey">"timestamp"</span>: <span class="jstr">"ISO-8601 UTC"</span>,
+  <span class="jkey">"scope"</span>: <span class="jstr">"ui"</span> <span class="d">// optional; lowercase layer token, never a ticket number</span> }
+<span class="d">// Strict parse (ReadySignal.parse) — wrong ticket_id, wrong status, or a
+// missing field fails validation and the attempt is consumed.</span></pre>
+    </section>
+    <section class="pane signals" aria-label="Question signal schema"><header class="p-h"><span class="p-dot"></span>.agent/questions/{ticket_id}.json</header>
+<pre>{ <span class="jkey">"ticket_id"</span>: <span class="jstr">"T003"</span>,
+  <span class="jkey">"question"</span>: <span class="jstr">"…" — the decision the Worker refuses to guess,</span>
+  <span class="jkey">"type"</span>: <span class="jstr">"choice"</span> | <span class="jstr">"text"</span>,
+  <span class="jkey">"options"</span>: [<span class="jstr">"Option A"</span>, <span class="jstr">"Option B"</span>] <span class="d">// required for choice/required null for text</span>,
+  <span class="jkey">"status"</span>: <span class="jstr">"pending"</span> <span class="d">// → "answered" once the operator responds</span>
+  <span class="jkey">"answer"</span>: <span class="l">null</span> <span class="d">// operator text (must be non-empty when answered)</span>
+  <span class="jkey">"created_at"</span>: <span class="jstr">"ISO-8601 UTC"</span> }
+<span class="d">// Worker protocol: write the file, stop working immediately, never guess.</span></pre>
+    </section>
+    <section class="pane terminal" aria-label="State schema"><header class="p-h"><span class="p-dot"></span>.agent/state.json — 13 required fields</header>
+<pre><span class="jkey">active_ticket_id</span>   <span class="c">string | null</span>
+<span class="jkey">status</span>             <span class="c">IDLE | WORKING | GATEKEEPER |</span>
+                   <span class="c">WAITING_FOR_USER | PAUSE_REQUESTED |</span>
+                   <span class="c">CIRCUIT_BREAKER_TRIPPED</span>
+<span class="jkey">opencode_session_id</span> <span class="c">ses_… | conversation uuid | null</span>
+<span class="jkey">selected_model</span>     <span class="c">string | null</span>   <span class="d">(session-scoped)</span>
+<span class="jkey">presence_mode</span>      <span class="c">nearby | away</span>
+<span class="jkey">verification_attempts</span> <span class="c">int ≥ 0</span>     <span class="d">(failures only)</span>
+<span class="jkey">tokens</span>             <span class="c">{ current: int, warning_sent: bool }</span>
+<span class="jkey">branch</span>             <span class="c">agent/ticket-runner</span>
+<span class="jkey">started_at</span> · <span class="jkey">last_updated</span> · <span class="jkey">last_checkpoint</span>
+<span class="jkey">tui_open</span> · <span class="jkey">tui_session_id</span></pre>
+    </section>
+  </div>
+
+  <h3>Verification knobs (<code class="k">verification:</code> and friends)</h3>
+  <table class="dt">
+    <thead><tr><th>Field</th><th>Default</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_cmd</code> / <code>build_cmd</code></td><td><code>python -m pytest</code> / empty</td><td>The Gatekeeper's to-do — the only commands that can pass a ticket</td></tr>
+      <tr><td><code>max_attempts</code></td><td><code>3</code></td><td>Verification Attempts before the Circuit Breaker trips</td></tr>
+      <tr><td><code>timeout_seconds</code> / <code>silence_window_seconds</code></td><td><code>300</code> / <code>60</code></td><td>Wall-clock cap + no-output kill window for the verification subprocess</td></tr>
+      <tr><td><code>per_test_timeout_seconds</code></td><td><code>0</code> (off)</td><td>Injects runner-native per-test timeouts (pytest/jest/vitest/go formats)</td></tr>
+      <tr><td><code>isolation_cmd</code></td><td>empty</td><td>Single-test rerun template with a <code>{test_id}</code> placeholder for flake isolation</td></tr>
+      <tr><td><code>bug_escalation_at</code></td><td><code>1</code></td><td>Attach the structured diagnostic report from attempt N onward (<code>-1</code> = only at breaker)</td></tr>
+      <tr><td><code>tokens.warn / handoff / ceiling</code></td><td><code>120k / 135k / 150k</code></td><td>Warning → checkpoint compaction → forced rollover; 5 consecutive handoffs also escalate</td></tr>
+      <tr><td><code>lifecycle.queue_completion</code></td><td><code>standby</code></td><td><code>standby</code> keeps watching for new tickets; <code>terminate</code> exits with code 0</td></tr>
+      <tr><td><code>presence</code> / <code>discord</code></td><td><code>nearby</code> · 3-min idle</td><td>Nearby prompts stay in the TUI; away (or idle) escalates to Discord threads + <code>Status Card</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Gatekeeper ground rules</h3>
+  <ul class="refs">
+    <li><strong>Dispatch baseline:</strong> the ticket file snapshot taken before dispatch decides what changed. Any edit except <code>- [ ]</code> → <code>- [x]</code> under <code>## Acceptance criteria</code> restores the baseline and rejects the signal — burning an attempt. (Security boundary against prompt-injected ticket rewrites.)</li>
+    <li><strong>Token-preserving triage:</strong> full gate logs stay in <code>.agent/evidence/…/harness.log</code>; the retry prompt gets ≤ <strong>30 lines / 1,000 characters</strong> via <code>.agent/evidence/…/summary.json</code>.</li>
+    <li><strong>Commit discipline:</strong> exactly one commit per ticket — code, tests, runner-appended <code>gotchas.md</code>, and the relocated ticket whose header records <code>**Status:** completed</code> and a <code>**Completed:**</code> timestamp. The commit SHA lives in git, never in the ticket.</li>
+    <li><strong>Branch + push posture:</strong> everything happens on <code>agent/ticket-runner</code>; <code>.git/hooks/pre-push</code> blocks remote pushes outright (ADR 0005). The Runner commits; the Worker never does.</li>
+    <li><strong>HITL gates:</strong> a ticket with <code>**Mode:** HITL</code> pauses <em>before dispatch</em>; green checks in approval_mode <code>human</code> pause <em>before commit</em> with an Evidence Card (<code>/approve</code>, <code>/reject</code>, <code>/diagnose</code>).</li>
+  </ul>
+</section>
+
+<footer>
+  <p><strong>Ticket Runner — end-to-end walkthrough</strong> · single-file HTML · scenario is simulated, contracts are real.</p>
+  <p class="mono">Grounded in: AGENTS.md · CONTEXT.md · ARCHITECTURE.md · runner/domain/{state,signal,evidence,ticket}.py · runner/adapters/{opencode,antigravity}/*_worker.py · runner/application/{handoff_coordinator,evidence_triage,prompt_builder}.py · .agents/skills/handoff/SKILL.md</p>
+  <p class="mono">Mermaid by CDN — diagrams degrade gracefully to raw source when offline. Icons: inline SVG sprite (Lucide-style), no emoji. Fonts: IBM Plex Sans / JetBrains Mono with system fallbacks.</p>
+</footer>
+
+</main>
+
+<script type="module">
+/* ---------- Mermaid render (CDN) with graceful offline fallback ---------- */
+const mermaidPre = document.querySelectorAll("pre.mermaid");
+try {
+  const m = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
+  m.default.initialize({
+    startOnLoad: false,
+    theme: "dark",
+    securityLevel: "loose",
+    fontFamily: '"JetBrains Mono", ui-monospace, Consolas, monospace',
+    themeVariables: {
+      background: "#0B1222",
+      primaryColor: "#1E293B",
+      primaryTextColor: "#F8FAFC",
+      primaryBorderColor: "#475569",
+      secondaryColor: "#272F42",
+      tertiaryColor: "#121A2F",
+      lineColor: "#64748B",
+      textColor: "#CBD5E1",
+      noteBkgColor: "#1B2336",
+      noteTextColor: "#FCD34D",
+      noteBorderColor: "#475569",
+      actorBkg: "#1E293B",
+      actorTextColor: "#F8FAFC",
+      actorBorder: "#64748B",
+      signalColor: "#94A3B8",
+      signalTextColor: "#CBD5E1",
+      labelBoxBkgColor: "#272F42",
+      labelBoxBorderColor: "#475569",
+      labelTextColor: "#F8FAFC",
+      loopTextColor: "#94A3B8",
+      activationBkgColor: "#1E293B",
+      sequenceNumberColor: "#0F172A",
+      nodeTextColor: "#F8FAFC"
+    },
+    flowchart: { htmlLabels: true, curve: "basis", padding: 8 },
+    sequence: { mirrorActors: false, showSequenceNumbers: true }
+  });
+  await m.default.run({ querySelector: "pre.mermaid" }).catch(err => {
+    mermaidPre.forEach(pre => { pre.insertAdjacentHTML("beforebegin", '<p class="mermaid-error">Mermaid render error: ' + String(err && err.message || err).replace(/[<>&]/g, "") + "</p>"); });
+  });
+} catch (err) {
+  mermaidPre.forEach(pre => {
+    pre.classList.add("mermaid-fallback");
+    pre.setAttribute("data-fallback", "true");
+    pre.textContent = "⚠ Mermaid CDN unavailable (offline?) — diagram source:\n\n" + pre.textContent.trim();
+  });
+}
+
+/* ---------- diagram zoom (+/-/reset) + drag-to-pan ---------- */
+document.querySelectorAll(".diagram-frame").forEach(frame => {
+  const stage = frame.querySelector(".diagram-stage");
+  const view = frame.querySelector(".diagram-view");
+  if (!stage || !view) return;
+  let scale = 1, tx = 0, ty = 0, drag = null, touched = false;
+  const apply = () => {
+    stage.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+    stage.dragging && void 0;
+  };
+  const clampScale = s => Math.min(3, Math.max(.3, s));
+  frame.querySelectorAll(".dbtn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const act = btn.dataset.act;
+      if (act === "in") scale = clampScale(scale * 1.25);
+      else if (act === "out") scale = clampScale(scale / 1.25);
+      else { scale = 1; tx = 0; ty = 0; }
+      apply();
+    });
+  });
+  view.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    drag = { x: e.clientX, y: e.clientY, tx, ty };
+    stage.classList.add("dragging");
+    view.classList.remove("undragged");
+    view.setPointerCapture(e.pointerId);
+  });
+  view.addEventListener("pointermove", e => {
+    if (!drag) return;
+    tx = drag.tx + (e.clientX - drag.x);
+    ty = drag.ty + (e.clientY - drag.y);
+    apply();
+  });
+  const endDrag = () => { drag = null; stage.classList.remove("dragging"); };
+  view.addEventListener("pointerup", endDrag);
+  view.addEventListener("pointercancel", endDrag);
+  view.addEventListener("dblclick", () => { scale = 1; tx = 0; ty = 0; apply(); });
+  view.addEventListener("wheel", e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    scale = clampScale(scale * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    apply();
+  }, { passive: false });
+  apply();
+});
+
+/* ---------- copy-to-clipboard on code windows ---------- */
+document.querySelectorAll(".codewin, .pane").forEach(box => {
+  const pre = box.querySelector("pre");
+  const bar = box.querySelector(".bar, .p-h");
+  if (!pre || !bar || bar.querySelector(".copybtn")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "copybtn";
+  btn.setAttribute("aria-label", "Copy code to clipboard");
+  btn.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-copy"/></svg><span>copy</span>';
+  btn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(pre.innerText); } catch (_) { /* clipboard unavailable */ }
+    const label = btn.querySelector("span");
+    label.textContent = "copied ✓";
+    setTimeout(() => { label.textContent = "copy"; }, 1400);
+  });
+  bar.appendChild(btn);
+});
+
+/* ---------- expand / collapse accordions ---------- */
+const expandAll = document.getElementById("expand-all");
+const collapseAll = document.getElementById("collapse-all");
+const allSteps = () => document.querySelectorAll("details.step");
+if (expandAll) expandAll.addEventListener("click", () => allSteps().forEach(d => d.open = true));
+if (collapseAll) collapseAll.addEventListener("click", () => allSteps().forEach(d => d.open = false));
+
+/* ---------- scrollspy for the top nav ---------- */
+const navLinks = [...document.querySelectorAll(".topnav nav a")];
+const targets = navLinks.map(a => document.querySelector(a.getAttribute("href"))).filter(Boolean);
+const setActive = id => {
+  navLinks.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + id));
+};
+const spy = new IntersectionObserver(entries => {
+  const visible = entries.filter(e => e.isIntersecting)
+    .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+  if (visible) setActive(visible.target.id);
+}, { rootMargin: "-56px 0px -70% 0px", threshold: 0 });
+targets.forEach(t => spy.observe(t));
+
+/* Default highlight at the very top of the page, before any section engages. */
+const topDefault = () => { if (window.scrollY < 260) setActive("overview"); };
+topDefault();
+document.addEventListener("scroll", topDefault, { passive: true });
+</script>
+</body>
+</html>

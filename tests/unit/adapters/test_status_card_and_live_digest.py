@@ -145,6 +145,46 @@ def test_build_status_card_embed_properties() -> None:
     assert BREADCRUMB_TRAIL in embed["description"]
 
 
+def test_build_status_card_description_uses_custom_budget() -> None:
+    desc = build_status_card_description(
+        ticket_id="T042",
+        slug="defer-clean-slate",
+        spec="05-presence-mode-and-discord",
+        status="🟡 Running",
+        attempt=1,
+        tokens_current=190_000,
+        started_at="13:04 UTC",
+        last_updated="13:11 UTC",
+        ceiling=200_000,
+        warn=180_000,
+        handoff=190_000,
+    )
+
+    assert "~190k / 200k" in desc
+    assert "██████████" in desc
+
+
+@pytest.mark.anyio
+async def test_logger_impl_token_budget_applies_to_status_card() -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    gateway = FakeDiscordGateway()
+    logger = DiscordLoggerImpl(
+        gateway,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    await logger.post_status_card(
+        {"id": "T042", "slug": "defer-clean-slate", "spec": "spec-05"},
+        "thread-1",
+        tokens_current=190_000,
+    )
+
+    embed_calls = [c for c in gateway.calls if c.embed is not None]
+    assert embed_calls
+    assert "~190k / 200k" in embed_calls[0].embed["description"]
+
+
 # ---------------------------------------------------------------------------
 # DiscordLoggerImpl Status Card Tests (Smoke Scenarios 1 & 2)
 # ---------------------------------------------------------------------------

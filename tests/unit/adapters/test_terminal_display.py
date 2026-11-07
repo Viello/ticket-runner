@@ -95,6 +95,33 @@ def test_calculate_token_bar_over_ceiling_clamped() -> None:
     assert bar_plain == "██████████"
 
 
+def test_calculate_token_bar_custom_200k_budget() -> None:
+    bar_markup, bar_plain, pct = calculate_token_bar(
+        190_000, ceiling=200_000, warn=180_000, handoff=190_000
+    )
+    assert pct == 95
+    assert bar_plain == "██████████"
+    assert "[yellow]█[/yellow]" in bar_markup
+    assert "[red]█[/red]" in bar_markup
+
+
+def test_top_panel_uses_configured_token_budget() -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    console = Console(record=True, width=100)
+    display = RichTerminalDisplay(
+        console=console,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    display.update_state(_make_state(current_tokens=190_000), queue_remaining=1)
+    display.render_to_console()
+
+    output = console.export_text()
+    assert "190,000 / 200,000 (95%)" in output
+    assert "/ 150,000" not in output
+
+
 def test_top_panel_rendering_verbatim_layout() -> None:
     console = Console(record=True, width=80)
     display = RichTerminalDisplay(console=console)

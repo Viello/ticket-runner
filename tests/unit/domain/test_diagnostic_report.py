@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
@@ -10,6 +9,9 @@ from runner.domain.failure_analyser import (
     LABEL_ENV,
     LABEL_FLAKY,
     LABEL_HANG,
+    LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
+    SUGGESTED_ACTIONS,
     render_diagnostic_report,
 )
 
@@ -92,3 +94,47 @@ def test_render_diagnostic_report_bounds_log_tail_to_100_lines() -> None:
     assert "log line 49" not in report
     assert "log line 50" in report
     assert "log line 149" in report
+
+
+def test_protocol_diagnostic_renders_protocol_label() -> None:
+    tail = [f"protocol line {i}" for i in range(150)]
+    diag = FailureDiagnostic(
+        label=LABEL_PROTOCOL,
+        root_tests=["gatekeeper"],
+        top_errors=[],
+        log_tail=tail,
+        isolation_output=None,
+        suggested_action=SUGGESTED_ACTIONS[LABEL_PROTOCOL],
+    )
+    report = render_diagnostic_report(diag, token_count=60_585, token_budget=150000)
+
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
+    assert "Top errors: none" in report
+    assert "FLAKY detected" not in report
+    assert SUGGESTED_ACTIONS[LABEL_PROTOCOL] in report
+    assert "Token budget: 60,585 / 150,000" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+
+    # Tail is bounded to the last 100 lines
+    assert "protocol line 49" not in report
+    assert "protocol line 50" in report
+    assert "protocol line 149" in report
+
+
+def test_signal_format_diagnostic_renders_signal_format_label() -> None:
+    diag = FailureDiagnostic(
+        label=LABEL_SIGNAL_FORMAT,
+        root_tests=["gatekeeper"],
+        top_errors=[],
+        log_tail=["Ready signal JSON is malformed"],
+        isolation_output=None,
+        suggested_action=SUGGESTED_ACTIONS[LABEL_SIGNAL_FORMAT],
+    )
+    report = render_diagnostic_report(diag, token_count=10_000, token_budget=150000)
+
+    assert "⚠ SIGNAL_FORMAT detected — gatekeeper" in report
+    assert "Top errors: none" in report
+    assert SUGGESTED_ACTIONS[LABEL_SIGNAL_FORMAT] in report
+    assert "Token budget: 10,000 / 150,000" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+

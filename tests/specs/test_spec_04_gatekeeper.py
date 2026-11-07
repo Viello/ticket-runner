@@ -1896,8 +1896,8 @@ def test_us10_build_container_abort_mid_loop_leaves_tree_byte_identical(tmp_path
     assert wip_file.is_file()
     assert wip_file.read_bytes() == wip_content
     for inv in sc.runner.invocations:
-        assert "reset" not in inv.argv
-        assert "commit" not in inv.argv
+        assert "reset" not in inv.cmd
+        assert "commit" not in inv.cmd
 
     # 3. Ticket was NOT finalized or relocated
     assert ticket_file.is_file()

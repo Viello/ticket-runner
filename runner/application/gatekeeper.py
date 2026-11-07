@@ -32,6 +32,9 @@ from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import DiscordGatewayError, NonInteractiveError, SignalFormatError, UserAbortError
 from runner.domain.failure_analyser import (
     FailureDiagnostic,
+    LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
+    SUGGESTED_ACTIONS,
     analyse,
     render_diagnostic_report,
     strip_ansi,
@@ -592,7 +595,7 @@ def build_verification_failure_prompt(
     if attempt >= 2:
         directive = (
             f"Gatekeeper verification failed (attempt {attempt}). "
-            "Before making further edits, read and follow '.agents/skills/diagnosing-bugs/SKILL.md' "
+            "Before making further edits, read and follow '.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md' "
             "using your file reading tool to diagnose and isolate the root cause.\n\n"
         )
         return f"{directive}{prompt}"
@@ -851,6 +854,17 @@ def verify_ticket_mutation(
     return True, ""
 
 
+def _extract_offending_field(diagnostics: str) -> str:
+    """Extract offending signal field name from diagnostics string for status summary."""
+    match = re.search(r"(?:missing required field|field)\s+['\"]([^'\"]+)['\"]", diagnostics)
+    if match:
+        return match.group(1)
+    match = re.search(r"['\"]([a-zA-Z_][a-zA-Z0-9_]*)['\"]", diagnostics)
+    if match:
+        return match.group(1)
+    return "payload"
+
+
 class VerificationLoop:
     """Supervises Worker execution cycles and Gatekeeper verification against an attempt budget (T031)."""
 
@@ -899,6 +913,7 @@ class VerificationLoop:
         self._attempts: int = 0
         self._pending_prompt: str | None = initial_prompt
         self._last_diagnostics: str = ""
+        self._format_retry_exempt_used: bool = False
         self._notify = notify
         self._accumulated_resources: set[str] = set()
         self._state_coordinator = state_coordinator
@@ -1023,17 +1038,17 @@ class VerificationLoop:
     def _check_ready_warnings(self) -> list[str]:
         """Emit soft warnings if required review skills or AGENTS.md were not accessed."""
         warnings: list[str] = []
-        if "code-review" not in self._accumulated_resources:
+        if "code-review-ticket-runner" not in self._accumulated_resources:
             warnings.append(
-                f"[{self._ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
         if "AGENTS.md" not in self._accumulated_resources:
             warnings.append(
                 f"[{self._ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
             )
-        if self._ticket.security_required and "security-review" not in self._accumulated_resources:
+        if self._ticket.security_required and "security-review-ticket-runner" not in self._accumulated_resources:
             warnings.append(
-                f"[{self._ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+                f"[{self._ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
 
         for warning in warnings:
@@ -1070,6 +1085,45 @@ class VerificationLoop:
     def last_diagnostics(self) -> str:
         """Last captured failure diagnostics."""
         return self._last_diagnostics
+
+    def _archive_malformed_signal(self, kind: str) -> Path | None:
+        """Atomically copy raw malformed signal payload to its archive path, if possible.
+
+        kind is 'ready' or 'question'.
+        Returns the archive Path if written, or None if skipped/unavailable.
+        """
+        if self._runtime_paths is None:
+            return None
+        try:
+            if kind == "ready":
+                source = self._runtime_paths.ready_signal_path(self._ticket.id)
+                dest = self._runtime_paths.malformed_ready_signal_archive_path(self._ticket.id)
+            elif kind == "question":
+                source = self._runtime_paths.question_path(self._ticket.id)
+                dest = self._runtime_paths.malformed_question_signal_archive_path(self._ticket.id)
+            else:
+                return None
+
+            if not source.is_file():
+                return None
+            raw_payload = source.read_text(encoding="utf-8")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(dest, raw_payload)
+            return dest
+        except Exception as exc:
+            logger.warning("Failed to archive malformed %s signal: %s", kind, exc)
+            return None
+
+    def _write_diagnostic_report(self, report_text: str) -> None:
+        """Write diagnostic report to .agent/logs/<ticket_id>_diagnostic.md."""
+        if self._runtime_paths is None:
+            return
+        try:
+            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
+            diag_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(diag_path, report_text)
+        except Exception as exc:
+            logger.warning("Failed to write diagnostic log: %s", exc)
 
     def _clean_question(self, ticket_id: str) -> None:
         """Clean any stale or malformed question signal for the ticket."""
@@ -1260,7 +1314,10 @@ class VerificationLoop:
                             f"Unauthorized ticket modification: ticket file '{self._ticket.path}' "
                             f"was deleted by worker subprocess."
                         )
-                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        escalation_result = await self._check_escalation(
+                            diagnostics=diagnostics,
+                            diagnostic=self._protocol_diagnostic(diagnostics),
+                        )
                         if escalation_result is not None:
                             return escalation_result
                         self._attempts += 1
@@ -1284,7 +1341,10 @@ class VerificationLoop:
                         self._clean_question(self._ticket.id)
                         self._signal_repository.consume_ready(self._ticket.id)
                         diagnostics = reason
-                        escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                        escalation_result = await self._check_escalation(
+                            diagnostics=diagnostics,
+                            diagnostic=self._protocol_diagnostic(diagnostics),
+                        )
                         if escalation_result is not None:
                             return escalation_result
                         self._attempts += 1
@@ -1487,9 +1547,16 @@ class VerificationLoop:
                 pending_question = self._signal_repository.read_pending_question(self._ticket.id)
             except SignalFormatError as exc:
                 # A malformed pending question is a failed Verification Attempt with the parse error as diagnostics
+                archive_path = self._archive_malformed_signal("question")
                 self._clean_question(self._ticket.id)
                 diagnostics = str(exc)
-                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if archive_path is not None:
+                    diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics,
+                    diagnostic=self._protocol_diagnostic(diagnostics, label=LABEL_SIGNAL_FORMAT),
+                    self_correctable=True,
+                )
                 if escalation_result is not None:
                     return escalation_result
                 self._attempts += 1
@@ -1533,9 +1600,16 @@ class VerificationLoop:
 
             # 4. Ready signal validation
             if ready_format_error is not None:
+                archive_path = self._archive_malformed_signal("ready")
                 self._signal_repository.consume_ready(self._ticket.id)
                 diagnostics = str(ready_format_error)
-                escalation_result = await self._check_escalation(diagnostics=diagnostics)
+                if archive_path is not None:
+                    diagnostics = f"{diagnostics}\nRaw signal payload archived at: {archive_path}"
+                escalation_result = await self._check_escalation(
+                    diagnostics=diagnostics,
+                    diagnostic=self._protocol_diagnostic(diagnostics, label=LABEL_SIGNAL_FORMAT),
+                    self_correctable=True,
+                )
                 if escalation_result is not None:
                     return escalation_result
                 self._attempts += 1
@@ -1552,7 +1626,10 @@ class VerificationLoop:
             diagnostics = (
                 f"Ready signal file for ticket '{self._ticket.id}' was missing on disk."
             )
-            escalation_result = await self._check_escalation(diagnostics=diagnostics)
+            escalation_result = await self._check_escalation(
+                diagnostics=diagnostics,
+                diagnostic=self._protocol_diagnostic(diagnostics),
+            )
             if escalation_result is not None:
                 return escalation_result
             self._attempts += 1
@@ -1566,12 +1643,27 @@ class VerificationLoop:
                 )
             continue
 
+    def _protocol_diagnostic(
+        self, diagnostics: str, label: str = LABEL_PROTOCOL
+    ) -> FailureDiagnostic:
+        """Build a diagnostic describing a Gatekeeper ticket/signal protocol failure."""
+        return FailureDiagnostic(
+            label=label,
+            root_tests=["gatekeeper"],
+            top_errors=[],
+            log_tail=[strip_ansi(line) for line in diagnostics.splitlines()[-100:]],
+            isolation_output=None,
+            suggested_action=SUGGESTED_ACTIONS.get(label, SUGGESTED_ACTIONS[LABEL_PROTOCOL]),
+        )
+
     async def _check_escalation(
         self,
         diagnostics: str,
         outcome: CommandOutcome | None = None,
+        diagnostic: FailureDiagnostic | None = None,
+        self_correctable: bool = False,
     ) -> VerificationLoopResult | None:
-        """Check escalation policy and prompt operator if threshold met (T066)."""
+        """Check escalation policy and prompt operator if threshold met (T066, T135)."""
         current_attempt = self._attempts + 1
         policy = self._verification_config.bug_escalation_at
 
@@ -1589,16 +1681,40 @@ class VerificationLoop:
         if not should_escalate:
             return None
 
-        output_lines = outcome.tail if outcome and outcome.tail else diagnostics
-        exit_code = outcome.exit_code if outcome else 1
-        termination_reason = outcome.termination_reason if outcome else None
+        # One-shot self-correctable retry exemption for signal format errors (T135)
+        if (
+            self_correctable
+            and not self._format_retry_exempt_used
+            and current_attempt < self._max_attempts
+        ):
+            self._format_retry_exempt_used = True
+            offending_field = _extract_offending_field(diagnostics)
+            summary = f"Signal format retry: {offending_field}"
+            logger.info(
+                "Signal format error on attempt %d for ticket '%s' is self-correctable; granting one-shot retry exemption: %s",
+                current_attempt,
+                self._ticket.id,
+                summary,
+            )
+            self._publish_status(
+                event_name="SIGNAL_FORMAT_RETRY",
+                run_state=RunState.VERIFYING,
+                attempt=current_attempt,
+                last_step_summary=summary,
+            )
+            return None
 
-        diagnostic = self._failure_analyser(
-            output_lines=output_lines,
-            exit_code=exit_code,
-            termination_reason=termination_reason,
-            config=self._verification_config,
-        )
+        if diagnostic is None:
+            output_lines = outcome.tail if outcome and outcome.tail else diagnostics
+            exit_code = outcome.exit_code if outcome else 1
+            termination_reason = outcome.termination_reason if outcome else None
+
+            diagnostic = self._failure_analyser(
+                output_lines=output_lines,
+                exit_code=exit_code,
+                termination_reason=termination_reason,
+                config=self._verification_config,
+            )
 
         report_text = render_diagnostic_report(
             diagnostic=diagnostic,
@@ -1613,6 +1729,9 @@ class VerificationLoop:
             attempt=current_attempt,
             last_step_summary=f"Escalation emitted: {diagnostic.label}",
         )
+
+        # Write diagnostic report before prompting operator (T134)
+        self._write_diagnostic_report(report_text)
 
         # Terminal prompt via InterventionGateway
         if self._state_coordinator is not None:
@@ -1638,14 +1757,6 @@ class VerificationLoop:
                 diagnostics=diagnostics,
                 resources_accessed=frozenset(self._accumulated_resources),
             )
-
-        # Operator declined or non-interactive: log diagnostic to .agent/logs/<ticket_id>_diagnostic.md
-        try:
-            diag_path = self._runtime_paths.diagnostic_log_path(self._ticket.id)
-            diag_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(diag_path, report_text)
-        except Exception as exc:
-            logger.warning("Failed to write diagnostic log: %s", exc)
 
         return None
 

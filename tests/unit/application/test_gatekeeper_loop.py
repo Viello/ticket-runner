@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +12,7 @@ import pytest
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.application.gatekeeper import (
     CommandOutcome,
-    GatekeeperCommandExecutor,
     VerificationLoop,
-    VerificationLoopResult,
     VerificationLoopStatus,
     VerificationReport,
     build_verification_failure_prompt,
@@ -31,18 +28,13 @@ from runner.application.queue_orchestrator import (
     TicketOutcomeStatus,
 )
 from runner.domain.config import VerificationConfig
-from runner.domain.exceptions import SignalFormatError, UserAbortError
+from runner.domain.exceptions import UserAbortError
 from runner.domain.runtime_paths import RuntimePaths
-from runner.domain.signal import ReadySignal
 from runner.domain.ticket import Ticket, TicketStatus
-from runner.ports.command_runner import CommandRunner
 from runner.ports.intervention import (
     InterventionAction,
     InterventionDecision,
-    InterventionGateway,
 )
-from runner.ports.signal_repository import SignalRepository
-from tests.fakes.fake_command_runner import FakeCommandRunner
 from tests.fakes.fake_ticket_repository import FakeTicketRepository
 from tests.fakes.fake_intervention import FakeInterventionGateway
 
@@ -214,6 +206,7 @@ def test_malformed_ready_signal_consumes_attempt_with_format_error_diagnostics(t
         signal_repository=signals,
         executor=executor,  # type: ignore
         intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
         max_attempts=3,
     )
 
@@ -223,9 +216,13 @@ def test_malformed_ready_signal_consumes_attempt_with_format_error_diagnostics(t
     assert result.attempts == 2
     assert len(cycle_runner.calls) == 2
 
-    # Format error was injected into prompt on attempt 2
+    # Format error and archive path were injected into prompt on attempt 2
     resume_prompt = cycle_runner.calls[1]["prompt"]
     assert "Malformed ready Signal" in resume_prompt or "Signal file" in resume_prompt
+    archive_path = runtime_paths.malformed_ready_signal_archive_path(ticket.id)
+    assert archive_path.exists()
+    assert archive_path.read_text(encoding="utf-8") == "NOT VALID JSON"
+    assert str(archive_path) in resume_prompt
 
 
 def test_worker_phase_non_ready_consumes_attempt_with_escalation_details(tmp_path: Path) -> None:

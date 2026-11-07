@@ -10,7 +10,6 @@ import json
 import re
 from typing import Any
 
-from runner.domain.evidence import ApprovalDecision, EvidenceCard
 from runner.domain.exceptions import SignalFormatError
 
 TICKET_NUMBER_PATTERN = re.compile(r"^[tT]\d{3,}$")
@@ -72,6 +71,64 @@ def _validate_string_tuple(value: object, field: str, label: str) -> tuple[str, 
                 f"{label} field '{field}' entries must be strings, got: {_preview(entry)}"
             )
     return tuple(value)
+
+
+_GOTCHA_SOLUTION_FALLBACK = "Not specified."
+
+_GOTCHA_SHAPE = (
+    "a non-empty string or a mapping with non-empty 'problem' and 'solution' keys"
+)
+
+
+def _gotcha_entry_text(entry: Mapping[str, Any], key: str, prefix: str) -> str:
+    value = entry[key]
+    if not isinstance(value, str) or not value.strip():
+        raise SignalFormatError(
+            f"{prefix} must carry a non-empty string '{key}', got: {_preview(value)}"
+        )
+    return value.strip()
+
+
+def _canonicalize_gotcha(entry: object, index: int, field: str, label: str) -> str:
+    """Normalise one accepted Gotcha shape to the canonical Problem/Solution text form."""
+    prefix = f"{label} field '{field}' at index {index}"
+    if isinstance(entry, str):
+        problem = entry.strip()
+        if not problem:
+            raise SignalFormatError(
+                f"{prefix} must be {_GOTCHA_SHAPE}, got: {_preview(entry)}"
+            )
+        return f"Problem: {problem}\nSolution: {_GOTCHA_SOLUTION_FALLBACK}"
+    if isinstance(entry, Mapping):
+        if "problem" not in entry:
+            raise SignalFormatError(
+                f"{prefix} must be {_GOTCHA_SHAPE}, got: {_preview(entry)}"
+            )
+        problem = _gotcha_entry_text(entry, "problem", prefix)
+        if "solution" in entry:
+            solution = _gotcha_entry_text(entry, "solution", prefix)
+        elif "fix" in entry:
+            solution = _gotcha_entry_text(entry, "fix", prefix)
+        else:
+            raise SignalFormatError(
+                f"{prefix} must carry a non-empty 'solution' value, got: {_preview(entry)}"
+            )
+        return f"Problem: {problem}\nSolution: {solution}"
+    raise SignalFormatError(
+        f"{prefix} must be {_GOTCHA_SHAPE}, got: {_preview(entry)}"
+    )
+
+
+def _validate_gotchas(value: object, field: str, label: str) -> tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise SignalFormatError(
+            f"{label} field '{field}' must be an array of strings or "
+            f"'problem'/'solution' objects, got: {_preview(value)}"
+        )
+    return tuple(
+        _canonicalize_gotcha(entry, index, field, label)
+        for index, entry in enumerate(value)
+    )
 
 
 def _coerce_timestamp(value: object, field: str, label: str) -> datetime:
@@ -255,7 +312,7 @@ class ReadySignal:
         object.__setattr__(
             self,
             "new_gotchas",
-            _validate_string_tuple(self.new_gotchas, "new_gotchas", label),
+            _validate_gotchas(self.new_gotchas, "new_gotchas", label),
         )
         object.__setattr__(
             self,

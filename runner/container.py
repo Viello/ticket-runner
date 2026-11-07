@@ -12,6 +12,9 @@ from typing import Any
 from runner.adapters.cli.subprocess_runner import SubprocessRunner
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
 from runner.adapters.discord.client import DiscordClient
+from runner.adapters.discord.gateway import DiscordPyGateway
+from runner.adapters.discord.logger import DiscordLoggerImpl
+from runner.application.discord_thread_manager import DiscordThreadManager
 from runner.adapters.filesystem.json_state_store import JsonStateStore
 from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
 from runner.adapters.json_status_publisher import JsonFileStatusPublisher
@@ -104,6 +107,7 @@ class RunnerContainer:
     tui_coordinator: TuiCoordinator | None = None
     discord_thread_manager: Any | None = None
     discord_logger: Any | None = None
+    discord_client: Any | None = None
     agent_worker: AgentWorker | None = None
     approval_gateway: ApprovalGateway | None = None
     project_dir: Path | None = None
@@ -152,6 +156,8 @@ def build_container(
     terminal_detector: Any | None = None,
     discord_thread_manager: Any | None = None,
     discord_logger: Any | None = None,
+    discord_client: Any | None = None,
+    local_only: bool = False,
     agent_worker: AgentWorker | None = None,
     approval_gateway: ApprovalGateway | None = None,
 ) -> RunnerContainer:
@@ -212,7 +218,10 @@ def build_container(
         cwd=effective_dir,
     )
 
-    resolved_terminal_display = terminal_display or RichTerminalDisplay(console=console)
+    resolved_terminal_display = terminal_display or RichTerminalDisplay(
+        console=console,
+        token_budget=resolved_config.tokens,
+    )
     resolved_event_sink = ui_event_sink or resolved_terminal_display
 
     if hasattr(resolved_intervention_gateway, "display") and resolved_intervention_gateway.display is None and resolved_terminal_display is not None:
@@ -234,11 +243,51 @@ def build_container(
         state_store=resolved_state_store,
         branch=resolved_config.project.branch,
         selected_model=model_id,
+        presence_mode=resolved_config.presence.default_mode,
         clock=clock,
         terminal_display=resolved_terminal_display,
     )
 
-    resolved_prompt_builder = prompt_builder or PromptBuilder()
+    idle_esc_min = getattr(getattr(resolved_config, "presence", None), "idle_escalation_minutes", 3)
+    resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
+        state_coordinator=resolved_state_coordinator,
+        terminal_display=resolved_terminal_display,
+        ui_event_sink=resolved_event_sink,
+        idle_escalation_minutes=idle_esc_min,
+    )
+
+    resolved_discord_client = None if local_only else discord_client
+    resolved_discord_logger = None if local_only else discord_logger
+    resolved_discord_thread_manager = None if local_only else discord_thread_manager
+
+    if resolved_discord_client is None and resolved_config.discord.enabled and not local_only:
+        resolved_discord_client = DiscordClient(
+            config=resolved_config,
+            state_store=resolved_state_store,
+            signal_repository=resolved_signal_repo,
+            presence_coordinator=resolved_presence_coordinator,
+            state_coordinator=resolved_state_coordinator,
+        )
+
+    if resolved_discord_client is not None and not local_only:
+        gateway = DiscordPyGateway(resolved_discord_client.client)
+        if resolved_discord_logger is None:
+            resolved_discord_logger = DiscordLoggerImpl(
+                gateway,
+                notify_user_id=resolved_config.discord.notify_user_id or None,
+                token_budget=resolved_config.tokens,
+            )
+        if resolved_discord_thread_manager is None:
+            resolved_discord_thread_manager = DiscordThreadManager(
+                gateway,
+                logger=resolved_discord_logger,
+                discord_enabled=True,
+                token_budget=resolved_config.tokens,
+            )
+
+    resolved_prompt_builder = prompt_builder or PromptBuilder(
+        token_budget=resolved_config.tokens
+    )
     resolved_spec_parser = spec_parser or SpecMarkdownParser()
 
     resolved_status_publisher = status_publisher or JsonFileStatusPublisher(
@@ -327,6 +376,10 @@ def build_container(
         git_operations=resolved_git_ops,
         approval_gateway=resolved_approval_gateway,
         approval_mode=resolved_config.lifecycle.approval_mode,
+        discord_thread_manager=resolved_discord_thread_manager,
+        discord_logger=resolved_discord_logger,
+        presence_coordinator=resolved_presence_coordinator,
+        runner_config=resolved_config,
         tui_coordinator=resolved_tui_coordinator if 'resolved_tui_coordinator' in locals() else tui_coordinator,
     )
     if hasattr(resolved_processor, "state_coordinator") and resolved_processor.state_coordinator is None:
@@ -348,6 +401,10 @@ def build_container(
         clock=clock,
         state_coordinator=resolved_state_coordinator,
         ui_event_sink=resolved_event_sink,
+        discord_thread_manager=resolved_discord_thread_manager,
+        discord_logger=resolved_discord_logger,
+        presence_coordinator=resolved_presence_coordinator,
+        runner_config=resolved_config,
     )
     if hasattr(resolved_orchestrator, "_state_coordinator") and resolved_orchestrator.state_coordinator is None:
         resolved_orchestrator._state_coordinator = resolved_state_coordinator
@@ -365,27 +422,19 @@ def build_container(
         clock=clock,
     )
 
-    idle_esc_min = getattr(getattr(resolved_config, "presence", None), "idle_escalation_minutes", 3)
-    resolved_presence_coordinator = presence_coordinator or PresenceCoordinator(
-        state_coordinator=resolved_state_coordinator,
-        terminal_display=resolved_terminal_display,
-        ui_event_sink=resolved_event_sink,
-        idle_escalation_minutes=idle_esc_min,
-    )
-
     if hasattr(resolved_processor, "discord_thread_manager") and resolved_processor.discord_thread_manager is None:
-        resolved_processor.discord_thread_manager = discord_thread_manager
+        resolved_processor.discord_thread_manager = resolved_discord_thread_manager
     if hasattr(resolved_processor, "discord_logger") and resolved_processor.discord_logger is None:
-        resolved_processor.discord_logger = discord_logger
+        resolved_processor.discord_logger = resolved_discord_logger
     if hasattr(resolved_processor, "presence_coordinator") and resolved_processor.presence_coordinator is None:
         resolved_processor.presence_coordinator = resolved_presence_coordinator
     if hasattr(resolved_processor, "runner_config") and resolved_processor.runner_config is None:
         resolved_processor.runner_config = resolved_config
 
     if hasattr(resolved_orchestrator, "discord_thread_manager") and resolved_orchestrator.discord_thread_manager is None:
-        resolved_orchestrator._discord_thread_manager = discord_thread_manager
+        resolved_orchestrator._discord_thread_manager = resolved_discord_thread_manager
     if hasattr(resolved_orchestrator, "discord_logger") and resolved_orchestrator.discord_logger is None:
-        resolved_orchestrator._discord_logger = discord_logger
+        resolved_orchestrator._discord_logger = resolved_discord_logger
     if hasattr(resolved_orchestrator, "presence_coordinator") and resolved_orchestrator.presence_coordinator is None:
         resolved_orchestrator._presence_coordinator = resolved_presence_coordinator
     if hasattr(resolved_orchestrator, "runner_config") and resolved_orchestrator.runner_config is None:
@@ -450,8 +499,9 @@ def build_container(
         presence_coordinator=resolved_presence_coordinator,
         tui_launcher=resolved_tui_launcher,
         tui_coordinator=resolved_tui_coordinator,
-        discord_thread_manager=discord_thread_manager,
-        discord_logger=discord_logger,
+        discord_thread_manager=resolved_discord_thread_manager,
+        discord_logger=resolved_discord_logger,
+        discord_client=resolved_discord_client,
         agent_worker=resolved_agent_worker,
         approval_gateway=resolved_approval_gateway,
         project_dir=effective_dir,

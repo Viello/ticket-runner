@@ -4,6 +4,11 @@ from pathlib import Path
 
 from runner.adapters.markdown.spec_parser import SpecExcerpt
 from runner.application.prompt_builder import PromptBuilder, build_prompt
+from runner.domain.signal import QuestionSignal, ReadySignal
+from runner.domain.signal_schema import (
+    render_question_signal_protocol,
+    render_ready_signal_protocol,
+)
 from runner.domain.ticket import Ticket, TicketStatus
 
 
@@ -201,7 +206,8 @@ def test_prompt_contains_diagnosing_bugs_skill_pointer() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt
 
 
 def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
@@ -221,8 +227,11 @@ def test_prompt_mandatory_code_review_present_in_both_modes() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt_no_sec
-    assert ".agents/skills/code-review/SKILL.md" in prompt_sec
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt_no_sec
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt_sec
+    assert ".agents/skills/code-review/SKILL.md" not in prompt_no_sec
+    assert ".agents/skills/code-review/SKILL.md" not in prompt_sec
+
     assert "`/code-review`" not in prompt_no_sec
     assert "`/code-review`" not in prompt_sec
 
@@ -244,11 +253,15 @@ def test_prompt_conditional_security_review_toggle() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/security-review/SKILL.md" in prompt_sec
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt_sec
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" not in prompt_no_sec
+    assert ".agents/skills/security-review/SKILL.md" not in prompt_sec
     assert ".agents/skills/security-review/SKILL.md" not in prompt_no_sec
     assert "Explicit Security Mandate" in prompt_sec
     assert "Security: required" in prompt_sec
     assert "Explicit Security Mandate" not in prompt_no_sec
+    assert "`Security` axis" in prompt_sec
+    assert "`Security` axis" not in prompt_no_sec
     assert "`/security-review`" not in prompt_sec
     assert "`/security-review`" not in prompt_no_sec
 
@@ -303,14 +316,10 @@ def test_prompt_documents_full_ready_signal_schema() -> None:
     assert ".agent/signals/T032_ready.json" in prompt
 
     # Required and optional schema fields
-    assert "`ticket_id`: \"T032\"" in prompt
+    for field_name in ReadySignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
     assert "\"ready_for_verification\"" in prompt
-    assert "`modified_files`" in prompt
-    assert "`self_review_notes`" in prompt
-    assert "`new_gotchas`" in prompt
-    assert "`timestamp`" in prompt
-    assert "`scope`" in prompt
-    assert "never use a ticket number" in prompt
+    assert "never a ticket number" in prompt
 
 
 def test_prompt_documents_question_protocol_and_schema() -> None:
@@ -327,13 +336,77 @@ def test_prompt_documents_question_protocol_and_schema() -> None:
     assert "stop working immediately" in prompt.lower() or "stop working" in prompt.lower()
 
     # Question schema fields
-    assert "`ticket_id`: \"T032\"" in prompt
-    assert "`question`" in prompt
-    assert "`type`: \"choice\" or \"text\"" in prompt
-    assert "`options`" in prompt
-    assert "`status`: \"pending\"" in prompt
-    assert "`answer`: null" in prompt
-    assert "`created_at`" in prompt
+    for field_name in QuestionSignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert "\"choice\"" in prompt
+    assert "\"text\"" in prompt
+    assert "\"pending\"" in prompt
+
+
+def test_prompt_renders_ready_signal_protocol_from_domain_authority() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    ready_protocol = render_ready_signal_protocol("T032")
+    assert ready_protocol in prompt
+
+    for field_name in ReadySignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert "\"ready_for_verification\"" in prompt
+    assert ".agent/signals/T032_ready.json" in prompt
+
+
+def test_prompt_renders_question_signal_protocol_from_domain_authority() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    question_protocol = render_question_signal_protocol("T032")
+    assert question_protocol in prompt
+
+    for field_name in QuestionSignal.__dataclass_fields__:
+        assert f"`{field_name}`" in prompt
+    assert ".agent/questions/T032.json" in prompt
+
+
+def test_prompt_protocols_declare_themselves_authoritative() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    authority_sentence = (
+        "This section is the single authority for this Signal payload schema: if the "
+        "execution skill or any other document shows a different example, follow this section."
+    )
+    assert prompt.count(authority_sentence) >= 2
+
+
+def test_prompt_teaches_canonical_gotcha_shape_with_string_fallback_without_fix_alias() -> None:
+    ticket = _make_ticket(ticket_id="T032")
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        execution_skill=".agents/skills/implement-ticket-runner/SKILL.md",
+    )
+
+    assert "\"problem\":" in prompt
+    assert "\"solution\":" in prompt
+    assert "plain strings are also accepted" in prompt
+    assert "\"fix\"" not in prompt
 
 
 def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() -> None:
@@ -348,8 +421,8 @@ def test_prompt_command_length_with_real_gotchas_remains_well_below_ceiling() ->
     )
     cmd = build_opencode_run_command(prompt)
     total_length = sum(len(arg) for arg in cmd) + len(cmd) - 1
-    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 9,000 chars
-    assert total_length < 9000
+    # Windows ceiling is 32,767; prompt pointer + inlined invariants keeps command below 10,000 chars
+    assert total_length < 10000
     assert total_length < 32767
 
 
@@ -392,8 +465,11 @@ def test_prompt_review_section_file_reading_directives_and_self_review_notes() -
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt
-    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+
     assert "self_review_notes" in prompt
     assert "`/code-review`" not in prompt
     assert "`/security-review`" not in prompt
@@ -408,9 +484,10 @@ def test_prompt_debugging_guidance_explicit_read_directive() -> None:
         execution_skill=".agents/skills/implement/SKILL.md",
     )
 
-    assert ".agents/skills/diagnosing-bugs/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/diagnosing-bugs/SKILL.md" not in prompt
     assert "read" in prompt.lower()
-    assert "consult `.agents/skills/diagnosing-bugs/SKILL.md`" not in prompt
+    assert "consult `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`" not in prompt
 
 
 def test_prompt_resilient_invariants_fallback_when_agents_md_missing_or_corrupt(tmp_path: Path) -> None:
@@ -533,7 +610,7 @@ def test_prompt_states_spec_17_checkbox_tick_permission_boundary() -> None:
     assert "touching any other file under `docs/tickets/`" in prompt
 
 
-def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> None:
+def test_prompt_instructs_review_and_severity_gated_escalation_when_security_required() -> None:
     ticket = _make_ticket(ticket_id="T127", security_required=True)
     prompt = build_prompt(
         ticket=ticket,
@@ -541,8 +618,11 @@ def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> 
         gotchas_path=SAMPLE_GOTCHAS_PATH,
     )
 
-    assert ".agents/skills/code-review/SKILL.md" in prompt
-    assert ".agents/skills/security-review/SKILL.md" in prompt
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+
     assert "Standards" in prompt
     assert "Spec" in prompt
     assert "Security" in prompt
@@ -551,6 +631,22 @@ def test_prompt_instructs_3_axis_code_review_and_severity_gated_escalation() -> 
     assert "Only if remediation is blocked" in prompt
     assert ".agent/questions/T127.json" in prompt
 
+
+def test_prompt_omits_security_axis_when_not_required() -> None:
+    ticket = _make_ticket(ticket_id="T127", security_required=False)
+    prompt = build_prompt(
+        ticket=ticket,
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in prompt
+    assert ".agents/skills/security-review-ticket-runner/SKILL.md" not in prompt
+    assert ".agents/skills/code-review/SKILL.md" not in prompt
+    assert ".agents/skills/security-review/SKILL.md" not in prompt
+    assert "Standards" in prompt
+    assert "Spec" in prompt
+    assert "`Security` axis" not in prompt
 
 def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() -> None:
     ticket = _make_ticket(ticket_id="T127")
@@ -563,5 +659,97 @@ def test_prompt_default_execution_skill_resolves_to_implement_ticket_runner() ->
     assert ".agents/skills/implement-ticket-runner/SKILL.md" in prompt
 
 
+def test_prompt_renders_configured_token_budget(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("## Invariants\n- Stay scoped.\n", encoding="utf-8")
+
+    prompt = build_prompt(
+        ticket=_make_ticket(ticket_id="T130"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
 
 
+def test_prompt_replaces_stale_token_budget_line_without_duplicating(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "## Invariants\n"
+        "- Token budget: warn 120k, handoff 135k, hard ceiling 150k; handoff writes the checkpoint.\n"
+        "- Stay scoped.\n",
+        encoding="utf-8",
+    )
+
+    prompt = build_prompt(
+        ticket=_make_ticket(ticket_id="T131"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    assert prompt.count("- Token budget:") == 1
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
+    assert "warn 120k" not in prompt
+
+
+def test_prompt_builder_instance_forwards_token_budget(tmp_path: Path) -> None:
+    from runner.domain.config import TokenBudgetConfig
+
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("## Invariants\n- Stay scoped.\n", encoding="utf-8")
+
+    builder = PromptBuilder(
+        agents_path=agents,
+        token_budget=TokenBudgetConfig(warn=180_000, handoff=190_000, ceiling=200_000),
+    )
+
+    prompt = builder.build(
+        ticket=_make_ticket(ticket_id="T132"),
+        spec_excerpt=SAMPLE_SPEC_EXCERPT,
+        gotchas_path=SAMPLE_GOTCHAS_PATH,
+    )
+
+    assert "warn 180k, handoff 190k, hard ceiling 200k" in prompt
+
+
+
+
+def test_implement_ticket_runner_skill_mandates_explicit_file_read_for_code_review_and_agents_md() -> None:
+    """Execution skill must name '.agents/skills/code-review-ticket-runner/SKILL.md' and 'AGENTS.md' for file-reading tool access."""
+    skill_path = Path(".agents/skills/implement-ticket-runner/SKILL.md")
+    content = skill_path.read_text(encoding="utf-8")
+
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in content
+    assert "AGENTS.md" in content
+    assert "Run `/code-review` before signalling readiness:" not in content
+
+
+def test_ready_signal_protocol_reminds_worker_to_read_code_review_skill_and_agents_md() -> None:
+    """Ready Signal Protocol section reminds the worker to have read code-review-ticket-runner/SKILL.md and AGENTS.md."""
+    protocol = render_ready_signal_protocol("T008")
+    assert ".agents/skills/code-review-ticket-runner/SKILL.md" in protocol
+    assert ".agents/skills/code-review/SKILL.md" not in protocol
+    assert "AGENTS.md" in protocol
+
+
+def test_default_invariants_references_handoff_ticket_runner_skill() -> None:
+    from runner.application.prompt_builder import DEFAULT_INVARIANTS
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in DEFAULT_INVARIANTS
+    assert ".agents/skills/handoff/SKILL.md" not in DEFAULT_INVARIANTS
+
+
+def test_with_token_budget_references_handoff_ticket_runner_skill() -> None:
+    from runner.domain.config import TokenBudgetConfig
+    from runner.application.prompt_builder import _with_token_budget, extract_invariants
+    budget = TokenBudgetConfig(warn=120_000, handoff=135_000, ceiling=150_000)
+    invariants = _with_token_budget(extract_invariants(), budget)
+    assert ".agents/skills/handoff-ticket-runner/SKILL.md" in invariants
+    assert ".agents/skills/handoff/SKILL.md" not in invariants

@@ -7,7 +7,7 @@ import dataclasses
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import re
+
 import shutil
 from typing import Any, Mapping
 
@@ -21,6 +21,7 @@ from runner.application.gatekeeper import CMD_BUILTINS, leading_command_token
 from runner.application.git_operations import GitOperations
 from runner.domain.config import RunnerConfig
 from runner.domain.exceptions import CommandNotFoundError, ConfigError, GitError, TicketFormatError
+from runner.domain.signal_contract import validate_markdown_signal_examples
 from runner.ports.command_runner import CommandRunner
 from runner.ports.config_loader import ConfigLoader
 from runner.ports.ticket_repository import TicketRepository
@@ -37,6 +38,7 @@ CHECK_VERIFICATION_COMMANDS = "verification_commands"
 CHECK_HOOK = "pre_push_hook"
 CHECK_AGENTS_MD = "agents_md"
 CHECK_SKILLS = "skills"
+CHECK_SIGNAL_CONTRACT = "signal_contract"
 CHECK_DISCORD = "discord"
 
 CANDIDATE_TERMINAL_HOSTS = ("wt.exe", "pwsh.exe", "powershell.exe", "cmd.exe")
@@ -47,8 +49,10 @@ DEFAULT_TICKETS_DIR = Path("docs/tickets")
 DEFAULT_AGENTS_MD_PATH = Path("AGENTS.md")
 DEFAULT_EXECUTION_SKILL = ".agents/skills/implement-ticket-runner/SKILL.md"
 REQUIRED_SKILL_PATHS = (
-    ".agents/skills/code-review/SKILL.md",
-    ".agents/skills/diagnosing-bugs/SKILL.md",
+    ".agents/skills/code-review-ticket-runner/SKILL.md",
+    ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md",
+    ".agents/skills/handoff-ticket-runner/SKILL.md",
+    ".agents/skills/security-review-ticket-runner/SKILL.md",
 )
 REQUIRED_DISCORD_PERMISSIONS = (
     "Send Messages",
@@ -1075,6 +1079,70 @@ class Doctor:
             remediation=None,
         )
 
+    async def check_signal_contract(self) -> CheckResult:
+        """Verify embedded Signal examples in configured execution skill satisfy schema contract."""
+        if self._execution_skill_path is not None:
+            execution_skill = str(self._execution_skill_path)
+        elif self._loaded_config is not None:
+            execution_skill = self._loaded_config.worker.execution_skill
+        elif self._config_loader is not None:
+            try:
+                loaded = self._load_configuration()
+                execution_skill = loaded.worker.execution_skill
+            except Exception:
+                execution_skill = DEFAULT_EXECUTION_SKILL
+        else:
+            execution_skill = DEFAULT_EXECUTION_SKILL
+
+        skill_path = Path(execution_skill)
+        if not skill_path.is_absolute() and self._cwd:
+            resolved = self._cwd / skill_path
+        else:
+            resolved = skill_path
+
+        display_path = (
+            resolved.relative_to(self._cwd).as_posix()
+            if self._cwd and resolved.is_relative_to(self._cwd)
+            else skill_path.as_posix()
+        )
+
+        try:
+            if not resolved.is_file():
+                return CheckResult(
+                    name=CHECK_SIGNAL_CONTRACT,
+                    passed=False,
+                    message=f"Execution skill file '{display_path}' does not exist.",
+                    remediation=f"Ensure execution skill file '{display_path}' exists and is readable.",
+                )
+            content = resolved.read_text(encoding="utf-8")
+        except OSError as exc:
+            return CheckResult(
+                name=CHECK_SIGNAL_CONTRACT,
+                passed=False,
+                message=f"Execution skill file '{display_path}' cannot be read: {exc}",
+                remediation=f"Ensure execution skill file '{display_path}' has read permissions.",
+            )
+
+        errors = validate_markdown_signal_examples(content)
+        if errors:
+            violation_summary = "; ".join(errors)
+            return CheckResult(
+                name=CHECK_SIGNAL_CONTRACT,
+                passed=False,
+                message=f"Execution skill '{display_path}' violates signal contract: {violation_summary}.",
+                remediation=(
+                    f"Update '{display_path}' to satisfy the signal contract: {violation_summary}. "
+                    "If using a shared catalog skill, republish the catalog then run 'ticket-runner skills sync'."
+                ),
+            )
+
+        return CheckResult(
+            name=CHECK_SIGNAL_CONTRACT,
+            passed=True,
+            message=f"Execution skill '{display_path}' signal contract verified.",
+            remediation=None,
+        )
+
     async def run(
         self,
         local_only: bool = False,
@@ -1102,6 +1170,7 @@ class Doctor:
             self.check_hook,
             self.check_agents_md,
             self.check_skills,
+            self.check_signal_contract,
             lambda: self.check_discord(local_only=local_only, live=live),
         ]
 

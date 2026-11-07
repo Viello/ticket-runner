@@ -3,6 +3,7 @@
 from tests.fakes.fake_agent_worker import FakeAgentWorker
 from tests.fakes.fake_approval_gateway import FakeApprovalGateway
 from tests.fakes.fake_command_runner import FakeCommandRunner
+from tests.fakes.fake_discord_client import FakeDiscordClient
 from tests.fakes.fake_discord_gateway import DiscordCall, FakeDiscordGateway
 from tests.fakes.fake_discord_logger import DiscordLogCall, FakeDiscordLogger
 from tests.fakes.fake_intervention import FakeInterventionGateway
@@ -18,6 +19,7 @@ __all__ = [
     "FakeAgentWorker",
     "FakeApprovalGateway",
     "FakeCommandRunner",
+    "FakeDiscordClient",
     "FakeDiscordGateway",
     "FakeDiscordLogger",
     "FakeInterventionGateway",

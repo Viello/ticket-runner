@@ -129,7 +129,14 @@ def test_scaffold_happy_path(tmp_path: Path) -> None:
         assert (target / ".agent" / sub).is_dir()
 
     # 2. .agents/skills
-    for skill in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
+    for skill in (
+        "implement-ticket-runner",
+        "code-review-ticket-runner",
+        "diagnosing-bugs-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+        "to-ticket-runner",
+    ):
         skill_file = target / ".agents" / "skills" / skill / "SKILL.md"
         assert skill_file.is_file()
 
@@ -396,14 +403,21 @@ def test_scaffold_all_mode_network_fallback(
     scaffold(target, force=False, skills_mode="all")
     captured = capsys.readouterr().out
 
-    # Ships 4 curated skills on fallback
+    # Ships 6 curated skills on fallback
     target_skills = list((target / ".agents" / "skills").iterdir())
-    assert len(target_skills) == 4
-    for skill_name in ("implement-ticket-runner", "code-review", "diagnosing-bugs", "handoff"):
+    assert len(target_skills) == 6
+    for skill_name in (
+        "implement-ticket-runner",
+        "code-review-ticket-runner",
+        "diagnosing-bugs-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+        "to-ticket-runner",
+    ):
         assert (target / ".agents" / "skills" / skill_name / "SKILL.md").is_file()
 
     assert "[scaffold] Warning: Failed to fetch skill catalog from Viello/agent-skills" in captured
-    assert "[scaffold] all mode: 4 skills shipped (fallback to curated default)" in captured
+    assert "[scaffold] all mode: 6 skills shipped (fallback to curated default)" in captured
     assert "deferred to T005d-impl" not in captured
 
 
@@ -518,3 +532,82 @@ def test_scaffold_sanitizes_adr_and_welcome_spec(tmp_path: Path) -> None:
     assert "docs/specs/" not in ticket_text
     assert "**Spec:** N/A (sandbox demo)" in ticket_text
 
+
+
+def test_curated_skills_constant() -> None:
+    """Verify CURATED_SKILLS contains all six autonomous -ticket-runner skills."""
+    from runner.tools.scaffold_sandbox import CURATED_SKILLS
+
+    assert CURATED_SKILLS == (
+        "implement-ticket-runner",
+        "code-review-ticket-runner",
+        "diagnosing-bugs-ticket-runner",
+        "handoff-ticket-runner",
+        "security-review-ticket-runner",
+        "to-ticket-runner",
+    )
+
+
+@pytest.mark.anyio
+async def test_freshly_scaffolded_sandbox_passes_doctor_check_skills(tmp_path: Path) -> None:
+    """Verify a freshly scaffolded sandbox immediately passes Doctor.check_skills."""
+    from runner.application.doctor import Doctor, CHECK_SKILLS
+
+    target = tmp_path / "sandbox"
+    scaffold(target, force=False)
+
+    doctor = Doctor(cwd=target)
+    result = await doctor.check_skills()
+
+    assert result.passed is True
+    assert result.name == CHECK_SKILLS
+    assert "All 5 required skill files verified on disk." in result.message
+
+
+def test_extract_curated_subset_preserves_ticket_runner_skills_bullets() -> None:
+    """Verify extract_curated_subset preserves -ticket-runner bullets in default and all modes."""
+    sample = """# AGENTS.md
+
+## Invariants
+- Token budget: warn 120k, handoff 135k, ceiling 150k. Handoff writes `.agent/checkpoints/{ticket_id}/handoff.md` via `.agents/skills/handoff-ticket-runner/SKILL.md`.
+
+## Environment
+- Target platform is Windows/PowerShell.
+
+## Agent skills
+- `.agents/skills/` vendors the user's global skill catalog.
+- `.agents/skills/handoff-ticket-runner/SKILL.md` is load-bearing; the Runner's handoff protocol calls it by path. Keep it at that path.
+- `.agents/skills/implement-ticket-runner/SKILL.md` defines the default worker implementation discipline.
+- `.agents/skills/implement/SKILL.md` defines the interactive Human+AI worker implementation discipline.
+- `.agents/skills/security-review-ticket-runner/SKILL.md` defines the ticket-driven security review discipline (ADR 0013).
+"""
+    default_curated = extract_curated_subset(sample, skills_mode="default")
+    assert "handoff-ticket-runner/SKILL.md` is load-bearing" in default_curated
+    assert "implement-ticket-runner/SKILL.md` defines" in default_curated
+    assert "implement/SKILL.md` defines" in default_curated
+    assert "security-review-ticket-runner/SKILL.md" not in default_curated
+    assert "vendors the user's global skill catalog" not in default_curated
+
+    all_curated = extract_curated_subset(sample, skills_mode="all")
+    assert "vendors the user's global skill catalog" in all_curated
+    assert "handoff-ticket-runner/SKILL.md` is load-bearing" in all_curated
+    assert "implement-ticket-runner/SKILL.md` defines" in all_curated
+    assert "implement/SKILL.md` defines" in all_curated
+    assert "security-review-ticket-runner/SKILL.md" in all_curated
+
+
+def test_constants_preserve_ticket_runner_skills() -> None:
+    """Verify scaffolder constants include -ticket-runner handoff and security review bullets."""
+    from runner.tools.scaffold_sandbox import (
+        AGENT_BULLETS_KEEP_PREFIXES_DEFAULT,
+        AGENT_BULLETS_KEEP_PREFIXES_ALL,
+        FALLBACK_CURATED_SUBSET,
+        DEFAULT_UPSTREAM_AGENTS_MD,
+    )
+
+    assert any("handoff-ticket-runner" in p for p in AGENT_BULLETS_KEEP_PREFIXES_DEFAULT)
+    assert any("handoff-ticket-runner" in p for p in AGENT_BULLETS_KEEP_PREFIXES_ALL)
+    assert any("security-review-ticket-runner" in p for p in AGENT_BULLETS_KEEP_PREFIXES_ALL)
+    assert "handoff-ticket-runner/SKILL.md" in FALLBACK_CURATED_SUBSET
+    assert "handoff-ticket-runner/SKILL.md" in DEFAULT_UPSTREAM_AGENTS_MD
+    assert "security-review-ticket-runner/SKILL.md" in DEFAULT_UPSTREAM_AGENTS_MD

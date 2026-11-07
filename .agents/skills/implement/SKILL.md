@@ -16,9 +16,9 @@ Use this skill when pairing directly with the human operator to implement work f
 
 1. **Seams & TDD**: Agree seams with the human partner before writing code. Drive implementation test-first via red-green-refactor cycles.
 2. **Verification & Speed**: Run typechecking and tests regularly. During development iterations, run targeted single test files matching your edits. Avoid piping to Unix-only commands (`tail`, `grep`) on Windows. Run broader test suites only once targeted tests pass before signalling completion.
-3. **Review**: Run `/code-review` along three axes (`Standards`, `Spec`, and `Security` referencing `.agents/skills/security-review/SKILL.md`) before committing.
-   - Low and Medium security findings should be remediated or noted in the review summary.
-   - Critical and High findings must be remediated immediately. If blocked by missing secrets or human architectural choice, mark the ticket `**Status:** ready-for-human` and ask the operator.
+3. **Review**: Run `/code-review` for the `Standards` and `Spec` axes before committing. Run the `Security` axis (referencing `.agents/skills/security-review/SKILL.md`) only when the ticket's `Security:` field is `required`, `true`, or `yes` (with or without bold markup), or the operator explicitly asks for a security review.
+   - When the Security axis runs, Low and Medium security findings should be remediated or noted in the review summary.
+   - Critical and High security findings must be remediated immediately. If blocked by missing secrets or human architectural choice, mark the ticket `**Status:** ready-for-human` and ask the operator.
 4. **Ticket Transition & Dialect Closing**: Support both `to-tickets` and `to-ticket-runner` ticket formats:
    - **`to-tickets` format (Specimen B)**:
      - Flip satisfied criteria `- [ ]` → `- [x]`.

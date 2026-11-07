@@ -405,6 +405,36 @@ def test_extract_resource_access_read_tool_skills() -> None:
     assert extract_resource_access(event4) == frozenset({"diagnosing-bugs"})
 
 
+def test_extract_resource_access_read_tool_ticket_runner_skills() -> None:
+    """Read tool events for -ticket-runner skills decode into exact <name>-ticket-runner identifiers."""
+    skills = [
+        ("code-review-ticket-runner", ".agents/skills/code-review-ticket-runner/SKILL.md"),
+        ("security-review-ticket-runner", ".agents/skills/security-review-ticket-runner/SKILL.md"),
+        ("diagnosing-bugs-ticket-runner", ".agents/skills/diagnosing-bugs-ticket-runner/SKILL.md"),
+        ("handoff-ticket-runner", ".agents/skills/handoff-ticket-runner/SKILL.md"),
+    ]
+    for skill_name, skill_path in skills:
+        event = decode_event(json.dumps({
+            "type": "tool_use",
+            "part": {
+                "tool": "read",
+                "input": {"filePath": skill_path},
+            },
+        }))
+        assert extract_resource_access(event) == frozenset({skill_name})
+
+        # Windows backslash path
+        win_path = skill_path.replace("/", "\\")
+        event_win = decode_event(json.dumps({
+            "type": "tool_use",
+            "part": {
+                "tool": "read",
+                "input": {"filePath": f"D:\\Projects\\{win_path}"},
+            },
+        }))
+        assert extract_resource_access(event_win) == frozenset({skill_name})
+
+
 def test_extract_resource_access_read_tool_agents_md() -> None:
     # Relative AGENTS.md
     event1 = decode_event(json.dumps({

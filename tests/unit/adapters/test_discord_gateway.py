@@ -330,3 +330,41 @@ async def test_delete_message_error(mock_client: MagicMock) -> None:
         await gateway.delete_message("1234567890", "9876543210")
 
 
+@pytest.mark.anyio
+async def test_pin_message_skips_parent_pin_for_thread_starter_message(
+    mock_client: MagicMock,
+) -> None:
+    """pin_message does not call pin() on parent channel starter message when target is a thread.
+
+    In Discord, a public thread created from a starter message has its starter message
+    in channel.parent (thread.fetch_message raises 404 NotFound), and Discord already
+    anchors the starter message at the head of the thread. Calling starter_msg.pin()
+    attempts to pin to the parent channel pinboard and fails with 403 Missing Permissions
+    when the bot lacks parent-channel Pin Messages permission.
+    """
+    mock_parent = MagicMock()
+    mock_starter_msg = MagicMock()
+    mock_starter_msg.pin = AsyncMock(
+        side_effect=discord.Forbidden(
+            MagicMock(status=403, reason="Forbidden"),
+            "Missing Permissions",
+        )
+    )
+    mock_parent.fetch_message = AsyncMock(return_value=mock_starter_msg)
+
+    mock_thread = MagicMock()
+    mock_thread.parent = mock_parent
+    mock_thread.fetch_message = AsyncMock(
+        side_effect=discord.NotFound(
+            MagicMock(status=404, reason="Not Found"),
+            "Unknown Message",
+        )
+    )
+    mock_client.get_channel.return_value = mock_thread
+
+    gateway = DiscordPyGateway(mock_client)
+    await gateway.pin_message("1566827088122745057", "1566827088122745057")
+
+    mock_thread.fetch_message.assert_awaited_once_with(1566827088122745057)
+    mock_parent.fetch_message.assert_awaited_once_with(1566827088122745057)
+    mock_starter_msg.pin.assert_not_awaited()

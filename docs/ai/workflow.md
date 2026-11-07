@@ -2,6 +2,9 @@
 
 How work moves through this repository. This is the interactive pair-programming track. The autonomous loop in [`product-invariants.md`](product-invariants.md) runs on Target Projects, not here.
 
+## Dual-Track Skill Segregation Rule
+Interactive Human + AI skills (`to-tickets`, `implement`, `code-review`, `security-review`, `diagnosing-bugs`, `handoff`) belong strictly to live pair programming. They converse directly with the human operator in the chat turn and must never carry autonomous Runner instructions, uncommitted-diff overrides, Gatekeeper prohibitions, or `.agent/` Signal paths. All autonomous Runner capabilities live in dedicated `-ticket-runner` skills (`to-ticket-runner`, `implement-ticket-runner`, `code-review-ticket-runner`, `security-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`).
+
 ## Session start
 1. Read `STATUS.md`.
 2. State the active ticket, blockers, and next step in four bullets.
@@ -34,7 +37,7 @@ Done when the ticket's acceptance criteria are covered by tests and no unrelated
 Done when the targeted tests, full suite, and required reviews are green, or the remaining failure is named.
 
 ## Session end
-- `/handoff` at 135k tokens or before a context boundary; write `.agent/checkpoints/{ticket_id}/handoff.md`.
+- `/handoff` at 135k tokens or before a context boundary; creates a portable handoff summary and synchronizes `STATUS.md`.
 - `/retro`, `/handoff`, or `/status save` to refresh `STATUS.md`.
 
 Done when `STATUS.md` names the next ticket and the next action.

@@ -111,19 +111,19 @@ Ticket Runner organizes software engineering into an 8-stage quality pipeline mo
 └─────────────────┬────────────────┘
                   ▼
 ┌──────────────────────────────────┐
-│  3. Ticket Decomposition         │  Decompose spec into queue: docs/tickets/<spec-slug>/T<NNN>-<slug>.md (/to-tickets)
+│  3. Ticket Decomposition         │  Decompose spec into queue: docs/tickets/<spec-slug>/T<NNN>-<slug>.md (/to-ticket-runner)
 └─────────────────┬────────────────┘
                   ▼
 ┌──────────────────────────────────┐
-│  4. Implementation (TDD)         │  AgentWorker executes ticket test-first via worker.execution_skill
+│  4. Implementation (TDD)         │  AgentWorker executes ticket test-first via worker.execution_skill (.agents/skills/implement-ticket-runner/SKILL.md)
 └─────────────────┬────────────────┘
                   ▼
 ┌──────────────────────────────────┐
-│  5. Pre-Signal Review            │  Two-axis review (/code-review: coding standards & originating spec)
+│  5. Pre-Signal Review            │  Two-axis review (code-review-ticket-runner: coding standards & originating spec)
 └─────────────────┬────────────────┘
                   ▼
 ┌──────────────────────────────────┐
-│  6. Security Review              │  Security posture check (/security-review) when Security: required
+│  6. Security Review              │  Security posture check (security-review-ticket-runner) when Security: required
 └─────────────────┬────────────────┘
                   ▼
 ┌──────────────────────────────────┐
@@ -139,10 +139,10 @@ Ticket Runner organizes software engineering into an 8-stage quality pipeline mo
 
 1. **Planning & Alignment**: Stress-test architectural proposals, API designs, and state models with `/grill-me` or interactive interview skills. Throwaway prototypes are explored using `/prototype` before committing to code.
 2. **Formal Specification**: Synthesize aligned requirements into a structured specification file under `docs/specs/<spec-slug>.md` using `/to-spec`, defining the problem statement, architectural boundaries, and target solution.
-3. **Ticket Decomposition & Queueing**: Decompose the specification into discrete, testable tickets under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using `/to-tickets`. Every ticket defines requirements, acceptance criteria, and gotchas. Every queue concludes with a mandatory spec-closing alignment ticket.
-4. **Implementation (TDD)**: The Runner launches an `AgentWorker` (OpenCode or Antigravity CLI) guided by `worker.execution_skill` (`.agents/skills/implement/SKILL.md`). The Worker implements the active ticket slice test-first across red-green cycles, but never commits directly.
-5. **Pre-Signal Review**: Before signaling completion, the Worker conducts a two-axis review using `/code-review` to verify that code adheres to repository standards and accurately delivers the originating spec requirements.
-6. **Security Review**: If flagged in ticket requirements or frontmatter (`Security: required`), the Worker invokes `/security-review` before signaling readiness to catch OWASP vulnerabilities, unsafe data handling, or credential exposure.
+3. **Ticket Decomposition & Queueing**: Decompose the specification into discrete, testable tickets under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` using `/to-ticket-runner`. Every ticket defines requirements, acceptance criteria, and gotchas. Every queue concludes with a mandatory spec-closing alignment ticket.
+4. **Implementation (TDD)**: The Runner launches an `AgentWorker` (OpenCode or Antigravity CLI) guided by `worker.execution_skill` (`.agents/skills/implement-ticket-runner/SKILL.md`). The Worker implements the active ticket slice test-first across red-green cycles, but never commits directly.
+5. **Pre-Signal Review**: Before signaling completion, the Worker conducts a two-axis review using `code-review-ticket-runner` to verify that code adheres to repository standards and accurately delivers the originating spec requirements.
+6. **Security Review**: If flagged in ticket requirements or frontmatter (`Security: required`), the Worker invokes `security-review-ticket-runner` before signaling readiness to catch OWASP vulnerabilities, unsafe data handling, or credential exposure.
 7. **Gatekeeper Verification**: Gatekeeper runs independent test and build commands, plus behavioral verification harnesses (Playwright, PTY CLI, HTTP). Full logs and media persist out-of-band to `.agent/evidence/<ticket_id>/`. On failure, the Runner feeds back a strictly bounded triage excerpt (≤ 30 lines / 1,000 characters) to preserve the model's context.
 8. **Human Gate & Completion**: In Human-in-the-Loop mode, Gatekeeper halts after green checks to present an **Evidence Card** via the active presence channel (Rich terminal prompt in Nearby mode; Discord Status Card with `/approve` in Away mode). Upon human sign-off, Gatekeeper authors exactly one atomic conventional commit and relocates the ticket to `completed/`. Human verification is conducted via `/live-qa` sessions recording durable verdicts to `.agent/live-qa_log_<spec-slug>.md`.
 
@@ -209,7 +209,7 @@ project:
 
 worker:
   provider: "opencode"                 # Agent backend: "opencode" or "antigravity"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "<non-interactive test command>"   # Executed by Gatekeeper (e.g., "pytest", "npm test")
@@ -233,7 +233,7 @@ project:
 
 worker:
   provider: "opencode"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "pnpm test"
@@ -255,7 +255,7 @@ project:
 
 worker:
   provider: "opencode"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "pytest"
@@ -277,7 +277,7 @@ project:
 
 worker:
   provider: "opencode"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "cargo test"
@@ -299,7 +299,7 @@ project:
 
 worker:
   provider: "opencode"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "go test ./..."
@@ -321,7 +321,7 @@ project:
 
 worker:
   provider: "opencode"
-  execution_skill: ".agents/skills/implement/SKILL.md"
+  execution_skill: ".agents/skills/implement-ticket-runner/SKILL.md"
 
 verification:
   test_cmd: "pnpm turbo run test"
@@ -466,6 +466,7 @@ Ticket Runner adheres to a strict exit code contract for operators, CI pipelines
 | `0` | **Clean Termination** | Queue drained cleanly under `terminate` policy, or standby watch loop exited via cooperative stop. |
 | `1` | **Runtime Error** | Pre-flight Doctor check failure, misconfiguration, or unhandled runtime pipeline error. |
 | `2` | **Operator Abort** | Operator selected abort (`UserAbortError`) at circuit-breaker escalation prompt. |
+| `3` | **Human Intervention Requested** | Operator accepted the `/diagnosing-bugs` escalation prompt; queue stopped, ticket left pending, and working tree preserved for diagnosis. |
 | `130` | **Graceful SIGINT** | Graceful shutdown via Ctrl+C (single cooperative stop or forced second press). |
 
 ### Terminal UI & Hotkeys
@@ -539,7 +540,7 @@ Before any ticket execution begins, `Doctor` inspects the environment, workspace
 6. **Session Terminal Host**: Verifies configured terminal binary on PATH or prompts for interactive host selection (`wt.exe`, `pwsh.exe`, `powershell.exe`, `cmd.exe`).
 7. **Verification Commands**: Resolves the leading executable of `verification.test_cmd` and `verification.build_cmd` against PATH.
 8. **Pre-Push Hook Guardrail**: Verifies `.git/hooks/pre-push` is installed with blocking signature to prevent upstream pushes.
-9. **Operating Rules & Skills**: Confirms `AGENTS.md` and required skill definitions (`implement`, `code-review`, `diagnosing-bugs`) exist on disk.
+9. **Operating Rules & Skills**: Confirms `AGENTS.md` and required skill definitions (`implement-ticket-runner`, `code-review-ticket-runner`, `diagnosing-bugs-ticket-runner`, `handoff-ticket-runner`, `security-review-ticket-runner`) exist on disk.
 10. **Discord Connectivity & Permissions**: Validates bot credentials and channel permissions unless running with `--local-only`.
 
 ### Gatekeeper & Circuit Breaker
@@ -670,7 +671,7 @@ Ticket Runner separates global machine configuration from project-specific overr
 | `project.base_branch` | `string` | `"main"` | Base branch from which the agent branch is branched. |
 | `project.branch` | `string` | `"agent/ticket-runner"` | Isolated working branch for agent operations. |
 | `worker.provider` | `string` | `"opencode"` | Agent backend provider (`opencode` or `antigravity`). |
-| `worker.execution_skill` | `string` | `".agents/skills/implement/SKILL.md"` | Path to the worker implementation discipline skill. |
+| `worker.execution_skill` | `string` | `".agents/skills/implement-ticket-runner/SKILL.md"` | Path to the worker implementation discipline skill. |
 | `verification.test_cmd` | `string` | `"pytest"` | Independent verification test command executed by Gatekeeper. |
 | `verification.build_cmd` | `string` | `""` | Optional build/typecheck command executed before tests. |
 | `verification.max_attempts` | `int` | `3` | Total verification attempts before tripping circuit breaker. |

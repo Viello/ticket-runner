@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 import pytest
 
 from runner.application.gatekeeper import (
     CommandOutcome,
-    GatekeeperCommandExecutor,
     VerificationLoop,
-    VerificationLoopResult,
     VerificationLoopStatus,
     VerificationReport,
 )
@@ -19,7 +18,14 @@ from runner.application.handoff_coordinator import (
 )
 from runner.domain.config import VerificationConfig
 from runner.domain.exceptions import NonInteractiveError
-from runner.domain.failure_analyser import FailureDiagnostic, LABEL_HANG
+from runner.domain.failure_analyser import (
+    FailureDiagnostic,
+    LABEL_HANG,
+    LABEL_PROTOCOL,
+    LABEL_SIGNAL_FORMAT,
+)
+from runner.domain.status_event import RunState
+from tests.fakes.fake_status_publisher import FakeStatusPublisher
 from runner.domain.runtime_paths import RuntimePaths
 from runner.domain.signal import ReadySignal, SignalStatus
 from runner.domain.ticket import Ticket, TicketStatus
@@ -105,8 +111,9 @@ def _make_failed_report(tail: str = "FAILED test_fail.py::test_one") -> Verifica
 
 
 @pytest.mark.anyio
-async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
+async def test_escalation_at_attempt_1_operator_answers_yes(tmp_path: Path) -> None:
     ticket = _make_ticket()
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
     cycle_runner = _StubCycleRunner([
         WorkerRunResult(status=SingleCycleStatus.READY, occupancy=42150),
     ])
@@ -131,6 +138,7 @@ async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
         intervention_gateway=intervention_gateway,
         verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1),
         failure_analyser=lambda **kwargs: custom_diag,
+        runtime_paths=runtime_paths,
         token_budget=150000,
     )
 
@@ -151,6 +159,12 @@ async def test_escalation_at_attempt_1_operator_answers_yes() -> None:
     assert prompted_ticket == ticket
     assert "Run /diagnosing-bugs? [Y/n]" in report
     assert "Token budget: 42,150 / 150,000" in report
+
+    # 4. Diagnostic report was written to disk before operator prompt
+    diag_file = runtime_paths.diagnostic_log_path(ticket.id)
+    assert diag_file.exists()
+    content = diag_file.read_text(encoding="utf-8")
+    assert "detected — " in content
 
 
 @pytest.mark.anyio
@@ -326,5 +340,528 @@ async def test_escalation_at_zero_never_escalates() -> None:
     assert result.status == VerificationLoopStatus.SKIPPED
     # No escalation prompt was ever shown
     assert len(intervention_gateway.escalation_records) == 0
+
+
+class _MutatingCycleRunner:
+    """Cycle runner that mutates the ticket on disk before returning READY."""
+
+    def __init__(self, response: WorkerRunResult, mutate: Callable[[], None]) -> None:
+        self._response = response
+        self._mutate = mutate
+
+    async def __call__(self, ticket: Ticket, **kwargs: object) -> WorkerRunResult:
+        self._mutate()
+        return self._response
+
+
+_PRISTINE_MUTATION_TICKET = """# T066 — Mutation Guard
+
+**Status:** pending
+
+## Acceptance criteria
+
+- [ ] Escalates with diagnostic report.
+
+## Smoke scenarios
+
+- [ ] Scenario: One page-flow authority
+"""
+
+
+@pytest.mark.anyio
+async def test_unauthorized_ticket_mutation_escalates_as_protocol_not_flaky(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    ticket_path = tmp_path / "docs" / "tickets" / "10-stuck-detection-and-observability" / "T066.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(_PRISTINE_MUTATION_TICKET, encoding="utf-8")
+    ticket = replace(_make_ticket(), path=ticket_path)
+
+    def _mutate_smoke_section() -> None:
+        ticket_path.write_text(
+            _PRISTINE_MUTATION_TICKET.replace(
+                "- [ ] Scenario: One page-flow authority",
+                "- [x] Scenario: One page-flow authority",
+            ),
+            encoding="utf-8",
+        )
+
+    cycle_runner = _MutatingCycleRunner(
+        WorkerRunResult(status=SingleCycleStatus.READY, occupancy=60_585),
+        _mutate_smoke_section,
+    )
+    signal_repo = _StubSignalRepo([_make_ready_signal(ticket.id)])
+    executor = _StubExecutor([_make_failed_report()])
+    intervention_gateway = FakeInterventionGateway(escalation_answers=[True])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=cycle_runner,
+        signal_repository=signal_repo,
+        executor=executor,
+        intervention_gateway=intervention_gateway,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1),
+        token_budget=150000,
+    )
+
+    result = await loop.run()
+
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_PROTOCOL
+
+    assert len(intervention_gateway.escalation_records) == 1
+    _, report = intervention_gateway.escalation_records[0]
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
+    assert "FLAKY detected" not in report
+    assert "Scenario: One page-flow authority" in report
+    assert "Run /diagnosing-bugs? [Y/n]" in report
+
+    # Security boundary still restored the baseline ticket file
+    assert ticket_path.read_text(encoding="utf-8") == _PRISTINE_MUTATION_TICKET
+
+
+
+
+@pytest.mark.anyio
+async def test_malformed_ready_signal_archives_payload_and_names_archive_path(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket = _make_ticket("T134")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    raw_payload = '{"ticket_id": "T134", "status": "corrupt_json_missing_fields"}'
+    runtime_paths.ready_signal_path(ticket.id).write_text(raw_payload, encoding="utf-8")
+
+    executor = _StubExecutor([
+        VerificationReport(
+            passed=True,
+            results=(CommandOutcome(label="test", command="pytest", exit_code=0, timed_out=False, tail=""),),
+            diagnostics=(),
+            skipped_commands=(),
+        )
+    ])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,
+        signal_repository=signal_repo,
+        executor=executor,
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        max_attempts=3,
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+        runtime_paths.ready_signal_path(t.id).write_text(
+            '{"ticket_id": "T134", "status": "ready_for_verification", "modified_files": ["foo.py"], "self_review_notes": "ok", "new_gotchas": [], "timestamp": "2026-11-02T12:00:00Z"}',
+            encoding="utf-8"
+        )
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.is_passed is True
+
+    archive_path = runtime_paths.malformed_ready_signal_archive_path(ticket.id)
+    assert archive_path.exists()
+    assert archive_path.read_text(encoding="utf-8") == raw_payload
+    assert not runtime_paths.ready_signal_path(ticket.id).exists()
+    assert len(calls) == 2
+    resume_prompt = calls[1]["prompt"]
+    assert str(archive_path) in resume_prompt
+
+
+@pytest.mark.anyio
+async def test_malformed_question_signal_archives_payload_and_names_archive_path(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket = _make_ticket("T134")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_questions_dir()
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway()
+
+    raw_payload = '{"ticket_id": "T134", "type": "bad_question"}'
+    runtime_paths.question_path(ticket.id).write_text(raw_payload, encoding="utf-8")
+
+    executor = _StubExecutor([
+        VerificationReport(
+            passed=True,
+            results=(CommandOutcome(label="test", command="pytest", exit_code=0, timed_out=False, tail=""),),
+            diagnostics=(),
+            skipped_commands=(),
+        )
+    ])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,
+        signal_repository=signal_repo,
+        executor=executor,
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        max_attempts=3,
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+        runtime_paths.ready_signal_path(t.id).write_text(
+            '{"ticket_id": "T134", "status": "ready_for_verification", "modified_files": ["foo.py"], "self_review_notes": "ok", "new_gotchas": [], "timestamp": "2026-11-02T12:00:00Z"}',
+            encoding="utf-8"
+        )
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.is_passed is True
+
+    archive_path = runtime_paths.malformed_question_signal_archive_path(ticket.id)
+    assert archive_path.exists()
+    assert archive_path.read_text(encoding="utf-8") == raw_payload
+    assert not runtime_paths.question_path(ticket.id).exists()
+    assert len(calls) == 2
+    resume_prompt = calls[1]["prompt"]
+    assert str(archive_path) in resume_prompt
+
+
+@pytest.mark.anyio
+async def test_malformed_signal_archiving_skipped_safely_when_runtime_paths_none() -> None:
+    from runner.domain.exceptions import SignalFormatError
+
+    ticket = _make_ticket("T134")
+    gateway = FakeInterventionGateway()
+
+    class _RaisingSignalRepo(_StubSignalRepo):
+        def read_ready(self, ticket_id: str):
+            raise SignalFormatError("Malformed ready signal for testing")
+
+    signal_repo = _RaisingSignalRepo([])
+    executor = _StubExecutor([
+        VerificationReport(
+            passed=True,
+            results=(CommandOutcome(label="test", command="pytest", exit_code=0, timed_out=False, tail=""),),
+            diagnostics=(),
+            skipped_commands=(),
+        )
+    ])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,
+        signal_repository=signal_repo,
+        executor=executor,
+        intervention_gateway=gateway,
+        runtime_paths=None,
+        max_attempts=2,
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+        signal_repo.read_ready = lambda tid: _make_ready_signal(tid)
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.is_passed is True
+    assert len(calls) == 2
+    assert "Malformed ready signal for testing" in calls[1]["prompt"]
+
+
+@pytest.mark.anyio
+async def test_first_malformed_ready_signal_retries_without_prompting_and_passes_later_cycle(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket = _make_ticket("T135")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(escalation_answers=[True])
+    status_publisher = FakeStatusPublisher()
+
+    bad_payload = '{"ticket_id": "T135", "status": "ready_for_verification"}'
+    runtime_paths.ready_signal_path(ticket.id).write_text(bad_payload, encoding="utf-8")
+
+    executor = _StubExecutor([
+        VerificationReport(
+            passed=True,
+            results=(CommandOutcome(label="test", command="pytest", exit_code=0, timed_out=False, tail=""),),
+            diagnostics=(),
+            skipped_commands=(),
+        )
+    ])
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,  # type: ignore[arg-type]
+        signal_repository=signal_repo,
+        executor=executor,  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        status_publisher=status_publisher,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+        runtime_paths.ready_signal_path(t.id).write_text(
+            '{"ticket_id": "T135", "status": "ready_for_verification", "modified_files": ["foo.py"], "self_review_notes": "ok", "new_gotchas": [], "timestamp": "2026-11-02T12:00:00Z"}',
+            encoding="utf-8",
+        )
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.is_passed is True
+    assert result.attempts == 2
+    assert len(calls) == 2
+    assert calls[1]["session_id"] == "ses_1"
+    assert "modified_files" in calls[1]["prompt"]
+
+    assert len(gateway.escalation_records) == 0
+
+    retry_events = [e for e in status_publisher.events if e.last_event == "SIGNAL_FORMAT_RETRY"]
+    assert len(retry_events) == 1
+    retry_event = retry_events[0]
+    assert retry_event.run_state == RunState.VERIFYING
+    assert retry_event.attempt == 1
+    assert "modified_files" in (retry_event.last_step_summary or "")
+
+
+@pytest.mark.anyio
+async def test_second_malformed_signal_prompts_operator_under_escalation_policy(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket = _make_ticket("T135")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(escalation_answers=[True])
+
+    runtime_paths.ready_signal_path(ticket.id).write_text('{"ticket_id": "T135"}', encoding="utf-8")
+
+    executor = _StubExecutor([])
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,  # type: ignore[arg-type]
+        signal_repository=signal_repo,
+        executor=executor,  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        runtime_paths.ready_signal_path(t.id).write_text('{"ticket_id": "T135"}', encoding="utf-8")
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_SIGNAL_FORMAT
+    assert len(gateway.escalation_records) == 1
+    _, report = gateway.escalation_records[0]
+    assert "⚠ SIGNAL_FORMAT detected — gatekeeper" in report
+
+
+@pytest.mark.anyio
+async def test_ticket_deletion_prompts_immediately_on_first_occurrence(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket_path = tmp_path / "T135.md"
+    ticket_path.write_text("# Ticket T135\n**Status:** pending\n", encoding="utf-8")
+
+    ticket = Ticket(
+        id="T135",
+        title="Deletion Test",
+        status=TicketStatus.PENDING,
+        spec_path="spec.md",
+        requirements=(),
+        acceptance_criteria=(),
+        gotchas=(),
+        path=ticket_path,
+    )
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(escalation_answers=[True])
+    status_publisher = FakeStatusPublisher()
+
+    runtime_paths.ready_signal_path(ticket.id).write_text(
+        '{"ticket_id": "T135", "status": "ready_for_verification", "modified_files": ["foo.py"], "self_review_notes": "ok", "new_gotchas": [], "timestamp": "2026-11-02T12:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,  # type: ignore[arg-type]
+        signal_repository=signal_repo,
+        executor=_StubExecutor([]),  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        status_publisher=status_publisher,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+    )
+
+    async def _cycle(t: Ticket, **kwargs):
+        if ticket_path.exists():
+            ticket_path.unlink()
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_PROTOCOL
+    assert len(gateway.escalation_records) == 1
+    _, report = gateway.escalation_records[0]
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
+    assert not any(e.last_event == "SIGNAL_FORMAT_RETRY" for e in status_publisher.events)
+
+
+@pytest.mark.anyio
+async def test_malformed_question_signal_shares_one_shot_exemption_with_ready(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+
+    ticket = _make_ticket("T135")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_questions_dir()
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+    gateway = FakeInterventionGateway(escalation_answers=[True])
+    status_publisher = FakeStatusPublisher()
+
+    runtime_paths.question_path(ticket.id).write_text(
+        '{"ticket_id": "T135", "type": "clarification"}', encoding="utf-8"
+    )
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,  # type: ignore[arg-type]
+        signal_repository=signal_repo,
+        executor=_StubExecutor([]),  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        status_publisher=status_publisher,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return WorkerRunResult(status=SingleCycleStatus.QUESTION_PENDING, session_id="ses_1")
+        runtime_paths.ready_signal_path(t.id).write_text('{"ticket_id": "T135"}', encoding="utf-8")
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_SIGNAL_FORMAT
+    assert len(gateway.escalation_records) == 1
+    _, report = gateway.escalation_records[0]
+    assert "⚠ SIGNAL_FORMAT detected — gatekeeper" in report
+
+    retry_events = [e for e in status_publisher.events if e.last_event == "SIGNAL_FORMAT_RETRY"]
+    assert len(retry_events) == 1
+    assert retry_events[0].attempt == 1
+    assert "question" in (retry_events[0].last_step_summary or "")
+
+
+@pytest.mark.anyio
+async def test_circuit_breaker_retry_does_not_rearm_exemption(tmp_path: Path) -> None:
+    from runner.adapters.filesystem.signal_watcher import FilesystemSignalRepository
+    from runner.ports.intervention import InterventionAction, InterventionDecision
+
+    ticket = _make_ticket("T135")
+    runtime_paths = RuntimePaths(root_dir=tmp_path / ".agent")
+    runtime_paths.ensure_signals_dir()
+    signal_repo = FilesystemSignalRepository(runtime_paths)
+
+    gateway = FakeInterventionGateway(
+        escalation_answers=[False, True],
+        decisions=[InterventionDecision(action=InterventionAction.RETRY)],
+    )
+
+    runtime_paths.ready_signal_path(ticket.id).write_text('{"ticket_id": "T135"}', encoding="utf-8")
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=None,  # type: ignore[arg-type]
+        signal_repository=signal_repo,
+        executor=_StubExecutor([]),  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        runtime_paths=runtime_paths,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=2),
+    )
+
+    calls = []
+    async def _cycle(t: Ticket, **kwargs):
+        calls.append(kwargs)
+        runtime_paths.ready_signal_path(t.id).write_text('{"ticket_id": "T135"}', encoding="utf-8")
+        return WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")
+
+    loop._cycle_runner = _cycle
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert len(gateway.escalation_records) == 2
+
+
+@pytest.mark.anyio
+async def test_missing_ready_signal_prompts_immediately_with_protocol_label(tmp_path: Path) -> None:
+    ticket = _make_ticket("T135")
+    gateway = FakeInterventionGateway(escalation_answers=[True])
+
+    class _EmptySignalRepo(_StubSignalRepo):
+        def read_ready(self, ticket_id: str) -> ReadySignal | None:
+            return None
+
+    loop = VerificationLoop(
+        ticket=ticket,
+        cycle_runner=_StubCycleRunner([WorkerRunResult(status=SingleCycleStatus.READY, session_id="ses_1")]),
+        signal_repository=_EmptySignalRepo([]),  # type: ignore[arg-type]
+        executor=_StubExecutor([]),  # type: ignore[arg-type]
+        intervention_gateway=gateway,
+        verification_config=VerificationConfig(test_cmd="pytest", bug_escalation_at=1, max_attempts=3),
+    )
+
+    result = await loop.run()
+    assert result.status == VerificationLoopStatus.INTERVENTION_REQUESTED
+    assert result.failure_diagnostic is not None
+    assert result.failure_diagnostic.label == LABEL_PROTOCOL
+    assert len(gateway.escalation_records) == 1
+    _, report = gateway.escalation_records[0]
+    assert "⚠ PROTOCOL detected — gatekeeper" in report
 
 

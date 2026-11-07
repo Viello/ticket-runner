@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from runner.domain.config import TokenBudgetConfig
 from runner.ports.discord_gateway import DiscordGateway
 from runner.ports.discord_logger import DiscordLogger
 
@@ -102,14 +103,19 @@ LIVE_DIGEST_WINDOW_SIZE = 500
 LIVE_DIGEST_RATE_LIMIT_FLOOR = 5.0
 
 
-def build_token_bar(current: int, ceiling: int = DEFAULT_CEILING) -> str:
+def build_token_bar(
+    current: int,
+    ceiling: int = DEFAULT_CEILING,
+    warn: int = WARNING_THRESHOLD,
+    handoff: int = HANDOFF_THRESHOLD,
+) -> str:
     """Construct a 10-block █/░ token bar string.
 
     Rules:
     - 10 blocks wide.
     - Blocks 1–8: green/plain filled blocks representing current token progress.
-    - Block 9: yellow at >= 120,000 (warning threshold).
-    - Block 10: red at >= 135,000 (handoff threshold).
+    - Block 9: yellow at >= warn (warning threshold).
+    - Block 10: red at >= handoff (handoff threshold).
     - Clamped to [0, ceiling].
     """
     safe_current = max(0, current)
@@ -122,16 +128,23 @@ def build_token_bar(current: int, ceiling: int = DEFAULT_CEILING) -> str:
     green_filled = "█" * green_count
     green_empty = "░" * (8 - green_count)
 
-    b9 = "█" if safe_current >= WARNING_THRESHOLD else "░"
-    b10 = "█" if safe_current >= HANDOFF_THRESHOLD else "░"
+    b9 = "█" if safe_current >= warn else "░"
+    b10 = "█" if safe_current >= handoff else "░"
 
     return f"{green_filled}{green_empty}{b9}{b10}"
 
 
-def format_token_bar(current: int, ceiling: int = DEFAULT_CEILING) -> str:
-    """Format token bar line: ~{round(current/1000)}k / 150k  {bar} {pct}%."""
+def format_token_bar(
+    current: int,
+    ceiling: int = DEFAULT_CEILING,
+    warn: int = WARNING_THRESHOLD,
+    handoff: int = HANDOFF_THRESHOLD,
+) -> str:
+    """Format token bar line: ~{round(current/1000)}k / {ceiling}k  {bar} {pct}%."""
     safe_current = max(0, current)
-    bar = build_token_bar(safe_current, ceiling=ceiling)
+    bar = build_token_bar(
+        safe_current, ceiling=ceiling, warn=warn, handoff=handoff
+    )
     k_val = round(safe_current / 1000)
     pct = min(100, max(0, round(safe_current / ceiling * 100))) if ceiling > 0 else 0
     return f"~{k_val}k / {round(ceiling / 1000)}k  {bar} {pct}%"
@@ -146,6 +159,9 @@ def build_status_card_description(
     tokens_current: int = 0,
     started_at: str = "",
     last_updated: str = "",
+    ceiling: int = DEFAULT_CEILING,
+    warn: int = WARNING_THRESHOLD,
+    handoff: int = HANDOFF_THRESHOLD,
 ) -> str:
     """Construct monospace status card description text matching verbatim spec layout."""
     ticket_str = f"{ticket_id} · {slug}" if slug else ticket_id
@@ -157,7 +173,9 @@ def build_status_card_description(
         status_str = f"{status}   ({BREADCRUMB_TRAIL})"
 
     attempt_str = f"{attempt} / 3" if isinstance(attempt, int) else str(attempt)
-    tokens_str = format_token_bar(tokens_current)
+    tokens_str = format_token_bar(
+        tokens_current, ceiling=ceiling, warn=warn, handoff=handoff
+    )
 
     if not started_at:
         started_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
@@ -204,6 +222,9 @@ def build_status_card_embed(
     tokens_current: int = 0,
     started_at: str = "",
     last_updated: str = "",
+    ceiling: int = DEFAULT_CEILING,
+    warn: int = WARNING_THRESHOLD,
+    handoff: int = HANDOFF_THRESHOLD,
 ) -> dict[str, Any]:
     """Construct blurple embed dictionary for Status Card."""
     desc = build_status_card_description(
@@ -215,6 +236,9 @@ def build_status_card_embed(
         tokens_current=tokens_current,
         started_at=started_at,
         last_updated=last_updated,
+        ceiling=ceiling,
+        warn=warn,
+        handoff=handoff,
     )
     return {
         "description": desc,
@@ -313,10 +337,12 @@ class DiscordLoggerImpl(DiscordLogger):
         gateway: DiscordGateway,
         notify_user_id: str | None = None,
         live_digest_rate_limit_floor: float = LIVE_DIGEST_RATE_LIMIT_FLOOR,
+        token_budget: TokenBudgetConfig | None = None,
     ) -> None:
         self._gateway = gateway
         self.notify_user_id = notify_user_id
         self.live_digest_rate_limit_floor = live_digest_rate_limit_floor
+        self._token_budget = token_budget or TokenBudgetConfig()
         self._status_cards: dict[str, dict[str, Any]] = {}
         self._live_digests: dict[str, LiveDigestState] = {}
         self._active_live_digest_thread_id: str | None = None
@@ -466,6 +492,9 @@ class DiscordLoggerImpl(DiscordLogger):
             attempt=attempt,
             tokens_current=tokens_current,
             started_at=started_at,
+            ceiling=self._token_budget.ceiling,
+            warn=self._token_budget.warn,
+            handoff=self._token_budget.handoff,
         )
 
         msg_id = await self._gateway.post_message(thread_id, "", embed=embed)
@@ -531,6 +560,9 @@ class DiscordLoggerImpl(DiscordLogger):
             tokens_current=tokens_current,
             started_at=started_val,
             last_updated=last_updated,
+            ceiling=self._token_budget.ceiling,
+            warn=self._token_budget.warn,
+            handoff=self._token_budget.handoff,
         )
 
         await self._gateway.edit_message(thread_id, message_id, "", embed=embed)

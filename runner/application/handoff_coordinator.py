@@ -24,6 +24,7 @@ from runner.application.worker_supervisor import (
     WorkerSupervisor,
 )
 from runner.domain.config import TokenBudgetConfig, WorkerConfig
+from runner.domain.exceptions import SignalFormatError
 from runner.domain.runtime_paths import (
     TICKET_ID_PATTERN,
     RuntimePaths,
@@ -46,8 +47,8 @@ MAX_CONSECUTIVE_HANDOFFS: int = 5
 """Maximum consecutive context handoffs permitted within a single ticket before tripping escalation."""
 
 HANDOFF_PROMPT_TEMPLATE: str = (
-    "Context budget threshold reached (135k tokens). Execute the handoff skill at "
-    ".agents/skills/handoff/SKILL.md. Save the handoff document directly to "
+    "Context budget threshold reached ({handoff_tokens}k tokens). Execute the handoff skill at "
+    ".agents/skills/handoff-ticket-runner/SKILL.md. Save the handoff document directly to "
     "{checkpoint_path}. Include modified files, architectural decisions, test "
     "status, and immediate next steps. Then exit."
 )
@@ -414,7 +415,10 @@ class HandoffCoordinator:
     def build_handoff_prompt(self, ticket: Ticket) -> str:
         """Build the fixed handoff instruction prompt per Spec 03."""
         checkpoint_path = self._runtime_paths.checkpoint_path(ticket.id).as_posix()
-        return HANDOFF_PROMPT_TEMPLATE.format(checkpoint_path=checkpoint_path)
+        return HANDOFF_PROMPT_TEMPLATE.format(
+            checkpoint_path=checkpoint_path,
+            handoff_tokens=self._budget_config.handoff // 1000,
+        )
 
     def build_resume_prompt(self, ticket: Ticket, checkpoint_path: Path | str) -> str:
         """Build the resume continuation prompt for Session B per Spec 03."""

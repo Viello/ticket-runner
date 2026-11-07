@@ -1,0 +1,5 @@
+interface:
+  display_name: "Security Review Ticket Runner"
+  short_description: "Autonomous security review for Ticket Runner queues"
+policy:
+  allow_implicit_invocation: false

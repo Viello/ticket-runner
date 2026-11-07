@@ -70,6 +70,7 @@ class DiscordClient:
             state_store=self.state_store,
             presence_coordinator=self.presence_coordinator,
             state_coordinator=self.state_coordinator,
+            notify_user_id=self.config.notify_user_id,
         )
         if self.approval_adapter is not None:
             from runner.adapters.discord.approval import register_approval_commands

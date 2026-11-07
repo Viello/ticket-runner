@@ -387,3 +387,36 @@ def test_update_bold_label_header_crlf_and_trailing_newline_preserved(tmp_path: 
     assert "**Completed:** 2026-10-28T12:00:00Z\r\n" in raw_result
     assert "- [x] First criterion completed\r\n" in raw_result
 
+
+def test_update_bold_label_header_with_blank_line_after_title_does_not_duplicate_status(
+    tmp_path: Path,
+) -> None:
+    """When a blank line separates '# T008 — Title' from metadata, update_header updates in-place."""
+    content = (
+        "# T008 — Hero and runtime strip\n"
+        "\n"
+        "**Mode:** AFK\n"
+        "**Status:** pending\n"
+        "**Spec:** docs/specs/01-landing-page.md\n"
+        "**Blocked by:** T007\n"
+        "**Security:** optional\n"
+        "**Reasoning:** medium\n"
+        "\n"
+        "## What to build\n"
+        "\n"
+        "Landing block 00.\n"
+    )
+    ticket_dir = tmp_path / "docs" / "tickets" / "01-landing-page"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    path = ticket_dir / "T008-hero-and-runtime-strip.md"
+    path.write_text(content, encoding="utf-8")
+
+    TicketMarkdownSerializer().update_header(
+        path,
+        {"Status": "completed", "Completed": "2026-11-02T14:51:25Z"},
+    )
+
+    result = path.read_text(encoding="utf-8")
+    assert result.count("**Status:**") == 1
+    assert "**Status:** pending" not in result
+    assert "**Status:** completed\n**Completed:** 2026-11-02T14:51:25Z\n" in result

@@ -539,3 +539,67 @@ A chronological record of runtime quirks, platform pitfalls, and architectural l
 - **Problem:** Migrating active tickets in `D:\Projects` to the Human+AI format (`to-tickets` / Specimen B) and welcome/work tickets across Target Projects to the canonical Ticket Runner format (`to-ticket-runner` / Specimen A) creates dual dialect obligations: `TicketMarkdownParser` must enforce a dialect guard rejecting interactive Specimen B files with helpful guidance directing operators to `/implement`, while autonomous Specimen A tickets must strictly parse bold-label headers, default omitted `Mode:` to `AFK`, and preserve body byte formatting on in-place serialization. Additionally, test assertions checking legacy frontmatter strings (`Status: pending`) need to be updated to match the bold-label format (`**Status:** pending`).
 - **Solution:** In `tests/specs/test_spec_17_human_first_ticket_format.py`, exercise the complete Spec 17 end-to-end lifecycle (Specimen A parsing, dialect rejection, Pre-Dispatch HITL gate guidance/skip/abort, dispatch baseline checkbox tick acceptance vs unauthorized edit rejection with attempt consumption, EvidenceCard unticked criteria surfacing, and in-place bold-label header finalization). Update scaffolder and target projects (`agent-skills`, `agent-runner-driver`, `ticket-runner-live-target`, `empty-starter`) to canonical Specimen A welcome/work tickets and sync `.agents/skills/` with `implement-ticket-runner` and `to-ticket-runner`.
 
+
+---
+
+## Domain Signal Schema Authority & Gotcha Canonicalisation
+
+- **Problem:** Loosening `ReadySignal.new_gotchas` to accept `{problem, solution}` objects changes the value every downstream consumer sees: a Worker's plain string now arrives canonicalised as `Problem: …` / `Solution: Not specified.`, so tests or code asserting raw string passthrough break, and the Gotchas Store's freeform separators (semicolon, em-dash) no longer split that text into a solution.
+- **Solution:** Expect the canonical text form in every test that asserts `TicketOutcome.new_gotchas` or Gotchas Store input, and teach Workers the `{problem, solution}` object so the solution is explicit; keep plain strings as an accepted fallback only and never advertise the `fix` alias. Signal renderers must also take `.agent/` paths from `RuntimePaths` and validate Ticket ids against `TICKET_ID_PATTERN` instead of interpolating them, so rendered protocol text can never point a Worker outside the runtime directory.
+
+---
+
+## Prompt Signal Protocol Authority & Skill Schema Pointer
+
+- **Problem:** Hand-maintained Signal schema bullets in `PromptBuilder` and embedded JSON payloads in `implement-ticket-runner/SKILL.md` drift apart and from the domain parsers, leading to worker rejections when obeying one document over another. In addition, prompt command length tests with hardcoded thresholds fail when complete example payloads are inlined into task prompts.
+- **Solution:** In `PromptBuilder`, generate the ready and question protocol sections directly from `render_ready_signal_protocol` and `render_question_signal_protocol`, declaring them authoritative over the execution skill and any other document. Remove embedded JSON payloads from `implement-ticket-runner/SKILL.md`, pointing workers directly to the task prompt's `Ready Signal Protocol` and `Question Signal Protocol` sections as the sole schema authority. Ensure command length tests allow sufficient headroom for complete inlined example payloads while remaining comfortably beneath the 32,767 Windows subprocess ceiling.
+
+---
+
+## Signal Format Failure Label & One-Shot Self-Correctable Retry Exemption
+
+- **Problem:** When an AI coding worker emits a signal file with a minor schema typo or syntax defect (e.g. missing `modified_files` in a ready signal or missing `question` in a question signal), the Gatekeeper originally classified this as a run-ending `PROTOCOL` violation. If `bug_escalation_at: 1` was configured, the run immediately halted and escalated to the operator on attempt 1, treating a self-correctable format error with the same severity as a security boundary violation (like ticket deletion or unauthorized ticket mutation).
+- **Solution:** Introduce `LABEL_SIGNAL_FORMAT: str = "SIGNAL_FORMAT"` into `FAILURE_LABELS` and `SUGGESTED_ACTIONS` for diagnostic reporting. In `VerificationLoop._check_escalation`, accept `self_correctable: bool = False`. Pass `self_correctable=True` and `label=LABEL_SIGNAL_FORMAT` exclusively in the malformed ready and malformed question branches, while keeping `LABEL_PROTOCOL` and `self_correctable=False` for ticket deletion, unauthorized mutation, and missing signals. Track a shared per-ticket boolean `_format_retry_exempt_used`: when the policy would otherwise escalate now and remaining attempt budget exists, grant one automatic retry without prompting the operator, publish a `SIGNAL_FORMAT_RETRY` status event in the `VERIFYING` state naming the offending field, log the exemption, and feed the parser error back to resume the worker session. Preserve `_format_retry_exempt_used` across operator RETRY actions at the Circuit Breaker to prevent exemption re-arming.
+
+---
+
+## Signal Contract Drift Incident & Malformed Signal Hardening
+
+- **Problem:** The execution skill and parser disagreed on the Gotcha shape (the execution skill documented `{problem, solution}` objects while the parser strictly required strings), causing a completed, passing run to be rejected as a malformed signal on the final attempt. The malformed payload was immediately deleted without archiving, preventing post-mortem inspection, and the Gatekeeper escalated immediately without giving the worker a self-correction opportunity, wasting 146k tokens and 42 minutes of queue time.
+- **Solution:** Establish domain ownership of signal schemas with contract checks at Doctor pre-flight, skills publishing, and test suites. Replace skill-embedded schemas with pointers to prompt-rendered protocols. Before consuming or rejecting any malformed signal file, archive the raw payload atomically under `.agent/logs/`, persist diagnostic reports on all escalations, and grant a one-shot self-correctable retry exemption under `SIGNAL_FORMAT` so minor format typos cost a single verification attempt instead of aborting the run.
+
+---
+
+## Discord Thread Starter Pin 403, Explicit Skill Read Telemetry & Blank-Line Header Serialization
+
+- **Problem:**
+  1. When `DiscordThreadManager.open_ticket_thread` created a public thread from a channel starter message (`msg.create_thread()`), `thread.id == msg.id` and the starter message belonged to `thread.parent` (`TextChannel`). Calling `pin_message(thread_id, starter_id)` triggered `_resolve_message`'s `discord.NotFound` fallback to `channel.parent.fetch_message`, which then invoked `message.pin()` on the **parent channel message**. Because Discord split `Pin Messages` (`pin_messages`, bit 51) out of `Manage Messages` (`1 << 13`) and the starter message is already permanently anchored at the top of its thread by Discord, every ticket emitted `Failed to pin Status Card in <id>: ... 403 Forbidden (error code: 50013): Missing Permissions` via `_logger.warning` (which triggered Python's `logging.lastResort` stderr handler).
+  2. During autonomous runs (`T001`–`T008`), Gatekeeper emitted `Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'` (or `'AGENTS.md'`) because `implement-ticket-runner/SKILL.md` Section 3 instructed `Run /code-review before signalling readiness:` (an interactive slash command unavailable in headless `agy -p`) without naming `.agents/skills/code-review/SKILL.md`, and `agy` preloads `AGENTS.md` and skill descriptions in its system prompt, causing the model to skip explicit `read_file` tool calls.
+  3. When a Specimen A ticket had a blank line between `# T<NNN> — <Title>` and `**Mode:** AFK`, `TicketMarkdownParser._parse_metadata` skipped the blank line while `TicketMarkdownSerializer._metadata_region_start` did not, causing `region_start == region_end == 1` and inserting a duplicate `**Status:** completed` line above the blank line while leaving `**Status:** pending` untouched below it.
+- **Solution:**
+  1. In `DiscordPyGateway._resolve_message`, record `self._last_resolved_from_parent = True` when falling back to `channel.parent.fetch_message` on `discord.NotFound`, and make `pin_message` a no-op when `_last_resolved_from_parent` is `True`. Lower non-fatal pin failures in `DiscordThreadManager.open_ticket_thread` from `_logger.warning` to `_logger.debug`.
+  2. In `.agents/skills/implement-ticket-runner/SKILL.md` (Sections 1, 3, and 6), `PromptBuilder.build_prompt`, and `render_ready_signal_protocol`, explicitly instruct the Worker to invoke its file-reading tool (`read` / `read_file`) on `AGENTS.md` and `.agents/skills/code-review/SKILL.md` before emitting `.agent/signals/<ticket_id>_ready.json`, even if their contents are preloaded in system rules. Update `.agents/skills/code-review/SKILL.md` Section 1 so autonomous Ticket Runner runs review uncommitted working-tree changes (`git diff HEAD` plus untracked files) without prompting the human.
+  3. In `TicketMarkdownSerializer._metadata_region_start`, advance `idx` past blank lines after the `# T<NNN>` title line to match `TicketMarkdownParser._parse_metadata`.
+
+---
+
+## Dual-Track Skill Segregation & Headless Context Handoff
+
+- **Problem:** Sharing workflow skills (`code-review`, `security-review`, `diagnosing-bugs`, `handoff`) across interactive pair programming and headless Ticket Runner execution caused severe cross-contamination. Headless Worker rules (uncommitted diffs against HEAD without prompting, `.agent/questions/` signals, withholding ready signals on stuck suites) bled into interactive chat, while interactive instructions (`[y/n]` prompts to bootstrap `STATUS.md`, asking the user for a git comparison ref, setting frontmatter to `ready-for-human`) disrupted unattended autonomous runs.
+- **Solution:** Strictly segregate interactive and autonomous skills into dedicated pairs (`<skill>` vs `<skill>-ticket-runner`). Interactive skills contain zero references to `.agent/` runtime paths and escalate directly to the user in chat. Autonomous skills (`-ticket-runner`) carry `disable-model-invocation: true` and `agents/openai.yaml`, audit uncommitted working-tree changes without asking for refs, route blockers through `.agent/questions/<ticket_id>.json` to halt at `WAITING_FOR_USER`, and write handoff checkpoints directly to `.agent/checkpoints/<ticket_id>/handoff.md` without modifying `STATUS.md` or prompting `[y/n]`.
+
+---
+
+## Python 3.11 F-String Escapes & Gatekeeper `-ticket-runner` Telemetry Auditing
+
+- **Problem:**
+  1. Python 3.11 forbids escape sequences (such as `\`) directly inside f-string expression interpolations `{...}`, raising an `invalid-syntax` error when constructing Windows file paths via inline `.replace("/", "\\")`.
+  2. Following dual-track skill segregation, if the Gatekeeper and TicketProcessor audit `resources_accessed` for legacy skill names (`code-review`, `security-review`) or emit directives pointing to interactive skills (`diagnosing-bugs`), autonomous Workers that faithfully read the new `-ticket-runner` skills receive false soft warnings or are directed to interactive skills containing human prompts. Furthermore, test doubles omitting `-ticket-runner` resource names trigger spurious warning logs during suite runs.
+- **Solution:**
+  1. Always perform path separator normalization (`.replace("/", "\\")`) in an intermediate local variable before interpolating into Windows path f-strings.
+  2. Update `VerificationLoop._check_ready_warnings`, `GatekeeperTicketProcessor.evaluate_ready_warnings`, and `build_verification_failure_prompt` to check `resources_accessed` for `"code-review-ticket-runner"` and `"security-review-ticket-runner"`, emit warnings naming `.agents/skills/code-review-ticket-runner/SKILL.md` and `.agents/skills/security-review-ticket-runner/SKILL.md`, and direct attempt $\ge 2$ diagnostics prompts to `.agents/skills/diagnosing-bugs-ticket-runner/SKILL.md`. Ensure worker adapter tests for `OpenCodeWorker` and `AntigravityWorker` verify telemetry decoding parity across all `-ticket-runner` skills.
+
+
+
+
+

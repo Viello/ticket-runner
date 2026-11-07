@@ -10,21 +10,38 @@ You don't remember every skill, so ask.
 
 A **flow** is a path through the skills. Most paths run along one **main flow**, and two **on-ramps** merge onto it. Everything else is standalone, or a vocabulary layer that runs underneath.
 
+## Dual-Track Architecture (Interactive vs Autonomous)
+
+Software engineering in this ecosystem operates across two segregated tracks:
+1. **Interactive Human + AI Pair Programming**: Conversational, test-first pairing in a live chat session.
+2. **Autonomous Ticket Runner Execution**: Headless Worker subprocesses supervised by an independent Gatekeeper via durable JSON signals (`.agent/signals/` and `.agent/questions/`).
+
+To prevent cross-contamination, six workflow capabilities are divided into dedicated pairs:
+
+| Capability | Interactive Track | Autonomous Track (`-ticket-runner`) |
+| :--- | :--- | :--- |
+| Ticket Authoring | `/to-tickets` | `to-ticket-runner` |
+| Ticket Implementation | `/implement` | `implement-ticket-runner` |
+| Pre-Completion Code Review | `/code-review` | `code-review-ticket-runner` |
+| Conditional Security Audit | `/security-review` | `security-review-ticket-runner` |
+| Bug & Stuck-Suite Diagnosis | `/diagnosing-bugs` | `diagnosing-bugs-ticket-runner` |
+| Context Handoff | `/handoff` | `handoff-ticket-runner` |
+
 ## The main flow: idea → ship
 
 The route most work travels. You have an idea and want it built.
 
 1. **`/grill-with-docs`** sharpens the idea by interview. Start here whenever you are **working in a working directory**: it's stateful, retaining what it learns in `CONTEXT.md` and ADRs. (No working directory? Use `/grill-me` instead, covered under Standalone. Both run the same `/grilling` primitive; `grill-with-docs` is the one that leaves a paper trail, which makes it the better of the two whenever a repo is there to leave it in.)
 2. **Branch: can you settle every question in conversation?** If a question needs a runnable answer (state, business logic, a UI you have to see), detour through a prototype, bridged by **`/handoff`** in both directions (a prototype lives in its own directory, which is exactly what `/handoff` is for; see Phase boundaries):
-   - **`/handoff`** out, then open a fresh session against that file,
+   - **`/handoff`** out, then open a fresh session against that file (or **`handoff-ticket-runner`** during autonomous Worker runs at the 135k token threshold),
    - **`/prototype`** to answer the question with throwaway code,
    - **`/handoff`** back what you learned, and reference it from the original idea thread.
 3. **Branch: is this a multi-session build?**
    - **Yes, Human + AI Interactive Track** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into compact tracer-bullet tickets (`**Status:** ready-for-agent`), each declaring its **blocking edges**. On a local tracker that's one file per ticket under `docs/tickets/<spec-slug>/T<NNN>-<slug>.md` (with `completed/` archive subfolder and `docs/tickets/gotchas.md`), worked blockers-first; on a real tracker the edges become native blocking links: kick off **`/implement`** per ticket, clearing context between each one. Each ticket is self-contained.
-   - **Yes, Autonomous Ticket Runner Track** → **`/to-spec`**, then **`/to-ticket-runner`** to split it into canonical 5-section tickets (`**Mode:** AFK | HITL`, `**Status:** pending`, `## What to build`, `## Jump-start`, `## Acceptance criteria`, `## Smoke scenarios`, `## Gotchas`) under `docs/tickets/<spec-slug>/`. Orchestrated autonomously by `ticket_runner.py`, which drives **`implement-ticket-runner`** (test-driven at jump-start seams, 3-axis review, ticking checkboxes, and signal emission; Gatekeeper verifies and commits). If marked `HITL`, the Gatekeeper halts before dispatch for human direction. (Can also be run interactively via `/implement`).
+   - **Yes, Autonomous Ticket Runner Track** → **`/to-spec`**, then **`/to-ticket-runner`** to split it into canonical 5-section tickets (`**Mode:** AFK | HITL`, `**Status:** pending`, `## What to build`, `## Jump-start`, `## Acceptance criteria`, `## Smoke scenarios`, `## Gotchas`) under `docs/tickets/<spec-slug>/`. Orchestrated autonomously by `ticket_runner.py`, which drives **`implement-ticket-runner`** (test-driven at jump-start seams, Standards and Spec review with conditional Security, ticking checkboxes, and signal emission; Gatekeeper verifies and commits). If marked `HITL`, the Gatekeeper halts before dispatch for human direction. (Can also be run interactively via `/implement`).
    - **No** → **`/implement`** right here in the same context window.
 
-   Either way, implementation builds each slice test-first by driving **`/tdd`** internally (red-green-refactor), then closes out by running **`/code-review`**, a three-axis review (Standards + Spec + Security) of the diff, before committing. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
+   Either way, implementation builds each slice test-first by driving **`/tdd`** internally (red-green-refactor), then closes out by running **`/code-review`** (or **`code-review-ticket-runner`** in autonomous mode), a Standards + Spec review of the diff that adds Security (**`/security-review`** or **`security-review-ticket-runner`**) when the ticket requires it or the user asks, before committing. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
 
 ### Context hygiene
 
@@ -40,7 +57,7 @@ A starting situation that generates work, then merges onto the main flow.
 
   Triage is only for issues **you didn't create**: bug reports, incoming feature requests, anything that arrives raw. Tickets that `/to-tickets` produced are already agent-ready, so **don't triage them**.
 
-- **Something's broken** → **`/diagnosing-bugs`**. For the hard ones: the bug that resists a first glance, the intermittent flake, the regression that crept in between two known-good states. It refuses to theorise until it has a **tight feedback loop** (one command that already goes red on *this* bug), then fixes with a regression test. Its post-mortem hands off to **`/improve-codebase-architecture`** when the real finding is that there's no good seam to lock the bug down.
+- **Something's broken** → **`/diagnosing-bugs`** (or **`diagnosing-bugs-ticket-runner`** for autonomous Worker runs). For the hard ones: the bug that resists a first glance, the intermittent flake, the regression that crept in between two known-good states. It refuses to theorise until it has a **tight feedback loop** (one command that already goes red on *this* bug), then fixes with a regression test. Its post-mortem hands off to **`/improve-codebase-architecture`** when the real finding is that there's no good seam to lock the bug down.
 
 - **A huge, foggy effort: a greenfield project or a huge feature build, too big for one session** → **`/wayfinder`**, the most cognitively demanding flow here. When the way from here to the destination isn't visible yet, it charts a **shared map** of **decision tickets** on the issue tracker and resolves them one at a time, producing **decisions, not deliverables**, until the fog is pushed back and the way is clear. Where **`/grill-with-docs`** sharpens an idea you can hold in one session, wayfinder is for the idea you can't, and it's slower and denser, so save it for exactly that, never a well-scoped feature.
 
@@ -65,7 +82,7 @@ A **phase** is a chunk of work inside a session: the grilling, the implementatio
 
 - **Continue**: stay put. Costs nothing, loses nothing.
 - **`/clear`**: empty the window, when nothing here matters to what's next.
-- **`/handoff`** writes a portable markdown file. Narrow: only for a **new harness**, a **new directory**, a **colleague**, or forking a side task **mid-phase**. What it buys is portability.
+- **`/handoff`** writes a portable markdown file (while autonomous Ticket Runner runs invoke **`handoff-ticket-runner`** to write `.agent/checkpoints/<ticket_id>/handoff.md`). Narrow: only for a **new harness**, a **new directory**, a **colleague**, or forking a side task **mid-phase**. What it buys is portability.
 - **Subagent**: send a tightly-scoped task to its own window and get a report back.
 - **`/compact`** compresses this context and seeds a fresh session with it. The **default**, at the bottom of the tree rather than the first reach.
 

@@ -18,6 +18,7 @@ from runner.application.gatekeeper import (
     VerificationLoop,
     WorkerCycleRunner,
     build_verification_failure_prompt,
+    verify_ticket_mutation,
 )
 from runner.application.handoff_coordinator import (
     HandoffCoordinator,
@@ -150,6 +151,20 @@ class GatekeeperTicketProcessor:
         self._loop_factory = loop_factory
         self._printer = printer
 
+    def _current_status_card_fields(self) -> dict[str, Any]:
+        """Snapshot the live token count and attempt so card edits never reset them."""
+        state = None
+        if self._state_coordinator is not None and hasattr(
+            self._state_coordinator, "get_or_create_state"
+        ):
+            try:
+                state = self._state_coordinator.get_or_create_state()
+            except Exception:
+                state = None
+        tokens_current = getattr(getattr(state, "tokens", None), "current", 0) or 0
+        completed_attempts = getattr(state, "verification_attempts", 0) or 0
+        return {"tokens_current": tokens_current, "attempt": completed_attempts + 1}
+
     def _notify(self, message: str) -> None:
         """Emit notification notice to configured notification sink or printer."""
         if self._notify_sink is not None:
@@ -170,17 +185,17 @@ class GatekeeperTicketProcessor:
     ) -> list[str]:
         """Evaluate resource access compliance upon receiving a ready signal and emit soft warnings."""
         warnings: list[str] = []
-        if "code-review" not in resources_accessed:
+        if "code-review-ticket-runner" not in resources_accessed:
             warnings.append(
-                f"[{ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review/SKILL.md'. Proceeding to verification."
+                f"[{ticket.id}] Warning: Ready signal emitted without reading '.agents/skills/code-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
         if "AGENTS.md" not in resources_accessed:
             warnings.append(
                 f"[{ticket.id}] Warning: Ready signal emitted without reading 'AGENTS.md'. Proceeding to verification."
             )
-        if ticket.security_required and "security-review" not in resources_accessed:
+        if ticket.security_required and "security-review-ticket-runner" not in resources_accessed:
             warnings.append(
-                f"[{ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review/SKILL.md'. Proceeding to verification."
+                f"[{ticket.id}] Warning: Ready signal emitted without reading required '.agents/skills/security-review-ticket-runner/SKILL.md'. Proceeding to verification."
             )
 
         for warning in warnings:
@@ -336,6 +351,61 @@ class GatekeeperTicketProcessor:
         """Drive the ready-path verification loop for a ticket."""
         return await self._process_ticket(ticket)
 
+    async def _normalize_stale_ticket_ticks(self, ticket: Ticket) -> None:
+        """Reset tick-only pending ticket edits left by an interrupted previous run.
+
+        The dispatch baseline is the on-disk ticket at worker start. A pending ticket
+        left with uncommitted checkbox flips by a crashed run would otherwise poison
+        that baseline, making the worker's legitimate reset look like an un-tick.
+        Only tick-only diffs against ``HEAD`` are restored; any other edit is preserved.
+        """
+        if self._git_operations is None or ticket.path is None:
+            return
+
+        path = Path(ticket.path)
+        base = getattr(self._git_operations, "cwd", None)
+        if base is not None and not path.is_absolute():
+            path = Path(base) / path
+
+        try:
+            if not path.is_file():
+                return
+        except (OSError, ValueError):
+            return
+
+        head_text = await self._git_operations.show_file(path)
+        if head_text is None:
+            return
+
+        try:
+            current_text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+
+        # Compare with normalized line endings so CRLF working copies on Windows do not
+        # masquerade as content edits against the LF blob stored in Git.
+        if head_text.replace("\r\n", "\n") == current_text.replace("\r\n", "\n"):
+            return
+
+        is_valid, _ = verify_ticket_mutation(head_text, current_text, path)
+        if not is_valid:
+            logger.info(
+                "Pending ticket '%s' has non-tick edits; using the current file as the dispatch baseline.",
+                ticket.id,
+            )
+            return
+
+        if await self._git_operations.restore_file(path):
+            logger.warning(
+                "Reset stale checkbox ticks on pending ticket '%s' before dispatch.",
+                ticket.id,
+            )
+        else:
+            logger.warning(
+                "Failed to reset stale checkbox ticks on pending ticket '%s'; using the current file as the dispatch baseline.",
+                ticket.id,
+            )
+
     async def _process_ticket(self, ticket: Ticket) -> TicketOutcome:
         """Internal processing seam driving prompt generation and verification loop."""
         if self._cycle_runner is None:
@@ -346,7 +416,10 @@ class GatekeeperTicketProcessor:
         # 1. Purge stale Signals for the Ticket at start (Isolation Layer)
         self._signal_repository.purge(ticket.id)
 
-        # 2. Build initial Worker prompt
+        # 2. Normalize tick-only dirty pending tickets so the baseline is pristine
+        await self._normalize_stale_ticket_ticks(ticket)
+
+        # 3. Build initial Worker prompt
         initial_prompt = self.build_initial_prompt(ticket)
 
         # Discord ticket thread initialization
@@ -395,6 +468,7 @@ class GatekeeperTicketProcessor:
                         thread_id,
                         status_card_message_id,
                         status=status_label,
+                        **self._current_status_card_fields(),
                     )
                 except (DiscordGatewayError, Exception) as exc:
                     logger.warning(
@@ -439,7 +513,7 @@ class GatekeeperTicketProcessor:
         if not ticket.is_hitl:
             await _on_phase_change("Working")
 
-        # 3. Create and drive VerificationLoop
+        # 4. Create and drive VerificationLoop
         factory = self._loop_factory or VerificationLoop
         loop_kwargs: dict[str, Any] = {
             "ticket": ticket,

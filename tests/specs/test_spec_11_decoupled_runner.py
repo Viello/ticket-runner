@@ -13,18 +13,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import subprocess
-import sys
 from typing import Any
 import pytest
 
-from runner.adapters.config.yaml_config_loader import YamlConfigLoader
-from runner.application.doctor import Doctor, DoctorReport
+from runner.application.doctor import Doctor
 from runner.container import build_container
-from runner.domain.config import RunnerConfig
-from runner.domain.ticket import Ticket, TicketStatus
 from runner.ports.agent_worker import AgentWorker
-from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
 import ticket_runner
 
@@ -88,7 +82,7 @@ def _seed_external_target_repo(root: Path) -> Path:
 
     # Skills
     skills_dir = target / ".agents" / "skills"
-    for skill_name in ("implement", "code-review", "diagnosing-bugs"):
+    for skill_name in ("implement", "implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / skill_name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# {skill_name} skill\n", encoding="utf-8")

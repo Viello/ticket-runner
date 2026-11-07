@@ -92,7 +92,8 @@ def test_ready_signal_parses_full_payload_from_json_text() -> None:
     )
     assert signal.self_review_notes == "Added strict signal validation; reviews passed."
     assert signal.new_gotchas == (
-        "Z-suffixed timestamps need normalizing before fromisoformat.",
+        "Problem: Z-suffixed timestamps need normalizing before fromisoformat.\n"
+        "Solution: Not specified.",
     )
     assert signal.scope == "domain"
     assert signal.timestamp == datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
@@ -293,17 +294,169 @@ def test_ready_signal_constructor_rejects_invalid_values(
 def test_ready_signal_constructor_coerces_sequences_and_status() -> None:
     signal = ReadySignal(
         ticket_id="T026",
-        status="ready_for_verification",
-        modified_files=["a.py"],
+        status="ready_for_verification",  # type: ignore[arg-type]
+        modified_files=["a.py"],  # type: ignore[arg-type]
         self_review_notes="",
-        new_gotchas=["g"],
-        timestamp="2026-09-16T10:00:00Z",
+        new_gotchas=["g"],  # type: ignore[arg-type]
+        timestamp="2026-09-16T10:00:00Z",  # type: ignore[arg-type]
     )
 
     assert signal.status is SignalStatus.READY_FOR_VERIFICATION
     assert signal.modified_files == ("a.py",)
-    assert signal.new_gotchas == ("g",)
+    assert signal.new_gotchas == ("Problem: g\nSolution: Not specified.",)
     assert signal.scope is None
+
+
+# --- ReadySignal: new_gotchas tolerance and canonicalisation ---
+
+
+def test_ready_signal_accepts_canonical_gotcha_object() -> None:
+    signal = ReadySignal.parse(
+        _ready_payload(
+            new_gotchas=[
+                {
+                    "problem": "Signal schemas drifted between skill and parser.",
+                    "solution": "Render every schema from the domain authority.",
+                }
+            ]
+        ),
+        "T026",
+    )
+
+    assert signal.new_gotchas == (
+        "Problem: Signal schemas drifted between skill and parser.\n"
+        "Solution: Render every schema from the domain authority.",
+    )
+
+
+def test_ready_signal_accepts_fix_alias_canonicalising_identically() -> None:
+    canonical = ReadySignal.parse(
+        _ready_payload(new_gotchas=[{"problem": "P", "solution": "S"}]),
+        "T026",
+    )
+    alias = ReadySignal.parse(
+        _ready_payload(new_gotchas=[{"problem": "P", "fix": "S"}]),
+        "T026",
+    )
+
+    assert alias.new_gotchas == canonical.new_gotchas == ("Problem: P\nSolution: S",)
+
+
+def test_ready_signal_prefers_solution_over_fix_when_both_present() -> None:
+    signal = ReadySignal.parse(
+        _ready_payload(new_gotchas=[{"problem": "P", "solution": "S", "fix": "F"}]),
+        "T026",
+    )
+
+    assert signal.new_gotchas == ("Problem: P\nSolution: S",)
+
+
+def test_ready_signal_plain_string_gotcha_canonicalises_to_problem_solution() -> None:
+    signal = ReadySignal.parse(_ready_payload(new_gotchas=["P"]), "T026")
+
+    assert signal.new_gotchas == ("Problem: P\nSolution: Not specified.",)
+
+
+def test_ready_signal_canonicalises_every_accepted_shape_together() -> None:
+    signal = ReadySignal.parse(
+        _ready_payload(
+            new_gotchas=[
+                {"problem": "P1", "solution": "S1"},
+                {"problem": "P2", "fix": "S2"},
+                "P3",
+            ]
+        ),
+        "T026",
+    )
+
+    assert signal.new_gotchas == (
+        "Problem: P1\nSolution: S1",
+        "Problem: P2\nSolution: S2",
+        "Problem: P3\nSolution: Not specified.",
+    )
+
+
+def test_ready_signal_ignores_unknown_keys_inside_a_gotcha_object() -> None:
+    signal = ReadySignal.parse(
+        _ready_payload(
+            new_gotchas=[
+                {
+                    "problem": "P",
+                    "solution": "S",
+                    "title": "ignored",
+                    "tags": ["ignored"],
+                    "severity": 3,
+                }
+            ]
+        ),
+        "T026",
+    )
+
+    assert signal.new_gotchas == ("Problem: P\nSolution: S",)
+
+
+def test_ready_signal_trims_gotcha_text() -> None:
+    signal = ReadySignal.parse(
+        _ready_payload(new_gotchas=[{"problem": "  P  ", "solution": "  S  "}]),
+        "T026",
+    )
+
+    assert signal.new_gotchas == ("Problem: P\nSolution: S",)
+
+
+def test_ready_signal_constructor_canonicalises_gotcha_objects_too() -> None:
+    signal = _ready_signal(new_gotchas=[{"problem": "P", "solution": "S"}])
+
+    assert signal.new_gotchas == ("Problem: P\nSolution: S",)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"problem": "", "solution": "S"},
+        {"problem": "   ", "solution": "S"},
+        {"problem": "P", "solution": ""},
+        {"problem": "P", "fix": "   "},
+        {"problem": "P"},
+        {"solution": "S"},
+        {},
+        {"problem": 3, "solution": "S"},
+        {"problem": "P", "solution": ["S"]},
+        {"problem": ["P"], "solution": "S"},
+        5,
+        None,
+        ["nested"],
+        [{"problem": "P", "solution": "S"}],
+        "   ",
+    ],
+)
+def test_ready_signal_rejects_junk_gotcha_entries_naming_the_index(entry: object) -> None:
+    with pytest.raises(SignalFormatError, match="new_gotchas.*index 1"):
+        ReadySignal.parse(_ready_payload(new_gotchas=["ok", entry]), "T026")
+
+
+def test_ready_signal_names_the_first_index_when_it_is_the_junk_entry() -> None:
+    with pytest.raises(SignalFormatError, match="new_gotchas.*index 0"):
+        ReadySignal.parse(_ready_payload(new_gotchas=[5]), "T026")
+
+
+def test_ready_signal_rejects_non_array_gotchas() -> None:
+    with pytest.raises(SignalFormatError, match="new_gotchas"):
+        ReadySignal.parse(_ready_payload(new_gotchas={"problem": "P", "solution": "S"}), "T026")
+
+
+def test_ready_signal_keeps_modified_files_strict() -> None:
+    with pytest.raises(SignalFormatError, match="modified_files"):
+        ReadySignal.parse(_ready_payload(modified_files=[["nested"]]), "T026")
+
+
+def test_ready_signal_keeps_new_gotcha_objects_out_of_other_fields() -> None:
+    with pytest.raises(SignalFormatError, match="modified_files"):
+        ReadySignal.parse(
+            _ready_payload(modified_files=[{"problem": "P", "solution": "S"}]),
+            "T026",
+        )
+
 
 
 # --- QuestionSignal: valid payloads ---
@@ -483,11 +636,11 @@ def test_question_signal_constructor_coerces_strings_and_sequences() -> None:
     signal = QuestionSignal(
         ticket_id="T026",
         question="Skeleton or spinner?",
-        type="choice",
-        options=["A", "B"],
-        status="answered",
+        type="choice",  # type: ignore[arg-type]
+        options=["A", "B"],  # type: ignore[arg-type]
+        status="answered",  # type: ignore[arg-type]
         answer="A",
-        created_at="2026-09-16T10:00:00Z",
+        created_at="2026-09-16T10:00:00Z",  # type: ignore[arg-type]
     )
 
     assert signal.type is QuestionType.CHOICE

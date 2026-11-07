@@ -17,12 +17,10 @@ Validates all 12 User Stories from docs/specs/01-doctor-and-git-ops.md:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import pytest
 
 from runner.adapters.config.yaml_config_loader import YamlConfigLoader
-from runner.adapters.git.git_client import GitClient
 from runner.adapters.git.pre_push_hook import PrePushHookInstaller
 from runner.application.doctor import (
     CHECK_CONFIG,
@@ -35,8 +33,6 @@ from runner.application.doctor import (
     Doctor,
 )
 from runner.application.git_operations import GitOperations
-from runner.domain.exceptions import CommandNotFoundError, GitError
-from runner.ports.command_runner import CommandResult
 from tests.fakes.fake_command_runner import FakeCommandRunner
 import ticket_runner
 
@@ -121,7 +117,7 @@ def setup_workspace_environment(
 
     # 5. Skills
     skills_dir = tmp_path / ".agents" / "skills"
-    for skill_name in ("implement", "code-review", "diagnosing-bugs"):
+    for skill_name in ("implement", "implement-ticket-runner", "code-review-ticket-runner", "diagnosing-bugs-ticket-runner", "handoff-ticket-runner", "security-review-ticket-runner"):
         skill_file = skills_dir / skill_name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(f"# Skill: {skill_name}\n", encoding="utf-8")
@@ -481,7 +477,7 @@ async def test_doctor_all_prerequisites_satisfied_succeeds(tmp_path: Path) -> No
 
     report = await doctor.run(local_only=False, halt_on_failure=True)
     assert report.passed is True
-    assert len(report.checks) == 11
+    assert len(report.checks) == 12
     assert all(c.passed for c in report.checks)
     check_names = [c.name for c in report.checks]
     assert CHECK_TERMINAL_HOST in check_names

@@ -148,6 +148,18 @@ class RuntimePaths:
         target = self.logs_dir / f"{ticket_id}_diagnostic.md"
         return self._check_containment(target, self.logs_dir)
 
+    def malformed_ready_signal_archive_path(self, ticket_id: str) -> Path:
+        """Path to archive a malformed ready signal payload (.agent/logs/{ticket_id}_malformed_ready.json)."""
+        self._validate_ticket_id(ticket_id)
+        target = self.logs_dir / f"{ticket_id}_malformed_ready.json"
+        return self._check_containment(target, self.logs_dir)
+
+    def malformed_question_signal_archive_path(self, ticket_id: str) -> Path:
+        """Path to archive a malformed question signal payload (.agent/logs/{ticket_id}_malformed_question.json)."""
+        self._validate_ticket_id(ticket_id)
+        target = self.logs_dir / f"{ticket_id}_malformed_question.json"
+        return self._check_containment(target, self.logs_dir)
+
     def safe_session_paths(
         self, ticket_id: str, session_id: str
     ) -> tuple[Path, Path] | None:
